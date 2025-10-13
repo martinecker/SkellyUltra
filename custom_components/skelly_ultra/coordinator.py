@@ -22,11 +22,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
             update_interval=30,
         )
         self.adapter = adapter
+        _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     async def _async_update_data(self) -> Any:
+        _LOGGER.debug("Coordinator polling Skelly device for updates")
         try:
             vol = await self.adapter.get_volume()
             live = await self.adapter.client.get_live_name()
-            return {"volume": vol, "live_name": live}
+            data = {"volume": vol, "live_name": live}
+            _LOGGER.debug("Coordinator fetched data: %s", data)
+            return data
         except Exception as exc:
+            _LOGGER.exception("Coordinator update failed: %s", exc)
             raise UpdateFailed(exc)
