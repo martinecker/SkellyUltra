@@ -1,0 +1,8 @@
+{
+  "domain": "skelly_ultra",
+  "name": "Skelly Ultra",
+  "version": "0.1.0",
+  "requirements": ["bleak>=0.20"],
+  "iot_class": "local_push",
+  "documentation": "https://example.local/skelly_ultra"
+}
