@@ -26,51 +26,98 @@ class SkellyClient:
     def register_parsed_notification_handler(self, handler: Callable[[Any, Any], None]) -> None:
         self._parsed_handler = handler
 
-    async def connect(self, timeout: float = 10.0) -> bool:
+    async def connect(self, timeout: float = 10.0, client: Optional[BleakClient] = None, start_notify: bool = True) -> bool:
+        """Connect logic separated from notification registration.
+
+        Args:
+            timeout: discovery timeout when no client/address provided.
+            client: optional already-constructed BleakClient (connected or not).
+            start_notify: if True, register notification handler after connect.
+
+        Behavior:
+            - If `client` is provided and is connected, use it and optionally start notifications.
+            - If `client` is provided but not connected, attempt to connect it.
+            - If `self.address` is set and no client passed, find device by address.
+            - Otherwise, perform discovery using BleakScanner and pick by `name_filter`.
+        """
         device = None
-        if self.address and self.address != "None":
-            device = await BleakScanner.find_device_by_address(self.address)
-        else:
-            devices = await BleakScanner.discover(timeout=timeout)
-            for d in devices:
-                if d.name and self.name_filter.lower() in d.name.lower():
-                    device = d
-                    break
 
-        if not device:
-            return False
-
-        self._client = BleakClient(device)
-        await self._client.connect()
-        if self._client.is_connected:
+        # If an explicit BleakClient was provided, prefer it.
+        if client is not None:
+            # use the provided client directly
+            self._client = client
             try:
-                def _notif_cb(sender, data):
-                    try:
-                        if self._notification_handler:
-                            self._notification_handler(sender, data)
-                    except Exception:
-                        pass
-                    try:
-                        parsed = parser.parse_notification(sender, data)
-                        if parsed is not None:
-                            # push into events queue
-                            try:
-                                self.events.put_nowait(parsed)
-                            except asyncio.QueueFull:
-                                pass
-                            if self._parsed_handler:
-                                try:
-                                    self._parsed_handler(sender, parsed)
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-
-                await self._client.start_notify(commands.NOTIFY_UUID, _notif_cb)
+                if not getattr(self._client, "is_connected", False):
+                    await self._client.connect()
             except Exception:
-                pass
+                # failed to connect provided client
+                return False
+        else:
+            # No client passed; perform discovery by address or name
+            if self.address and self.address != "None":
+                device = await BleakScanner.find_device_by_address(self.address)
+            else:
+                devices = await BleakScanner.discover(timeout=timeout)
+                for d in devices:
+                    if d.name and self.name_filter.lower() in d.name.lower():
+                        device = d
+                        break
+
+            if not device:
+                return False
+
+            self._client = BleakClient(device)
+            try:
+                await self._client.connect()
+            except Exception:
+                return False
+
+        # At this point, self._client should be set and connected
+        if self._client and getattr(self._client, "is_connected", False):
+            if start_notify:
+                await self.start_notifications()
             return True
         return False
+
+    async def start_notifications(self) -> None:
+        """Register the notification callback on an already-connected client.
+
+        This can be called directly by an integration that manages the BleakClient
+        connection itself (e.g. Home Assistant's BLE stack). It is safe to call
+        multiple times; redundant registrations are ignored.
+        """
+        if not self._client or not getattr(self._client, "is_connected", False):
+            raise RuntimeError("Client not connected")
+
+        # Avoid re-registering if start_notify was called previously on same client
+        # We don't keep an explicit flag here; Bleak will raise if notify handler already set.
+        def _notif_cb(sender, data):
+            try:
+                if self._notification_handler:
+                    self._notification_handler(sender, data)
+            except Exception:
+                pass
+            try:
+                parsed = parser.parse_notification(sender, data)
+                if parsed is not None:
+                    # push into events queue
+                    try:
+                        self.events.put_nowait(parsed)
+                    except asyncio.QueueFull:
+                        pass
+                    if self._parsed_handler:
+                        try:
+                            self._parsed_handler(sender, parsed)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        try:
+            await self._client.start_notify(commands.NOTIFY_UUID, _notif_cb)
+        except Exception:
+            # swallow notify registration errors; higher-level code can call again
+            logger.exception("Failed to start notifications")
 
     async def disconnect(self) -> None:
         if self._client:
