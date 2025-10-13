@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ConfigEntryNotReady
 
 from .client_adapter import SkellyClientAdapter
 from .coordinator import SkellyCoordinator
@@ -15,9 +16,11 @@ DOMAIN = "skelly_ultra"
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address = entry.data.get("address")
-    adapter = SkellyClientAdapter(address=address)
+    adapter = SkellyClientAdapter(hass, address=address)
     coordinator = SkellyCoordinator(hass, adapter)
-    await adapter.connect()
+    ok = await adapter.connect()
+    if not ok:
+        raise ConfigEntryNotReady("Failed to connect to Skelly device")
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "adapter": adapter,
         "coordinator": coordinator,
