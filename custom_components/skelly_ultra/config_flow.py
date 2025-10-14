@@ -4,20 +4,21 @@ This simple flow allows the user to manually enter a BLE address (and optional n
 or pick from a scan of discovered "Animated Skelly" BLE devices when configuring the
 integration Home Assistant's UI.
 """
+
 from __future__ import annotations
 
 from typing import Any
 
 import voluptuous as vol
+
 from homeassistant import config_entries
-from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.components import bluetooth
+from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
 DOMAIN = "skelly_ultra"
 
 
-@config_entries.ConfigFlow(domain=DOMAIN)
-class SkellyFlowHandler(config_entries.ConfigFlow):
+class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Handle a config flow for Skelly Ultra with discovery option."""
 
     VERSION = 1
@@ -33,14 +34,28 @@ class SkellyFlowHandler(config_entries.ConfigFlow):
         - CONF_ADDRESS: optional address when using manual mode
         - CONF_NAME: optional friendly name
         """
-        if user_input is None:
-            schema = vol.Schema(
-                {
-                    vol.Required("mode", default="manual"): vol.In(["manual", "scan"]),
-                    vol.Optional(CONF_ADDRESS, default=""): str,
-                    vol.Optional(CONF_NAME, default="Animated Skelly"): str,
-                }
+        # Build form schema
+        schema = vol.Schema(
+            {
+                vol.Required("mode", default="manual"): vol.In(["manual", "scan"]),
+                vol.Optional(CONF_ADDRESS, default=""): str,
+                vol.Optional(CONF_NAME, default="Animated Skelly"): str,
+            }
+        )
+
+        # Require that the user has a bluetooth config entry (i.e. the
+        # bluetooth integration is actually set up).
+        bt_entries = self.hass.config_entries.async_entries("bluetooth")
+        if not bt_entries:
+            # Show the same form but with an error explaining bluetooth is
+            # required so the user can take action in the UI.
+            return self.async_show_form(
+                step_id="user",
+                data_schema=schema,
+                errors={"base": "bluetooth_integration_required"},
             )
+
+        if user_input is None:
             return self.async_show_form(step_id="user", data_schema=schema)
 
         mode = user_input.get("mode", "manual")
@@ -48,11 +63,27 @@ class SkellyFlowHandler(config_entries.ConfigFlow):
             return await self.async_step_scan()
 
         # Manual mode: create entry directly
-        title = user_input.get(CONF_NAME) or user_input.get(CONF_ADDRESS) or "Skelly Ultra"
-        return self.async_create_entry(title=title, data={CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""), CONF_NAME: user_input.get(CONF_NAME, "")})
+        title = (
+            user_input.get(CONF_NAME) or user_input.get(CONF_ADDRESS) or "Skelly Ultra"
+        )
+        return self.async_create_entry(
+            title=title,
+            data={
+                CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""),
+                CONF_NAME: user_input.get(CONF_NAME, ""),
+            },
+        )
 
     async def async_step_scan(self, user_input: dict[str, Any] | None = None):
         """Scan for nearby BLE devices and present a selection list."""
+        # Defensive check: scanning requires the bluetooth integration to be
+        # configured/installed (a config entry exists).
+        bt_entries = self.hass.config_entries.async_entries("bluetooth")
+        if not bt_entries:
+            # Abort the flow with a readable reason. The frontend will show
+            # the abort reason; alternatively we could redirect back to the
+            # user form with an error message.
+            return self.async_abort(reason="bluetooth_integration_required")
         # If the user submitted an action from the fallback form, handle it
         if user_input is not None and "action" in user_input:
             action = user_input.get("action")
@@ -78,9 +109,21 @@ class SkellyFlowHandler(config_entries.ConfigFlow):
 
                 self._discovered = choices
                 if not choices:
-                    return self.async_show_form(step_id="scan", data_schema=vol.Schema({vol.Required("action", default="retry"): vol.In(["retry", "show_all", "manual"]) }), errors={"base": "no_devices_found"})
+                    return self.async_show_form(
+                        step_id="scan",
+                        data_schema=vol.Schema(
+                            {
+                                vol.Required("action", default="retry"): vol.In(
+                                    ["retry", "show_all", "manual"]
+                                )
+                            }
+                        ),
+                        errors={"base": "no_devices_found"},
+                    )
 
-                schema = vol.Schema({vol.Required(CONF_ADDRESS): vol.In(list(choices.keys()))})
+                schema = vol.Schema(
+                    {vol.Required(CONF_ADDRESS): vol.In(list(choices.keys()))}
+                )
                 return self.async_show_form(step_id="scan", data_schema=schema)
 
             if action == "manual":
@@ -117,11 +160,23 @@ class SkellyFlowHandler(config_entries.ConfigFlow):
 
             if not choices:
                 # Nothing found; show a form allowing retry, show_all (fallback), or manual entry
-                schema = vol.Schema({vol.Required("action", default="retry"): vol.In(["retry", "show_all", "manual"])})
+                schema = vol.Schema(
+                    {
+                        vol.Required("action", default="retry"): vol.In(
+                            ["retry", "show_all", "manual"]
+                        )
+                    }
+                )
                 return self.async_show_form(step_id="scan", data_schema=schema)
 
-            schema = vol.Schema({vol.Required(CONF_ADDRESS): vol.In(list(choices.keys()))})
-            return self.async_show_form(step_id="scan", data_schema=schema, description_placeholders={"count": len(choices)})
+            schema = vol.Schema(
+                {vol.Required(CONF_ADDRESS): vol.In(list(choices.keys()))}
+            )
+            return self.async_show_form(
+                step_id="scan",
+                data_schema=schema,
+                description_placeholders={"count": len(choices)},
+            )
 
         # user selected a device address
         address = user_input.get(CONF_ADDRESS)
@@ -129,4 +184,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow):
             return self.async_abort(reason="no_devices_found")
 
         title = self._discovered.get(address) or address
-        return self.async_create_entry(title=title, data={CONF_ADDRESS: address, CONF_NAME: title})
+        return self.async_create_entry(
+            title=title, data={CONF_ADDRESS: address, CONF_NAME: title}
+        )

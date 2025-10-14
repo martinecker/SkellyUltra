@@ -1,0 +1,13 @@
+{
+  "config": {
+    "error": {
+      "bluetooth_integration_required": "Bluetooth integration is required to configure Skelly Ultra",
+      "no_devices_found": "No devices found"
+    },
+    "step": {
+      "user": {
+        "title": "Configure Skelly Ultra"
+      }
+    }
+  }
+}
