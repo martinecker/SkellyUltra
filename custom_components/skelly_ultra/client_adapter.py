@@ -109,10 +109,6 @@ class SkellyClientAdapter:
     def client(self) -> SkellyClient:
         return self._client
 
-    # delegate common calls for convenience
-    async def get_volume(self, timeout: float = 5.0):
-        return await self._client.get_volume(timeout=timeout)
-
     async def start_notifications_with_retry(
         self, attempts: int = 3, backoff: float = 1.0
     ) -> bool:

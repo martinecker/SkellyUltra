@@ -54,8 +54,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # Let Home Assistant retry setup later
         raise ConfigEntryNotReady("Initial data refresh failed")
     _LOGGER.info("Skelly Ultra integration setup complete for entry %s", entry.entry_id)
-    # forward platforms (sensor, switch, light) if you create them
+
+    # forward async_setup_entry calls to other platforms (sensor, switch, light) to create entities
     await hass.config_entries.async_forward_entry_setups(entry, ["sensor"])
+
     return True
 
 

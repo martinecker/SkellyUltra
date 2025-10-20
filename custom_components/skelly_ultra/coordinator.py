@@ -46,12 +46,11 @@ class SkellyCoordinator(DataUpdateCoordinator):
         try:
             # Query volume and live name concurrently with a combined timeout
             # to avoid per-call cancellation interfering when notifications
-            # arrive slightly late. Adapter.get_volume uses its own timeout
-            # but gathering the two calls keeps the coordinator responsive.
+            # arrive slightly late.
             timeout_seconds = 5.0
             async with asyncio.timeout(timeout_seconds):
                 vol_task = asyncio.create_task(
-                    self.adapter.get_volume(timeout=timeout_seconds)
+                    self.adapter.client.get_volume(timeout=timeout_seconds)
                 )
                 live_task = asyncio.create_task(
                     self.adapter.client.get_live_name(timeout=timeout_seconds)
