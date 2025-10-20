@@ -7,6 +7,7 @@ fetches state from the Skelly BLE device via the provided adapter.
 from __future__ import annotations
 
 from datetime import timedelta
+import asyncio
 import logging
 from typing import Any
 
@@ -43,8 +44,19 @@ class SkellyCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self) -> Any:
         _LOGGER.debug("Coordinator polling Skelly device for updates")
         try:
-            vol = await self.adapter.get_volume()
-            live = await self.adapter.client.get_live_name()
+            # Query volume and live name concurrently with a combined timeout
+            # to avoid per-call cancellation interfering when notifications
+            # arrive slightly late. Adapter.get_volume uses its own timeout
+            # but gathering the two calls keeps the coordinator responsive.
+            timeout_seconds = 5.0
+            async with asyncio.timeout(timeout_seconds):
+                vol_task = asyncio.create_task(
+                    self.adapter.get_volume(timeout=timeout_seconds)
+                )
+                live_task = asyncio.create_task(
+                    self.adapter.client.get_live_name(timeout=timeout_seconds)
+                )
+                vol, live = await asyncio.gather(vol_task, live_task)
             data = {"volume": vol, "live_name": live}
             _LOGGER.debug("Coordinator fetched data: %s", data)
         except Exception:

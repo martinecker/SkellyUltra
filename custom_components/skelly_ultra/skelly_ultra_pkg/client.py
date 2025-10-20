@@ -1,4 +1,5 @@
 """SkellyClient: high-level async client wrapping Bleak, using commands and parser modules."""
+
 from typing import Optional, Callable, Any
 import asyncio
 import logging
@@ -12,21 +13,34 @@ logger = logging.getLogger(__name__)
 
 
 class SkellyClient:
-    def __init__(self, address: Optional[str] = None, name_filter: str = "Animated Skelly") -> None:
+    def __init__(
+        self, address: Optional[str] = None, name_filter: str = "Animated Skelly"
+    ) -> None:
         self.address = address
         self.name_filter = name_filter
         self._client: Optional[BleakClient] = None
-        self._notification_handler: Callable[[Any, bytes], None] = parser.handle_notification
+        self._notification_handler: Callable[[Any, bytes], None] = (
+            parser.handle_notification
+        )
         self._parsed_handler: Optional[Callable[[Any, Any], None]] = None
         self.events: asyncio.Queue = asyncio.Queue()
 
-    def register_notification_handler(self, handler: Callable[[Any, bytes], None]) -> None:
+    def register_notification_handler(
+        self, handler: Callable[[Any, bytes], None]
+    ) -> None:
         self._notification_handler = handler
 
-    def register_parsed_notification_handler(self, handler: Callable[[Any, Any], None]) -> None:
+    def register_parsed_notification_handler(
+        self, handler: Callable[[Any, Any], None]
+    ) -> None:
         self._parsed_handler = handler
 
-    async def connect(self, timeout: float = 10.0, client: Optional[BleakClient] = None, start_notify: bool = True) -> bool:
+    async def connect(
+        self,
+        timeout: float = 10.0,
+        client: Optional[BleakClient] = None,
+        start_notify: bool = True,
+    ) -> bool:
         """Connect logic separated from notification registration.
 
         Args:
@@ -103,6 +117,7 @@ class SkellyClient:
                     # push into events queue
                     try:
                         self.events.put_nowait(parsed)
+                        logger.debug("Parsed event queued: %s", parsed)
                     except asyncio.QueueFull:
                         pass
                     if self._parsed_handler:
@@ -143,7 +158,7 @@ class SkellyClient:
     # convenience wrappers
     async def enable_classic_bt(self) -> None:
         await self.send_command(commands.enable_classic_bt())
-    
+
     async def query_live_mode(self) -> None:
         await self.send_command(commands.query_live_mode())
 
@@ -172,16 +187,24 @@ class SkellyClient:
         await self.send_command(commands.pause())
 
     # RGB / light convenience wrappers
-    async def set_rgb(self, channel: int, r: int, g: int, b: int, loop: int, cluster: int, name: str) -> None:
+    async def set_rgb(
+        self, channel: int, r: int, g: int, b: int, loop: int, cluster: int, name: str
+    ) -> None:
         await self.send_command(commands.set_rgb(channel, r, g, b, loop, cluster, name))
 
-    async def set_brightness(self, channel: int, brightness: int, cluster: int, name: str) -> None:
-        await self.send_command(commands.set_brightness(channel, brightness, cluster, name))
+    async def set_brightness(
+        self, channel: int, brightness: int, cluster: int, name: str
+    ) -> None:
+        await self.send_command(
+            commands.set_brightness(channel, brightness, cluster, name)
+        )
 
     async def set_mode(self, channel: int, mode: int, cluster: int, name: str) -> None:
         await self.send_command(commands.set_mode(channel, mode, cluster, name))
 
-    async def set_speed(self, channel: int, speed: int, cluster: int, name: str) -> None:
+    async def set_speed(
+        self, channel: int, speed: int, cluster: int, name: str
+    ) -> None:
         await self.send_command(commands.set_speed(channel, speed, cluster, name))
 
     async def select_rgb_channel(self, channel: int) -> None:
@@ -215,10 +238,16 @@ class SkellyClient:
     async def format_device(self) -> None:
         await self.send_command(commands.format_device())
 
-    async def set_music_order(self, total: int, index: int, file_serial: int, filename: str) -> None:
-        await self.send_command(commands.set_music_order(total, index, file_serial, filename))
+    async def set_music_order(
+        self, total: int, index: int, file_serial: int, filename: str
+    ) -> None:
+        await self.send_command(
+            commands.set_music_order(total, index, file_serial, filename)
+        )
 
-    async def set_music_animation(self, action: int, cluster: int, filename: str) -> None:
+    async def set_music_animation(
+        self, action: int, cluster: int, filename: str
+    ) -> None:
         await self.send_command(commands.set_music_animation(action, cluster, filename))
 
     # Awaitable helpers that send a query and wait for a matching parsed event
@@ -241,7 +270,10 @@ class SkellyClient:
                 except asyncio.TimeoutError:
                     raise
                 if predicate(ev):
+                    logger.debug("Matched event: %s", ev)
                     return ev
+                # Log non-matching events for debugging before re-queuing
+                logger.debug("Non-matching event received while waiting: %s", ev)
                 temp.append(ev)
         finally:
             # re-queue temp events in order
@@ -254,22 +286,29 @@ class SkellyClient:
     async def get_volume(self, timeout: float = 2.0) -> int:
         """Query volume and await a VolumeEvent; returns the numeric volume."""
         await self.send_command(commands.query_volume())
-        ev = await self._wait_for_event(lambda e: isinstance(e, parser.VolumeEvent), timeout=timeout)
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.VolumeEvent), timeout=timeout
+        )
         return ev.volume
 
     async def get_live_name(self, timeout: float = 2.0) -> str:
         """Query the live name and await a LiveNameEvent; returns the name string."""
         await self.send_command(commands.query_live_name())
-        ev = await self._wait_for_event(lambda e: isinstance(e, parser.LiveNameEvent), timeout=timeout)
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.LiveNameEvent), timeout=timeout
+        )
         return ev.name
 
     async def get_music_order(self, timeout: float = 2.0):
         await self.send_command(commands.query_song_order())
-        ev = await self._wait_for_event(lambda e: isinstance(e, parser.MusicOrderEvent), timeout=timeout)
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.MusicOrderEvent), timeout=timeout
+        )
         return ev.orders
 
     async def get_capacity(self, timeout: float = 2.0):
         await self.send_command(commands.query_capacity())
-        ev = await self._wait_for_event(lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout)
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout
+        )
         return ev.capacity_kb, ev.file_count, ev.mode_str
-
