@@ -6,20 +6,35 @@ from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.const import CONF_ADDRESS
+
+from . import DOMAIN
 
 from .coordinator import SkellyCoordinator
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
-):
+) -> None:
     """Set up Skelly sensors for a config entry."""
     data = hass.data["skelly_ultra"][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
+    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    # Prefer the config entry title if provided, otherwise build a default
+    # name using the BLE address so the device shows up with a friendly name
+    device_name = entry.title or (
+        f"Skelly Ultra {address}" if address else "Skelly Ultra"
+    )
+
     async_add_entities(
         [
-            SkellyVolumeSensor(coordinator, entry.entry_id),
-            SkellyLiveNameSensor(coordinator, entry.entry_id),
+            SkellyVolumeSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyLiveNameSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyStorageCapacitySensor(
+                coordinator, entry.entry_id, address, device_name
+            ),
+            SkellySoundCountSensor(coordinator, entry.entry_id, address, device_name),
         ]
     )
 
@@ -29,12 +44,25 @@ class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: SkellyCoordinator, entry_id: str) -> None:
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
         """Initialize the volume sensor with coordinator."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Skelly Volume"
         self._attr_unique_id = f"{entry_id}_volume"
+        # Volume is expressed as a percentage (0-100)
+        self._attr_native_unit_of_measurement = "%"
+        # Device grouping
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
 
     @property
     def native_value(self):
@@ -47,14 +75,81 @@ class SkellyLiveNameSensor(CoordinatorEntity, SensorEntity):
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: SkellyCoordinator, entry_id: str) -> None:
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
         """Initialize the live name sensor with coordinator."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Skelly Live Name"
         self._attr_unique_id = f"{entry_id}_live_name"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
 
     @property
     def native_value(self):
         """Return the current live name from coordinator data."""
         return self.coordinator.data.get("live_name")
+
+
+class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the device storage capacity in kilobytes."""
+
+    _attr_has_entity_name = True
+    _attr_native_unit_of_measurement = "kB"
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the storage capacity sensor."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Skelly Storage Capacity"
+        self._attr_unique_id = f"{entry_id}_capacity_kb"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the storage capacity in kilobytes from coordinator data."""
+        return self.coordinator.data.get("capacity_kb")
+
+
+class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the number of sound files on the device."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the sound count sensor."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Skelly Sound Count"
+        self._attr_unique_id = f"{entry_id}_sound_count"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the file count from coordinator data."""
+        return self.coordinator.data.get("file_count")

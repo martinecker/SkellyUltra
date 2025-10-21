@@ -55,8 +55,38 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 live_task = asyncio.create_task(
                     self.adapter.client.get_live_name(timeout=timeout_seconds)
                 )
-                vol, live = await asyncio.gather(vol_task, live_task)
-            data = {"volume": vol, "live_name": live}
+                # capacity may return a dict or tuple with capacity and file_count
+                cap_task = asyncio.create_task(
+                    self.adapter.client.get_capacity(timeout=timeout_seconds)
+                )
+                vol, live, cap = await asyncio.gather(vol_task, live_task, cap_task)
+
+            # Normalize capacity result. The client may return an object that
+            # contains capacity in kilobytes and file count; adapt here to the
+            # expected output: capacity_kb and file_count
+            capacity_kb = None
+            file_count = None
+            if cap is None:
+                capacity_kb = None
+                file_count = None
+            elif isinstance(cap, dict):
+                capacity_kb = cap.get("capacity_kb") or cap.get("capacity")
+                file_count = cap.get("file_count") or cap.get("files")
+            elif isinstance(cap, (list, tuple)) and len(cap) >= 2:
+                capacity_kb, file_count = cap[0], cap[1]
+            else:
+                # Fallback: if single numeric returned, treat as capacity
+                try:
+                    capacity_kb = int(cap)
+                except Exception:
+                    capacity_kb = None
+
+            data = {
+                "volume": vol,
+                "live_name": live,
+                "capacity_kb": capacity_kb,
+                "file_count": file_count,
+            }
             _LOGGER.debug("Coordinator fetched data: %s", data)
         except Exception:
             _LOGGER.exception("Coordinator update failed")
