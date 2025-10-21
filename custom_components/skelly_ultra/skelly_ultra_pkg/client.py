@@ -187,30 +187,41 @@ class SkellyClient:
         await self.send_command(commands.pause())
 
     # RGB / light convenience wrappers
-    async def set_rgb(
-        self, channel: int, r: int, g: int, b: int, loop: int, cluster: int, name: str
-    ) -> None:
-        await self.send_command(commands.set_rgb(channel, r, g, b, loop, cluster, name))
-
-    async def set_brightness(
-        self, channel: int, brightness: int, cluster: int, name: str
+    async def set_light_rgb(
+        self,
+        channel: int,
+        r: int,
+        g: int,
+        b: int,
+        loop: int,
+        cluster: int = 0,
+        name: str = "",
     ) -> None:
         await self.send_command(
-            commands.set_brightness(channel, brightness, cluster, name)
+            commands.set_light_rgb(channel, r, g, b, loop, cluster, name)
         )
 
-    async def set_mode(self, channel: int, mode: int, cluster: int, name: str) -> None:
-        await self.send_command(commands.set_mode(channel, mode, cluster, name))
-
-    async def set_speed(
-        self, channel: int, speed: int, cluster: int, name: str
+    async def set_light_brightness(
+        self, channel: int, brightness: int, cluster: int = 0, name: str = ""
     ) -> None:
-        await self.send_command(commands.set_speed(channel, speed, cluster, name))
+        await self.send_command(
+            commands.set_light_brightness(channel, brightness, cluster, name)
+        )
+
+    async def set_light_mode(
+        self, channel: int, mode: int, cluster: int = 0, name: str = ""
+    ) -> None:
+        await self.send_command(commands.set_light_mode(channel, mode, cluster, name))
+
+    async def set_light_speed(
+        self, channel: int, speed: int, cluster: int = 0, name: str = ""
+    ) -> None:
+        await self.send_command(commands.set_light_speed(channel, speed, cluster, name))
 
     async def select_rgb_channel(self, channel: int) -> None:
         await self.send_command(commands.select_rgb_channel(channel))
 
-    async def set_eye_icon(self, icon: int, cluster: int, name: str) -> None:
+    async def set_eye_icon(self, icon: int, cluster: int = 0, name: str = "") -> None:
         await self.send_command(commands.set_eye_icon(icon, cluster, name))
 
     # File transfer convenience wrappers
