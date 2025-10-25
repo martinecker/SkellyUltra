@@ -325,6 +325,22 @@ class SkellyClient:
         )
         return ev.eye_icon
 
+    async def get_light_info(self, channel: int, timeout: float = 2.0):
+        """Query the device live mode and return the LightInfo for the
+        specified channel index.
+
+        Channel is zero-based and valid values are 0..5. Raises IndexError if
+        the channel is out of range.
+        """
+        await self.send_command(commands.query_live_mode())
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout
+        )
+        lights = ev.lights
+        if channel < 0 or channel >= len(lights):
+            raise IndexError("Channel out of range")
+        return lights[channel]
+
     async def get_capacity(self, timeout: float = 2.0):
         await self.send_command(commands.query_capacity())
         ev = await self._wait_for_event(
