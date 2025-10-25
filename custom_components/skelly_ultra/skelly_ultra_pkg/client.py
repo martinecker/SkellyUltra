@@ -317,6 +317,14 @@ class SkellyClient:
         )
         return ev.orders
 
+    async def get_eye_icon(self, timeout: float = 2.0) -> int:
+        """Query the device live mode and return the eye_icon integer."""
+        await self.send_command(commands.query_live_mode())
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout
+        )
+        return ev.eye_icon
+
     async def get_capacity(self, timeout: float = 2.0):
         await self.send_command(commands.query_capacity())
         ev = await self._wait_for_event(
