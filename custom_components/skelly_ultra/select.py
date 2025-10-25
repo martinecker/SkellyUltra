@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.const import CONF_ADDRESS
+import contextlib
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -115,6 +116,11 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         # Optimistically update state
         self._current = option
         self.async_write_ha_state()
+        # Ask the coordinator to refresh immediately so we get authoritative
+        # state from the device as soon as possible
+        # Non-fatal: if refresh fails, we remain optimistic until next poll
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
 
     async def async_added_to_hass(self) -> None:
         """Attempt to read the current eye icon from the device when entity is added.

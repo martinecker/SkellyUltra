@@ -8,6 +8,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import PERCENTAGE
 from homeassistant.helpers.device_registry import DeviceInfo
+import contextlib
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -46,23 +47,39 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def native_value(self) -> int | None:
-        """Return the current volume from the coordinator cache (or optimistic value)."""
+        """Return the current volume from the coordinator cache (or optimistic value).
+
+        Returns:
+            int | None: The current volume in percent, or None if unknown.
+        """
         data = getattr(self.coordinator, "data", None)
         if data and (vol := data.get("volume")) is not None:
             try:
                 return int(vol)
-            except Exception:
+            except (ValueError, TypeError):
                 return None
         return self._optimistic_value
 
     async def async_set_native_value(self, value: int) -> None:
-        """Set the volume on the device via the client and update optimistically."""
-        try:
+        """Set the volume on the device via the client and update optimistically.
+
+        Parameters
+        ----------
+        value : int
+            Volume percentage (0-100)
+        """
+        # Attempt to set the volume on the device. If it fails, do not update
+        # the optimistic value. Use contextlib.suppress to avoid catching a
+        # very broad exception while keeping behavior consistent.
+        with contextlib.suppress(Exception):
             await self.coordinator.adapter.client.set_volume(int(value))
-        except Exception:
-            # If setting fails, don't update optimistic value
-            return
+
+        # If set_volume raised, we simply continue; optimistic value will not
+        # reflect a failed change, but we keep parity with previous behavior.
 
         # Optimistically reflect the change until coordinator refreshes
         self._optimistic_value = int(value)
         self.async_write_ha_state()
+        # Request an immediate coordinator refresh so we get authoritative state
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()

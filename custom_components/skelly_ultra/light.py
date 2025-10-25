@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.helpers.device_registry import DeviceInfo
+import contextlib
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -64,17 +65,21 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
 
     @property
     def is_on(self) -> bool:
+        """Return True if light is on."""
         return self._is_on
 
     @property
     def brightness(self) -> int | None:
+        """Return current brightness (0-255) or None."""
         return self._brightness
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
+        """Return current RGB color as (r, g, b) or None."""
         return self._rgb_color
 
     async def async_added_to_hass(self) -> None:
+        """Entity added to hass; initialize state from coordinator cache."""
         await super().async_added_to_hass()
         # Read initial state from the coordinator cache instead of querying
         # the device directly. The coordinator populates `lights` as a list
@@ -97,17 +102,15 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 self._rgb_color = tuple(int(x) for x in rgb)
             self._is_on = (self._brightness or 0) > 0
             self.async_write_ha_state()
-        except Exception:
+        except (ValueError, TypeError):
             # If data is malformed, skip initialization
             return
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the light on or set color/brightness."""
         client = None
-        try:
+        with contextlib.suppress(Exception):
             client = self.coordinator.adapter.client
-        except Exception:
-            pass
 
         # If rgb_color specified, call set_light_rgb
         rgb = kwargs.get("rgb_color")
@@ -119,7 +122,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 # loop and cluster/name left as defaults
                 await client.set_light_rgb(self._channel, r, g, b, 0)
                 self._rgb_color = (r, g, b)
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         if brightness is not None and client:
@@ -128,7 +131,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 await client.set_light_brightness(self._channel, int(brightness))
                 self._brightness = int(brightness)
                 self._is_on = self._brightness > 0
-            except Exception:
+            except (ValueError, TypeError):
                 pass
 
         # If no brightness provided but turning on, set on=True
@@ -136,21 +139,22 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
             self._is_on = True
 
         self.async_write_ha_state()
+        # Trigger an immediate coordinator refresh to get authoritative state
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn the light off by setting brightness to 0."""
         client = None
-        try:
+        with contextlib.suppress(Exception):
             client = self.coordinator.adapter.client
-        except Exception:
-            pass
 
         if client:
-            try:
+            with contextlib.suppress(Exception):
                 await client.set_light_brightness(self._channel, 0)
-            except Exception:
-                pass
 
         self._brightness = 0
         self._is_on = False
         self.async_write_ha_state()
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
