@@ -1,0 +1,816 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Skelly BLE Controller (Web Bluetooth)</title>
+  <style>
+    :root { --bg:#0b0d10; --panel:#13161b; --muted:#6b7280; --text:#e5e7eb; --accent:#22d3ee; --ok:#10b981; --warn:#f59e0b; --err:#ef4444; }
+    * { box-sizing: border-box; }
+    :root{
+      --col-left: 360px;
+      --col-mid: 420px;   /* <- wider middle column */
+    }
+    body { margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; background: var(--bg); color: var(--text); }
+    header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid #1f242c; position:sticky; top:0; background:rgba(11,13,16,.8); backdrop-filter: blur(6px); z-index:10; }
+    h1 { font-size:18px; margin:0; letter-spacing:.4px; }
+    .btn { appearance:none; border:1px solid #2a3039; background:#151a21; color:var(--text); padding:10px 14px; border-radius:12px; cursor:pointer; font-weight:600; transition:.15s transform, .15s background, .15s border; }
+    .btn:hover { background:#1b212a; }
+    .btn:active { transform: scale(.98); }
+    .btn.primary { border-color:#134e55; background:#07333a; color:#a5f3fc; }
+    .btn.primary:hover { background:#0a4048; }
+    .btn.danger { border-color:#5d1b1b; background:#2a0f10; color:#fecaca; }
+    .btn.xs, .btn.sm { padding:6px 8px; font-size:12px; border-radius:10px; }
+
+    /* Show command code only on hover for query buttons */
+    .btn.cmd::after { content: ''; }
+    .btn.cmd:hover::after { content: ' (' attr(data-code) ')'; color: var(--muted); }
+
+
+    /* ======= NEW 3-COLUMN LAYOUT ======= */
+    .grid{
+      display:grid;
+      grid-template-columns: var(--col-left) var(--col-mid) 1fr; /* left | wider middle | right */
+      grid-template-areas:
+        "dev        media   log"
+        "appearance empty   files"
+        "appearance empty   status";
+      gap:10px;
+      padding:20px;
+
+      /* make items in each row the same height */
+      align-items: stretch;
+    }
+    .area-dev{ grid-area:dev; }
+    .area-media{ grid-area:media; }
+    .area-appearance{ grid-area:appearance; }
+    .area-empty{ grid-area:empty; }
+    .area-status{ grid-area:status; }
+    .area-log{ grid-area:log; }
+    .area-files{ grid-area:files; }
+
+    .move-grid { display:flex; gap:.75rem; align-items:center; }
+    .iconToggle { border:2px solid transparent; border-radius:12px; padding:6px; background:transparent; cursor:pointer; opacity:.7 }
+    .iconToggle.selected { border-color:var(--accent, #7aa7ff); opacity:1; box-shadow:0 0 0 2px rgba(0,0,0,.04) }
+    .iconToggle img { width:42px; height:42px; display:block; }
+
+
+    .card { background:var(--panel); border:1px solid #1f242c; border-radius:16px; padding:16px; }
+    .card h2 { margin:0 0 10px; font-size:14px; color:#9ca3af; text-transform:uppercase; letter-spacing:.12em; }
+    label { display:block; font-size:12px; color:#9ca3af; margin:10px 0 6px; }
+    input, select, textarea { width:100%; background:#0f1318; color:var(--text); border:1px solid #28303a; border-radius:10px; padding:10px 12px; outline:none; }
+    input:focus, select:focus, textarea:focus { border-color:#2dd4bf; }
+    .row { display:flex; gap:10px; }
+    .row > * { flex:1; }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:6px 10px; border-radius:999px; border:1px solid #28303a; color:#a7f3d0; background:#0a2a27; font-size:12px; }
+    .muted { color:var(--muted); }
+    .log { height:360px; overflow:auto; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; background:#0b0f14; border-radius:12px; padding:12px; border:1px solid #1f242c; }
+    .log .line { white-space: pre-wrap; word-break: break-word; margin: 0 0 6px; }
+    .log .rx { color:#93c5fd; }
+    .log .tx { color:#a7f3d0; }
+    .log .warn { color:#fbbf24; }
+    .small { font-size:12px; }
+    .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
+    .spacer { height:8px; }
+    footer { padding: 10px 20px; color:#6b7280; font-size:12px; border-top:1px solid #1f242c; }
+
+    /* Topbar: keep controls compact and pinned to right */
+    #btnAdvanced { white-space: nowrap; padding: 8px 10px; }
+    .topbar-right { display:flex; align-items:center; gap:8px; margin-left:auto; flex-wrap:nowrap; }
+    .menuwrap { position:relative; margin-left:0; }
+    .dropdown { position:absolute; right:0; top:38px; background:#0f1318; border:1px solid #28303a; border-radius:12px; min-width:240px; padding:10px; z-index:50; box-shadow:0 10px 30px rgba(0,0,0,.35); }
+    .dropdown label { display:flex; align-items:center; gap:8px; margin:6px 0; font-size:12px; color:#d1d5db; }
+    .dropdown input[type=checkbox] { width:auto; }
+
+    /* Progress */
+    .progress { height: 10px; background:#0f1318; border:1px solid #28303a; border-radius:999px; overflow:hidden; }
+    .bar { height:100%; width:0%; background: linear-gradient(90deg, #22d3ee, #10b981); transition: width .15s; }
+    .capsule { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-top:8px; font-size:12px; color:#a7f3fc; }
+
+    /* Files table */
+    .tablewrap { border:1px solid #1f242c; border-radius:12px; overflow:auto; }
+    table { width:100%; border-collapse:collapse; font-size:13px; }
+    thead th { position:sticky; top:0; background:#0f1318; color:#a5b4fc; text-align:left; padding:10px; border-bottom:1px solid #1f242c; }
+    tbody td { padding:8px 10px; border-bottom:1px solid #1f242c; }
+    tbody tr:hover { background:#0f1216; }
+
+    /* Menus & modals */
+    .hidden { display:none !important; }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:9999; }
+    .modal-panel { width:min(720px, 92vw); background:#1b0d0d; border:2px solid #7f1d1d; color:#fecaca; border-radius:16px; padding:22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+    .modal-panel h3 { margin:0 0 8px; font-size:22px; color:#fecaca; }
+    .modal-panel p { margin:8px 0; line-height:1.5; }
+    .modal-actions { display:flex; gap:10px; margin-top:16px; justify-content:flex-end; }
+
+    /* Movement icons */
+    .iconToggle {
+      border:2px solid transparent; border-radius:12px; padding:6px;
+      background:transparent; cursor:pointer; opacity:.8; transition:.15s;
+    }
+    .iconToggle:hover { opacity:1; }
+    .iconToggle.selected{
+      border-color:#3b82f6;               /* blue-500 border */
+      background:rgba(59,130,246,.12);    /* faint blue fill */
+      box-shadow:0 0 0 2px rgba(59,130,246,.08);
+    }
+
+    /* Segmented control for color scope */
+    .seg{display:inline-flex; gap:0}
+    .seg-btn{
+      padding:.45rem .7rem; border:1px solid #d1d5db; background:#fff;
+      font-size:.9rem; border-right:none; cursor:pointer
+    }
+    .seg-btn:first-child{border-top-left-radius:8px;border-bottom-left-radius:8px}
+    .seg-btn:last-child{border-right:1px solid #d1d5db;border-top-right-radius:8px;border-bottom-right-radius:8px}
+    .seg-btn.selected{border-color:#3b82f6;background:rgba(59,130,246,.12);color:#1f2937}
+
+
+    /* Eye previews */
+    .eye-thumb { width:22px; height:22px; object-fit:contain; vertical-align:middle; margin-right:6px; image-rendering: crisp-edges; }
+
+    /* Eye pickers */
+    .eye-grid { display:grid; grid-template-columns: repeat(9, 36px); gap:8px; margin-top:8px; }
+    #apEyeGrid { grid-template-columns: repeat(7, 36px); gap:8px; justify-content:center; } /* tighter for the Appearance card */
+    .eye-opt { border:1px solid #28303a; background:#0f1318; border-radius:8px; padding:4px; display:flex; align-items:center; justify-content:center; cursor:pointer; }
+    .eye-opt.selected { outline:2px solid var(--accent); }
+
+    /* Disconnected state: dim + disable most cards except Device and Log */
+    body.disconnected .grid .card { opacity:.6; pointer-events:none; }
+    body.disconnected .area-dev,
+    body.disconnected .area-log { opacity:1; pointer-events:auto; }
+    body.disconnected #status { color: var(--err); }
+
+    /* Sliders */
+    input[type=range]{ width:100%; }
+
+    /* Responsive fallbacks (stack on narrower screens) */
+    @media (max-width:1200px){
+      .grid{
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "status"
+          "dev"
+          "media"
+          "appearance"
+          "log"
+          "files"
+          "empty";
+      }
+    }
+
+        /* === Form + checkbox cleanup === */
+    label { line-height: 1.25; }
+    input, select, textarea { font-size: 14px; line-height: 1.2; }
+
+    /* Reusable inline checkbox row */
+    .checkline{
+      display:flex; align-items:center; gap:8px;
+      margin-top: 8px;
+    }
+    .checkline.small { font-size:12px; color:#d1d5db; }
+    .checkline input[type="checkbox"]{
+      width:18px; height:18px; flex:0 0 auto; accent-color: var(--accent);
+      border-radius:4px;
+    }
+    input[type="checkbox"]:focus-visible{
+      outline:2px solid var(--accent); outline-offset:2px;
+    }
+
+    /* Utility margins to replace inline style attributes */
+    .mt-8 { margin-top: 8px; }
+    .mt-10 { margin-top: 10px; }
+    .mt-12 { margin-top: 12px; }
+
+    /* Color inputs a bit bigger for finger tapping */
+    input[type="color"]{
+      width: 44px; height: 36px; padding: 0; border-radius: 8px; border:1px solid #28303a;
+    }
+
+    /* Buttons: consistent touch targets */
+    .btn{ touch-action: manipulation; }
+    @media (pointer:coarse){
+      .btn { padding:12px 14px; border-radius:14px; min-height: 40px; }
+      input, select, textarea { padding:12px 14px; }
+      .iconToggle img { width:48px; height:48px; }
+    }
+
+    /* Rows wrap gracefully on small screens */
+    .row { flex-wrap: wrap; }
+
+    /* Make the log height adaptive (good on phones) */
+    .log { height: clamp(220px, 32vh, 360px); }
+
+    /* Tables: make scroll more obvious on mobile */
+    .tablewrap { -webkit-overflow-scrolling: touch; }
+
+    /* Dropdown menu spacing on mobile */
+    .dropdown label{ display:flex; align-items:center; gap:8px; }
+
+    /* Modals breathe on small screens */
+    .modal-panel { width:min(680px, 94vw); }
+
+    /* Fine-tune the file/appearance grids for phone widths */
+    @media (max-width: 600px){
+      :root{ --col-left: 1fr; --col-mid: 1fr; }
+      .grid{
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "dev"
+          "media"
+          "appearance"
+          "files"
+          "status"
+          "log";
+      }
+      #apEyeGrid{ grid-template-columns: repeat(6, 36px); }
+    }
+
+    /* Fix checkbox baseline weirdness inside “Advanced” and others */
+    .dropdown input[type="checkbox"],
+    #slowModal input[type="checkbox"],
+    #riskModal input[type="checkbox"]{
+      margin: 0; transform: translateY(0); /* prevents baseline misalignment */
+    }
+
+      /* Outline inputs when the chosen name already exists on device */
+  .warn-border { border-color: var(--warn) !important; box-shadow: 0 0 0 2px rgba(245,158,11,.18); }
+
+    /* Modern donate button that matches .btn look */
+    .topbar-right form.donate{ margin:0; display:flex; align-items:center; }
+    .btn.paypal{
+      display:inline-flex; align-items:center; gap:8px;
+      border:1px solid #1f2a3a; background:linear-gradient(180deg,#0d1219,#0b1016);
+      color:#dbeafe; border-radius:12px; padding:10px 12px; font-weight:700;
+    }
+    .btn.paypal:hover{ background:#101826; border-color:#2a3e57; }
+    .btn.paypal:focus-visible{ outline:2px solid var(--accent); outline-offset:2px; }
+    .btn.paypal .pp{
+      display:inline-block; width:18px; height:18px; border-radius:4px;
+      background:#0070e0; position:relative; overflow:hidden;
+    }
+    .btn.paypal .pp::after{ /* simple “P” mark */
+      content:'P'; position:absolute; inset:0; display:flex; align-items:center; justify-content:center;
+      font-weight:900; color:#fff; font-size:12px; transform:translateY(-1px);
+    }
+    @media (max-width:520px){
+      .btn.paypal{ padding:8px 10px; }
+      .btn.paypal .txt{ display:none; } /* icon-only on tiny screens */
+    }
+
+    /* (Optional) Keep the original image as a fallback, but hide it */
+    .topbar-right form.donate input[type="image"]{ display:none; }
+
+    /* Subcard (used for upcoming features) */
+    .subcard{
+      border:1px dashed #28303a; background:#0f1216; border-radius:12px; padding:12px;
+    }
+    .subcard-head{ margin-bottom:6px; color:#c7d2fe; }
+    .subcard.upcoming{ opacity:.9; }
+
+    footer {
+      display: flex;
+      align-items: center;
+      gap: 12px;              /* spacing between the two spans */
+    }
+
+    footer span:last-child {
+      margin-left: auto;      /* shove the last span to the right */
+      text-align: right;
+    }
+
+    /* optional, keep the link on brand */
+    footer a { color: var(--accent); }
+
+  </style>
+  <script defer src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+</head>
+<body>
+  <!-- First-load warning -->
+  <div id="riskModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="riskTitle">
+    <div class="modal-panel">
+      <h3 id="riskTitle">⚠️ Proceed at your own risk</h3>
+      <p>This tool talks directly to your skeleton over Bluetooth and can send file and control commands. While many features have been tested, there is <strong>NO GUARANTEE</strong> this won’t misbehave or damage your device. By continuing, you accept all risk.</p>
+      <p class="muted">Use a fully charged device, keep the browser tab focused during transfers, and avoid interrupting power.</p>
+      <div class="modal-actions">
+        <button id="riskCancel" class="btn">Leave page</button>
+        <button id="riskAccept" class="btn danger">I understand — continue</button>
+      </div>
+    </div>
+  </div>
+
+<!-- Experimental Edit warning -->
+<div id="editWarnModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editWarnTitle">
+  <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
+    <h3 id="editWarnTitle">Experimental feature</h3>
+    <p>Per-file Edit actions are experimental and not all features have been tested. Proceed with caution.</p>
+    <div class="modal-actions">
+      <button id="editWarnOk" class="btn primary">OK</button>
+    </div>
+  </div>
+</div>
+
+
+  <!-- Slow upload heads-up -->
+  <div id="slowModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="slowTitle">
+    <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
+      <h3 id="slowTitle">Heads up: File sending can be slow</h3>
+      <p>
+        Large transfers over Bluetooth can take a while. After the file finishes uploading,
+        the device may take a couple minutes before you see the final “complete” message. 
+        Converting the file can greatly speed up the process.
+      </p>
+      <p class="muted" style="margin-top:6px">
+        Keep this tab focused and avoid disconnecting power during the process.
+      </p>
+      <label class="small checkline mt-10">
+        <input id="slowDontShow" type="checkbox"> Don’t show this again
+      </label>
+      <div class="modal-actions">
+        <button id="slowCancel" class="btn">Cancel</button>
+        <button id="slowOk" class="btn primary">Continue</button>
+      </div>
+    </div>
+</div>
+
+<!-- Long track heads-up -->
+<div id="longModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="longTitle">
+  <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
+    <h3 id="longTitle">Heads up: long audio</h3>
+    <p>
+      Uploading tracks longer than 30 seconds is experimental and may be unreliable.
+      You can still proceed, but results aren’t guaranteed.
+    </p>
+    <label class="small checkline" style="margin-top:10px">
+      <input id="longDontShow" type="checkbox"> Don’t show this again
+    </label>
+    <div class="modal-actions">
+      <button id="longOk" class="btn primary">OK</button>
+    </div>
+  </div>
+</div>
+
+  <!-- Edit file modal -->
+  <div id="editModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editTitle">
+    <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
+      <h3 id="editTitle">Edit File</h3>
+      <div class="row">
+        <div>
+          <label>Serial #</label>
+          <input id="edSerial" disabled>
+        </div>
+        <div>
+          <label>Cluster</label>
+          <input id="edCluster" type="number" min="0" step="1">
+        </div>
+      </div>
+      <div class="row">
+        <div>
+          <label>Action (0–255)</label>
+          <input id="edAction" type="number" min="0" max="255" value="255">
+        </div>
+        <div>
+          <label style="margin-top:12px">Eye Icon</label>
+          <div id="eyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
+        </div>
+      </div>
+      <!-- Movement (Per-file) -->
+      <div class="spacer"></div>
+      <label>Movement</label>
+      <div id="edMove" class="move-grid">
+        <button class="iconToggle" data-part="all"   title="All">
+          <img src="images/icon_action1_se.png" alt="All" />
+        </button>
+        <button class="iconToggle" data-part="head"  title="Head">
+          <img src="images/icon_action2_se.png" alt="Head" />
+        </button>
+        <button class="iconToggle" data-part="arm"   title="Arm">
+          <img src="images/icon_action3_se.png" alt="Arm" />
+        </button>
+        <button class="iconToggle" data-part="torso" title="Torso">
+          <img src="images/icon_action4_se.png" alt="Torso" />
+        </button>
+      </div>
+      <button class="btn" id="applyEdMove">Apply Movement</button>
+
+
+      <div class="spacer"></div>
+      <label>Lighting Type</label>
+      <div class="row">
+        <select id="edLightMode" aria-label="Lighting type">
+          <option value="1">Static</option>
+          <option value="2">Strobe</option>
+          <option value="3">Pulsing</option>
+        </select>
+        <button class="btn" id="edApplyMode">Apply Mode (F2)</button>
+      </div>
+
+      <div class="spacer"></div>
+      <div id="edSpeedBlock">
+        <label>Speed (0–255)</label>
+        <div class="row">
+          <input id="edSpeedRange" type="range" min="0" max="255" value="0" />
+          <input id="edSpeed" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="edApplySpeed">Set Speed (F6)</button>
+        </div>
+      </div>
+
+    <div class="spacer"></div>
+    <label>Color (this file only)</label>
+    <div class="row">
+      <input id="edColorPick" type="color" value="#ff0000" />
+      <input id="edR" type="number" min="0" max="255" value="255" />
+      <input id="edG" type="number" min="0" max="255" value="0" />
+      <input id="edB" type="number" min="0" max="255" value="0" />
+      <button class="btn" id="edApplyRGB">Set Color (F4)</button>
+    </div>
+
+    <div class="spacer"></div>
+    <label>Color presets</label>
+    <div class="actions">
+      <button class="iconToggle" id="edColorCycle" title="Cycle all colors (this file only)">
+        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" />
+      </button>
+      <span class="small muted">Cycles all colors for <strong>this file only</strong></span>
+    </div>
+
+
+
+      <label>File name</label>
+      <input id="edName" placeholder="example.mp3">
+      <div class="spacer"></div>
+      <label>Upload new file (replace)</label>
+      <input id="edUploadFile" type="file" />
+      <label class="small checkline mt-8">
+        <input id="edChkConvert" type="checkbox">
+        Convert to device format (MP3, 8 kHz mono)
+      </label>
+      <div id="edConvertOpts" class="row hidden" style="align-items:center">
+        <select id="edMp3Kbps" aria-label="MP3 bitrate (edit)">
+          <option value="16">16 kbps</option>
+          <option value="24">24 kbps</option>
+          <option value="32" selected>32 kbps</option>
+        </select>
+        <span class="small muted">Converts input before uploading.</span>
+      </div>
+
+      <div class="actions">
+        <button class="btn primary" id="edUploadBtn">Upload & Replace</button>
+        <span class="small muted" id="edUploadProg">No upload</span>
+      </div>
+      <div class="modal-actions">
+        <button id="edDelete" class="btn danger">Delete (C7)</button>
+        <button id="edApplyEye" class="btn">Set Eye (F9)</button>
+        <button id="edApplyAnim" class="btn primary">Set Animation (CA)</button>
+        <button id="edClose" class="btn">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <header>
+    <h1>🦴 Skelly BLE Controller</h1>
+    <div class="topbar-right">
+      <span id="status" class="pill">● <span>Disconnected</span></span>
+      <button class="btn primary" id="btnConnect">Connect</button>
+      <button class="btn danger" id="btnDisconnect" disabled>Disconnect</button>
+      <div class="menuwrap">
+        <button class="btn" id="btnAdvanced">⚙️ Advanced ▾</button>
+        <div id="advMenu" class="dropdown hidden" role="menu" aria-label="Advanced options">
+          <label><input type="checkbox" id="advRaw"> Show “Raw Command”</label>
+          <label><input type="checkbox" id="advFT"> Show “File Transfer”</label>
+          <label><input type="checkbox" id="advFEDC"> Show FEDC keepalives</label>
+          <label><input type="checkbox" id="advEdit"> Enable per-file Edit (experimental)</label>
+        </div>
+      </div>
+      <form class="donate" action="https://www.paypal.com/donate" method="post" target="_top" aria-label="Donate">
+        <input type="hidden" name="hosted_button_id" value="KHHJNFJMU3G6G" />
+        <button type="submit" class="btn paypal" title="Support development">
+          <span class="pp" aria-hidden="true"></span>
+          <span class="txt">Donate</span>
+        </button>
+
+        <!-- Fallback (kept, but hidden by CSS) -->
+        <input type="image"
+              src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif"
+              name="submit" alt="Donate" />
+        <img alt="" src="https://www.paypal.com/en_US/i/scr/pixel.gif" width="1" height="1" />
+      </form>
+
+    </div>
+  </header>
+
+  <div class="grid">
+    <!-- LEFT COL: Device / Commands -->
+    <section class="card area-dev">
+      <h2>Device / Commands</h2>
+
+      <label>Filter by name (optional)</label>
+      <input id="nameFilter" placeholder="Animated Skelly" value="Animated Skelly" />
+
+      <div class="spacer"></div>
+      <div>
+        <label>Queries</label>
+        <div class="actions">
+          <button class="btn cmd" data-q="E0" data-code="E0">Get Device Params</button>
+          <button class="btn cmd" data-q="E1" data-code="E1">Get Live Mode</button>
+          <button class="btn cmd" data-q="E5" data-code="E5">Get Volume</button>
+          <button class="btn cmd" data-q="E6" data-code="E6">Get BT Name</button>
+          <button class="btn cmd" data-q="EE" data-code="EE">Get Version</button>
+          <button class="btn cmd" data-q="D2" data-code="D2">Get Capacity</button>
+        </div>
+
+      </div>
+
+      <!-- Raw Command (advanced) -->
+      <div class="spacer"></div>
+      <div id="advRawBlock" class="hidden">
+        <label>Raw Command (hex after AA+TAG+payload[≤8B]+CRC8 auto)</label>
+        <div class="row">
+          <select id="tag">
+            <option value="E0">E0</option><option value="E1">E1</option><option value="E5">E5</option>
+            <option value="E6">E6</option><option value="EE">EE</option>
+            <option value="D0">D0</option><option value="D1">D1</option><option value="D2">D2</option>
+            <option value="FA">FA (Set Volume)</option><option value="FC">FC (Play/Pause)</option>
+            <option value="FD">FD</option><option value="FE">FE</option><option value="F2">F2</option>
+            <option value="F3">F3</option><option value="F4">F4</option><option value="F5">F5</option>
+            <option value="F6">F6</option><option value="F9">F9</option>
+            <option value="C0">C0</option><option value="C1">C1</option><option value="C2">C2</option>
+            <option value="C3">C3</option><option value="C4">C4</option><option value="C6">C6</option>
+            <option value="C7">C7</option><option value="C8">C8</option><option value="C9">C9</option>
+            <option value="CA">CA</option><option value="CB">CB</option><option value="CC">CC</option>
+          </select>
+          <input id="payload" placeholder="payload hex (optional)" />
+        </div>
+        <div class="actions"><button class="btn" id="btnSendRaw">Send</button></div>
+        <div class="small muted" style="margin-top:6px">Payload auto-pads to <strong>16 hex chars (8 bytes)</strong> before CRC8 (poly 0x8C).</div>
+      </div>
+      
+    </section>
+
+    <!-- MIDDLE COL: Media (top) -->
+    <section class="card area-media">
+      <h2>Media</h2>
+      <div class="actions">
+        <button class="btn" id="btnPlay">Play</button>
+        <button class="btn" id="btnPause">Pause</button>
+        <button class="btn" id="btnBT">Enable Classic BT (Live Mode)</button>
+      </div>
+
+      <!-- Volume (moved here) -->
+      <div class="spacer"></div>
+      <div>
+        <label>Volume (0–100%)</label>
+        <div class="row">
+          <input id="volRange" type="range" min="0" max="100" value="50" />
+          <input id="vol" type="number" min="0" max="100" value="50" />
+          <button class="btn" id="btnSetVol">Set</button>
+        </div>
+      </div>
+
+      <!-- File Transfer info (shown when feature is OFF) -->
+      <div id="ftInfoBlock" class="card" style="background:#0f1216">
+        <h2>File Transfer</h2>
+        <p class="small muted" style="margin-top:6px">
+          To enable the file transfer feature, select it from the Advanced menu in the upper right corner.
+          This feature will enable you to upload MP3 files directly as well as upload files longer than 30 seconds.
+        </p>
+      </div>
+      <!-- File transfer (advanced) -->
+      <div class="spacer"></div>
+      <div id="advFTBlock" class="card hidden" style="background:#0f1216">
+        <h2>File Transfer</h2>
+        <div class="small muted" style="margin:6px 0 10px">
+          Once the file has been uploaded you will be able to modify its settings (either here or in the official app).
+        </div>
+        <label>Choose file</label>
+        <input id="fileInput" type="file" />
+        <label class="small checkline mt-8">
+          <input id="chkConvert" type="checkbox"> Convert to device format (MP3, 8 kHz mono)
+        </label>
+        <div id="convertOpts" class="row hidden" style="align-items:center">
+          <select id="mp3Kbps" aria-label="MP3 bitrate">
+            <option value="16">16 kbps</option>
+            <option value="24">24 kbps</option>
+            <option value="32" selected>32 kbps</option>
+          </select>
+          <span class="small muted">Output replaces selected file before upload.</span>
+        </div>
+
+
+        <label>Device filename (UTF-16LE; “5C55” prefix auto)</label>
+        <input id="fileName" placeholder="test2_Robot.mp3" />
+        <div class="actions">
+          <button class="btn primary" id="btnSendFile">Send to Device</button>
+          <button class="btn danger" id="btnCancelFile" disabled>Cancel</button>
+        </div>
+        <div class="capsule">
+          <div>Progress: <span id="progText">0 / 0</span></div>
+          <div id="progPct">0%</div>
+        </div>
+        <div class="progress"><div id="progBar" class="bar"></div></div>
+        <div class="small muted" id="capLine" style="margin-top:8px">Remaining capacity: —</div>
+      </div>
+
+    </section>
+
+    <!-- MIDDLE COL: Text to Speech (bottom) -->
+    <section class="card area-empty">
+      <h2>Misc Speech Addons</h2>
+      <div class="subcard upcoming" aria-disabled="true">
+          <div class="subcard-head"><strong>Upcoming:</strong> Text To Speech
+        </div>
+        <form id="ttsForm" onsubmit="return false;">
+        <label for="ttsText">Text</label>
+        <textarea id="ttsText" rows="5" placeholder="Type what Skelly should say..."></textarea>
+
+        <div class="actions">
+          <button class="btn primary" id="btnSendTTS">Send</button>
+        </div>
+
+        <div class="small muted">TODO: Add effects...</div>
+      </form>
+        </div>
+      
+      <div class="spacer"></div>
+        <div class="subcard upcoming" aria-disabled="true">
+          <div class="subcard-head">
+            <strong>Upcoming:</strong> Record custom audio / forward device audio
+          </div>
+          <p class="small muted">
+            Capture mic audio or forward system audio directly to Skelly (work in progress).
+          </p>
+          <div class="row">
+            <button class="btn" disabled>Record from Microphone</button>
+            <button class="btn" disabled>Forward Device Audio</button>
+          </div>
+        </div>
+
+    </section>
+
+
+    <!-- LEFT COL: Appearance (under Device) -->
+    <section class="card area-appearance">
+      <h2>Appearance (Live)</h2>
+
+      <label>Target</label>
+      <select id="targetSelect" aria-label="Target channel"></select>
+      <!-- Movement (Live) -->
+      <div class="spacer"></div>
+      <label>Movement</label>
+      <div id="liveMove" class="move-grid">
+        <button class="iconToggle" data-part="all"   title="All">
+          <img src="images/icon_action1_se.png" alt="All" />
+        </button>
+        <button class="iconToggle" data-part="head"  title="Head">
+          <img src="images/icon_action2_se.png" alt="Head" />
+        </button>
+        <button class="iconToggle" data-part="arm"   title="Arm">
+          <img src="images/icon_action3_se.png" alt="Arm" />
+        </button>
+        <button class="iconToggle" data-part="torso" title="Torso">
+          <img src="images/icon_action4_se.png" alt="Torso" />
+        </button>
+      </div>
+      <button class="btn" id="applyLiveMove">Apply Movement</button>
+
+      <div class="spacer"></div>
+      <div>
+        <label>Lighting Type</label>
+        <div class="row">
+          <select id="lightMode" aria-label="Lighting type">
+            <option value="1">Static</option>
+            <option value="2">Strobe</option>
+            <option value="3">Pulsing</option>
+          </select>
+          <button class="btn" id="btnSetMode">Apply Mode</button>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+      <div id="speedBlock" class="hidden">
+        <label>Speed (0–255)</label>
+        <div class="row">
+          <input id="speedRange" type="range" min="0" max="255" value="0" />
+          <input id="speed" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="btnSetSpeed">Set Speed</button>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+      <div>
+        <label>Brightness (0–255)</label>
+        <div class="row">
+          <input id="brightnessRange" type="range" min="0" max="255" value="200" />
+          <input id="brightness" type="number" min="0" max="255" value="200" />
+          <button class="btn" id="btnSetBrightness">Set Brightness</button>
+        </div>
+      </div>
+
+      <div class="spacer"></div>
+      <div>
+        <label>Color</label>
+        <div class="row">
+          <input id="colorPick" type="color" value="#ff0000" />
+          <input id="r" type="number" min="0" max="255" value="255" />
+          <input id="g" type="number" min="0" max="255" value="0" />
+          <input id="b" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="btnSetRGB">Set Color</button>
+        </div>
+        <!-- Cycle All Colors (LIVE) -->
+        <div class="actions" id="colorCycleLive">
+          <button class="iconToggle" id="btnColorCycleLive" title="Cycle all colors (All channels)">
+            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" />
+          </button>
+          <span class="small muted">Cycles all colors on <strong>All channels</strong></span>
+        </div>
+
+      <div class="spacer"></div>
+      <div>
+        <label>Eyes (F9 — optional per-file)</label>
+        <div id="apEyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
+        <div class="row">
+          <input id="apCluster" type="number" min="0" step="1" placeholder="Cluster (optional)">
+          <input id="apName" placeholder="Filename (optional)">
+        </div>
+        <div class="actions">
+          <button class="btn" id="apSetEye">Set Eye (F9)</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- RIGHT COL: Status, Log, Files -->
+    
+    <section class="card area-log">
+      <h2>Log</h2>
+      <div class="actions">
+        <button class="btn xs" id="btnClearLog">Clear</button>
+        <label class="small checkline">
+          <input type="checkbox" id="chkAutoscroll" checked /> Autoscroll
+        </label>
+      </div>
+      <div id="log" class="log" aria-live="polite"></div>
+      <div class="small muted">Notifications parsed for FEDC/BBE1/E5/E6/E0/CC/C0/C1/C2/C3/C4/C5/C6/C7/C8/D2/D1/D0.</div>
+    </section>
+
+    <section class="card area-files">
+      <h2>Files on Device</h2>
+      <div class="actions">
+        <button class="btn" id="btnRefreshFiles">Refresh List</button>
+        <span class="small muted" id="filesSummary">—</span>
+        <input id="filesFilter" placeholder="Filter by name…" style="max-width:200px" />
+      </div>
+      <div class="spacer"></div>
+      <div class="tablewrap">
+        <table id="filesTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Cluster</th>
+              <th>Name</th>
+              <th>Attr</th>
+              <th>Eye</th>
+              <th>DB</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="card area-status">
+      <h2>Current Status</h2>
+      <div class="row small" style="gap:12px; flex-wrap:wrap">
+        <div style="flex:1 1 180px"><div class="muted">Device Name</div><div id="statName">—</div></div>
+        <div style="flex:1 1 120px"><div class="muted">Show Mode</div><div id="statShowMode">—</div></div>
+        <div style="flex:1 1 160px"><div class="muted">Channels</div><div id="statChannels">—</div></div>
+        <div style="flex:1 1 160px"><div class="muted">Classic BT Name</div><div id="statBtName">—</div></div>
+        <div style="flex:1 1 120px"><div class="muted">Volume</div><div id="statVolume">—</div></div>
+        <div style="flex:1 1 220px"><div class="muted">Capacity</div><div id="statCapacity">—</div></div>
+        <div style="flex:1 1 220px" class="row">
+          <div>
+            <div class="muted">Live Eye</div>
+            <div id="statEyeWrap">
+              <img id="statEye" class="eye-thumb" alt="eye" style="display:none" />
+              <span id="statEyeText">—</span>
+            </div>
+          </div>
+          <div>
+            <div class="muted">Live Action</div><div id="statAction">—</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <footer>
+    <span class="muted">Tip: Requires Chrome/Edge (desktop or Android) over HTTPS. Web Bluetooth isn’t supported in Firefox on desktop.</span>
+    <span class="muted"> Source code: 
+  <a href="https://github.com/tinkertims/tinkertims.github.io" target="_blank" rel="noopener">
+    github.com/tinkertims/tinkertims.github.io
+  </a></span>
+  </footer>
+
+  <!-- Load the app code -->
+  <script src="app.js"></script>
+</body>
+</html>
