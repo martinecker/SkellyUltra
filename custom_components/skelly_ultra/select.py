@@ -8,9 +8,6 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.const import CONF_ADDRESS
-import asyncio
-from homeassistant.helpers.event import async_track_time_interval
-from datetime import timedelta
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -73,9 +70,8 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         self._attr_name = "Eye Icon"
         self._attr_unique_id = f"{entry_id}_eye_icon"
         self._options = EYE_ICONS
+        # cached optimistic value set when user triggers a change
         self._current: str | None = None
-        # Unsubscribe handle for periodic polling
-        self._poll_unsub = None
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
@@ -87,6 +83,14 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
     @property
     def current_option(self) -> str | None:
         """Return the currently selected option, if any."""
+        # Prefer authoritative coordinator data (updated by coordinator
+        # polling). If not available yet, fall back to optimistic cached
+        # value set on user selection.
+        data = getattr(self.coordinator, "data", None)
+        if data:
+            eye = data.get("eye_icon")
+            if isinstance(eye, int) and 1 <= eye <= len(self._options):
+                return self._options[eye - 1]
         return self._current
 
     async def async_select_option(self, option: str) -> None:
@@ -120,79 +124,18 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         selects one in the UI.
         """
         await super().async_added_to_hass()
-        try:
-            current_index = await self.coordinator.adapter.client.get_eye_icon()
-        except Exception:
-            return
-
-        # Map the integer (1-based) to our options list (which is labeled '1 ...')
-        if 1 <= current_index <= len(self._options):
-            self._current = self._options[current_index - 1]
-            self.async_write_ha_state()
-
-        # Start periodic polling to refresh the current icon while entity is present
-        # Schedule a lightweight callback that creates a task to do the IO so
-        # we don't block the track-time callback itself.
-        def _schedule_poll(now):
-            # Use call_soon_threadsafe to schedule the coroutine creation on
-            # the event loop. async_track_time_interval callbacks may run
-            # in a thread context in some execution paths, so calling
-            # hass.async_create_task directly can trigger thread-safety
-            # checks. Scheduling asyncio.create_task on the loop is safe.
-            self.hass.loop.call_soon_threadsafe(
-                asyncio.create_task, self._async_poll_eye_icon()
-            )
-
-        self._poll_unsub = async_track_time_interval(
-            self.hass, _schedule_poll, timedelta(seconds=5)
-        )
-
-        # Perform an initial immediate read if connected
-        try:
-            client = self.coordinator.adapter.client
-        except Exception:
-            return
-
-        if not client or not getattr(client, "is_connected", False):
-            return
-
-        try:
-            current_index = await client.get_eye_icon()
-        except Exception:
-            return
-
-        if 1 <= current_index <= len(self._options):
-            new = self._options[current_index - 1]
-            if new != self._current:
-                self._current = new
-                self.async_write_ha_state()
-
-    async def _async_poll_eye_icon(self) -> None:
-        """Coroutine used by the scheduled callback to poll the device."""
-        try:
-            client = self.coordinator.adapter.client
-        except Exception:
-            return
-
-        if not client or not getattr(client, "is_connected", False):
-            return
-
-        try:
-            current_index = await client.get_eye_icon()
-        except Exception:
-            return
-
-        if 1 <= current_index <= len(self._options):
-            new = self._options[current_index - 1]
-            if new != self._current:
-                self._current = new
+        # Read current value from the coordinator's cached data (if present)
+        # The coordinator polls the device and stores `eye_icon` as an int
+        # 1-based index. If not available yet, leave current_option None.
+        data = getattr(self.coordinator, "data", None)
+        if data:
+            eye = data.get("eye_icon")
+            if isinstance(eye, int) and 1 <= eye <= len(self._options):
+                self._current = self._options[eye - 1]
                 self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
-        """Cleanup periodic polling when the entity is removed."""
-        if self._poll_unsub:
-            try:
-                self._poll_unsub()
-            except Exception:
-                pass
-            self._poll_unsub = None
+        """Entity being removed from hass; nothing to clean up."""
+        # Polling moved to the coordinator; keep optimistic cache but
+        # there is no subscription to cancel here.
+        return

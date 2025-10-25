@@ -76,27 +76,30 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
 
     async def async_added_to_hass(self) -> None:
         await super().async_added_to_hass()
-        # Initialize current state from device if available
+        # Read initial state from the coordinator cache instead of querying
+        # the device directly. The coordinator populates `lights` as a list
+        # of dicts with `brightness` and `rgb` for channels 0 and 1.
+        data = getattr(self.coordinator, "data", None)
+        if not data:
+            return
+
+        lights = data.get("lights")
+        if not lights or len(lights) <= self._channel:
+            return
+
+        info = lights[self._channel] or {}
         try:
-            client = self.coordinator.adapter.client
+            if info.get("brightness") is not None:
+                self._brightness = int(info.get("brightness") or 0)
+            rgb = info.get("rgb")
+            if rgb:
+                # Ensure tuple of ints
+                self._rgb_color = tuple(int(x) for x in rgb)
+            self._is_on = (self._brightness or 0) > 0
+            self.async_write_ha_state()
         except Exception:
-            client = None
-
-        if client and getattr(client, "is_connected", False):
-            try:
-                info = await client.get_light_info(self._channel)
-            except Exception:
-                return
-
-            # parser.LightInfo has attributes: mode, brightness (0-255), rgb (r,g,b), effect, speed
-            try:
-                self._brightness = int(info.brightness)
-                self._rgb_color = tuple(info.rgb)
-                self._is_on = self._brightness > 0
-                self.async_write_ha_state()
-            except Exception:
-                # ignore malformed data
-                return
+            # If data is malformed, skip initialization
+            return
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the light on or set color/brightness."""

@@ -59,7 +59,20 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 cap_task = asyncio.create_task(
                     self.adapter.client.get_capacity(timeout=timeout_seconds)
                 )
-                vol, live, cap = await asyncio.gather(vol_task, live_task, cap_task)
+                # also request current eye icon and light state for channels we
+                # expose as entities (torso=head channels 0 and 1)
+                eye_task = asyncio.create_task(
+                    self.adapter.client.get_eye_icon(timeout=timeout_seconds)
+                )
+                light0_task = asyncio.create_task(
+                    self.adapter.client.get_light_info(0, timeout=timeout_seconds)
+                )
+                light1_task = asyncio.create_task(
+                    self.adapter.client.get_light_info(1, timeout=timeout_seconds)
+                )
+                vol, live, cap, eye, light0, light1 = await asyncio.gather(
+                    vol_task, live_task, cap_task, eye_task, light0_task, light1_task
+                )
 
             # Normalize capacity result. The client may return an object that
             # contains capacity in kilobytes and file count; adapt here to the
@@ -86,6 +99,27 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "live_name": live,
                 "capacity_kb": capacity_kb,
                 "file_count": file_count,
+                # eye is expected to be an int (1-based) or None
+                "eye_icon": eye,
+                # lights is a list of small dicts with brightness and rgb
+                "lights": [
+                    {
+                        "brightness": int(getattr(light0, "brightness", 0))
+                        if light0 is not None
+                        else None,
+                        "rgb": tuple(getattr(light0, "rgb", (0, 0, 0)))
+                        if light0 is not None
+                        else None,
+                    },
+                    {
+                        "brightness": int(getattr(light1, "brightness", 0))
+                        if light1 is not None
+                        else None,
+                        "rgb": tuple(getattr(light1, "rgb", (0, 0, 0)))
+                        if light1 is not None
+                        else None,
+                    },
+                ],
             }
             _LOGGER.debug("Coordinator fetched data: %s", data)
         except Exception:
