@@ -69,13 +69,20 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
             Volume percentage (0-100)
         """
         # Attempt to set the volume on the device. If it fails, do not update
-        # the optimistic value. Use contextlib.suppress to avoid catching a
-        # very broad exception while keeping behavior consistent.
-        with contextlib.suppress(Exception):
+        # the optimistic value.
+        try:
             await self.coordinator.adapter.client.set_volume(int(value))
+        except Exception:
+            # Setting failed; do not change optimistic state
+            return
 
-        # If set_volume raised, we simply continue; optimistic value will not
-        # reflect a failed change, but we keep parity with previous behavior.
+        # Push optimistic value into coordinator cache so all entities
+        # driven by the coordinator update instantly reflect the change.
+        new_data = dict(self.coordinator.data or {})
+        new_data["volume"] = int(value)
+        # Update coordinator cache and notify listeners
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
 
         # Optimistically reflect the change until coordinator refreshes
         self._optimistic_value = int(value)

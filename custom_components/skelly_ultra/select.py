@@ -121,6 +121,17 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         # Non-fatal: if refresh fails, we remain optimistic until next poll
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()
+            # Push optimistic value into the coordinator cache so other
+            # CoordinatorEntity consumers see the update immediately
+            new_data = dict(self.coordinator.data or {})
+            # store the 1-based index
+            new_data["eye_icon"] = icon_index
+            with contextlib.suppress(Exception):
+                self.coordinator.async_set_updated_data(new_data)
+
+            # Request a refresh to get authoritative state from the device
+            with contextlib.suppress(Exception):
+                await self.coordinator.async_request_refresh()
 
     async def async_added_to_hass(self) -> None:
         """Attempt to read the current eye icon from the device when entity is added.

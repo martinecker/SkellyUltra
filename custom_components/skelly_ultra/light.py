@@ -124,6 +124,18 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 self._rgb_color = (r, g, b)
             except (ValueError, TypeError):
                 pass
+            else:
+                # push optimistic rgb into coordinator cache
+                new_data = dict(self.coordinator.data or {})
+                lights = list(new_data.get("lights") or [{}, {}])
+                # ensure list has at least channels 0 and 1
+                while len(lights) <= self._channel:
+                    lights.append({})
+                lights[self._channel]["rgb"] = (r, g, b)
+                with contextlib.suppress(Exception):
+                    self.coordinator.async_set_updated_data(
+                        {**new_data, "lights": lights}
+                    )
 
         if brightness is not None and client:
             try:
@@ -133,6 +145,17 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 self._is_on = self._brightness > 0
             except (ValueError, TypeError):
                 pass
+            else:
+                # push optimistic brightness into coordinator cache
+                new_data = dict(self.coordinator.data or {})
+                lights = list(new_data.get("lights") or [{}, {}])
+                while len(lights) <= self._channel:
+                    lights.append({})
+                lights[self._channel]["brightness"] = int(brightness)
+                with contextlib.suppress(Exception):
+                    self.coordinator.async_set_updated_data(
+                        {**new_data, "lights": lights}
+                    )
 
         # If no brightness provided but turning on, set on=True
         if brightness is None:
@@ -156,5 +179,13 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         self._brightness = 0
         self._is_on = False
         self.async_write_ha_state()
+        # reflect optimistic off state in coordinator cache
+        new_data = dict(self.coordinator.data or {})
+        lights = list(new_data.get("lights") or [{}, {}])
+        while len(lights) <= self._channel:
+            lights.append({})
+        lights[self._channel]["brightness"] = 0
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data({**new_data, "lights": lights})
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()
