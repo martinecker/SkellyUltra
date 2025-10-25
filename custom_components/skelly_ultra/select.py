@@ -71,8 +71,6 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         self._attr_name = "Eye Icon"
         self._attr_unique_id = f"{entry_id}_eye_icon"
         self._options = EYE_ICONS
-        # cached optimistic value set when user triggers a change
-        self._current: str | None = None
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
@@ -84,15 +82,13 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
     @property
     def current_option(self) -> str | None:
         """Return the currently selected option, if any."""
-        # Prefer authoritative coordinator data (updated by coordinator
-        # polling). If not available yet, fall back to optimistic cached
-        # value set on user selection.
+        # Return authoritative coordinator data (updated by coordinator polling)
         data = getattr(self.coordinator, "data", None)
         if data:
             eye = data.get("eye_icon")
             if isinstance(eye, int) and 1 <= eye <= len(self._options):
                 return self._options[eye - 1]
-        return self._current
+        return None
 
     async def async_select_option(self, option: str) -> None:
         """Handle when an option is selected in the UI.
@@ -113,25 +109,17 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         except Exception:  # device/IO errors surfaced here
             return
 
-        # Optimistically update state
-        self._current = option
-        self.async_write_ha_state()
-        # Ask the coordinator to refresh immediately so we get authoritative
-        # state from the device as soon as possible
-        # Non-fatal: if refresh fails, we remain optimistic until next poll
+        # Push optimistic value into the coordinator cache so other
+        # CoordinatorEntity consumers see the update immediately, then
+        # request a refresh to get authoritative state from the device.
+        new_data = dict(self.coordinator.data or {})
+        new_data["eye_icon"] = icon_index
         with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
-            # Push optimistic value into the coordinator cache so other
-            # CoordinatorEntity consumers see the update immediately
-            new_data = dict(self.coordinator.data or {})
-            # store the 1-based index
-            new_data["eye_icon"] = icon_index
-            with contextlib.suppress(Exception):
-                self.coordinator.async_set_updated_data(new_data)
+            # update cache and notify listeners; do not immediately refresh
+            # the coordinator to avoid overwriting the optimistic value.
+            self.coordinator.async_set_updated_data(new_data)
 
-            # Request a refresh to get authoritative state from the device
-            with contextlib.suppress(Exception):
-                await self.coordinator.async_request_refresh()
+        self.async_write_ha_state()
 
     async def async_added_to_hass(self) -> None:
         """Attempt to read the current eye icon from the device when entity is added.
@@ -141,18 +129,9 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         selects one in the UI.
         """
         await super().async_added_to_hass()
-        # Read current value from the coordinator's cached data (if present)
-        # The coordinator polls the device and stores `eye_icon` as an int
-        # 1-based index. If not available yet, leave current_option None.
+        # Ensure the entity state reflects whatever is currently in the
+        # coordinator cache. The coordinator stores `eye_icon` as a 1-based
+        # int index; the `current_option` property reads from coordinator.data.
         data = getattr(self.coordinator, "data", None)
-        if data:
-            eye = data.get("eye_icon")
-            if isinstance(eye, int) and 1 <= eye <= len(self._options):
-                self._current = self._options[eye - 1]
-                self.async_write_ha_state()
-
-    async def async_will_remove_from_hass(self) -> None:
-        """Entity being removed from hass; nothing to clean up."""
-        # Polling moved to the coordinator; keep optimistic cache but
-        # there is no subscription to cancel here.
-        return
+        if data and data.get("eye_icon") is not None:
+            self.async_write_ha_state()

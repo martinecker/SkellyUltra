@@ -41,13 +41,12 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_max_value = 100
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = PERCENTAGE
-        self._optimistic_value: int | None = None
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
     @property
     def native_value(self) -> int | None:
-        """Return the current volume from the coordinator cache (or optimistic value).
+        """Return the current volume from the coordinator cache.
 
         Returns:
             int | None: The current volume in percent, or None if unknown.
@@ -58,7 +57,8 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
                 return int(vol)
             except (ValueError, TypeError):
                 return None
-        return self._optimistic_value
+
+        return None
 
     async def async_set_native_value(self, value: int) -> None:
         """Set the volume on the device via the client and update optimistically.
@@ -84,9 +84,10 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
         with contextlib.suppress(Exception):
             self.coordinator.async_set_updated_data(new_data)
 
-        # Optimistically reflect the change until coordinator refreshes
-        self._optimistic_value = int(value)
+        # UI will be updated via coordinator cache update above; write state
+        # locally as well to ensure immediate HA entity update
         self.async_write_ha_state()
+
         # Request an immediate coordinator refresh so we get authoritative state
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()

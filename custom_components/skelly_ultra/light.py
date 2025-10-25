@@ -54,29 +54,55 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_light_{channel}"
         self._attr_supported_features = SUPPORT_BRIGHTNESS
-        # Use the modern supported color modes set to expose RGB support
         self._attr_supported_color_modes = {ColorMode.RGB}
         self._attr_color_mode = ColorMode.RGB
-        self._is_on = False
-        self._brightness = 0
-        self._rgb_color: tuple[int, int, int] | None = None
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
     @property
     def is_on(self) -> bool:
         """Return True if light is on."""
-        return self._is_on
+        data = getattr(self.coordinator, "data", None)
+        if not data:
+            return False
+        lights = data.get("lights") or []
+        if len(lights) <= self._channel:
+            return False
+        try:
+            brightness = lights[self._channel].get("brightness")
+            return (int(brightness) or 0) > 0
+        except (ValueError, TypeError, AttributeError):
+            return False
 
     @property
     def brightness(self) -> int | None:
         """Return current brightness (0-255) or None."""
-        return self._brightness
+        data = getattr(self.coordinator, "data", None)
+        if not data:
+            return None
+        lights = data.get("lights") or []
+        if len(lights) <= self._channel:
+            return None
+        try:
+            val = lights[self._channel].get("brightness")
+            return int(val) if val is not None else None
+        except (ValueError, TypeError, AttributeError):
+            return None
 
     @property
     def rgb_color(self) -> tuple[int, int, int] | None:
         """Return current RGB color as (r, g, b) or None."""
-        return self._rgb_color
+        data = getattr(self.coordinator, "data", None)
+        if not data:
+            return None
+        lights = data.get("lights") or []
+        if len(lights) <= self._channel:
+            return None
+        try:
+            rgb = lights[self._channel].get("rgb")
+            return tuple(int(x) for x in rgb) if rgb else None
+        except (ValueError, TypeError, AttributeError):
+            return None
 
     async def async_added_to_hass(self) -> None:
         """Entity added to hass; initialize state from coordinator cache."""
@@ -92,19 +118,10 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         if not lights or len(lights) <= self._channel:
             return
 
-        info = lights[self._channel] or {}
-        try:
-            if info.get("brightness") is not None:
-                self._brightness = int(info.get("brightness") or 0)
-            rgb = info.get("rgb")
-            if rgb:
-                # Ensure tuple of ints
-                self._rgb_color = tuple(int(x) for x in rgb)
-            self._is_on = (self._brightness or 0) > 0
-            self.async_write_ha_state()
-        except (ValueError, TypeError):
-            # If data is malformed, skip initialization
-            return
+        # Ensure HA shows the coordinator cached state immediately
+        # (properties `is_on`, `brightness`, and `rgb_color` read from
+        # coordinator.data). No local optimistic state is stored here.
+        self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn the light on or set color/brightness."""
@@ -121,7 +138,6 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
                 # loop and cluster/name left as defaults
                 await client.set_light_rgb(self._channel, r, g, b, 0)
-                self._rgb_color = (r, g, b)
             except (ValueError, TypeError):
                 pass
             else:
@@ -133,6 +149,47 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                     lights.append({})
                 lights[self._channel]["rgb"] = (r, g, b)
                 with contextlib.suppress(Exception):
+                    # update cache and avoid immediate refresh here
+                    self.coordinator.async_set_updated_data(
+                        {**new_data, "lights": lights}
+                    )
+
+        # Determine brightness to set. If explicit brightness provided,
+        # use that. Otherwise, use last-known brightness from the
+        # coordinator (if > 0). If last-known is missing or zero, fall
+        # back to full brightness (255) to ensure the light turns on.
+        desired_brightness: int | None = None
+        if brightness is not None:
+            try:
+                desired_brightness = int(brightness)
+            except (ValueError, TypeError):
+                desired_brightness = None
+        else:
+            # try last-known
+            last = self.brightness
+            try:
+                if last is not None and int(last) > 0:
+                    desired_brightness = int(last)
+                else:
+                    desired_brightness = 255
+            except (ValueError, TypeError):
+                desired_brightness = 255
+
+        if desired_brightness is not None and client:
+            try:
+                await client.set_light_brightness(
+                    self._channel, int(desired_brightness)
+                )
+            except (ValueError, TypeError):
+                pass
+            else:
+                # push optimistic brightness into coordinator cache
+                new_data = dict(self.coordinator.data or {})
+                lights = list(new_data.get("lights") or [{}, {}])
+                while len(lights) <= self._channel:
+                    lights.append({})
+                lights[self._channel]["brightness"] = int(desired_brightness)
+                with contextlib.suppress(Exception):
                     self.coordinator.async_set_updated_data(
                         {**new_data, "lights": lights}
                     )
@@ -141,8 +198,6 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
             try:
                 # brightness already 0-255 range
                 await client.set_light_brightness(self._channel, int(brightness))
-                self._brightness = int(brightness)
-                self._is_on = self._brightness > 0
             except (ValueError, TypeError):
                 pass
             else:
@@ -153,16 +208,16 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                     lights.append({})
                 lights[self._channel]["brightness"] = int(brightness)
                 with contextlib.suppress(Exception):
+                    # update cache and avoid immediate refresh here
                     self.coordinator.async_set_updated_data(
                         {**new_data, "lights": lights}
                     )
 
         # If no brightness provided but turning on, set on=True
-        if brightness is None:
-            self._is_on = True
-
+        # No local state is kept; coordinator cache update will drive
+        # entity state. Ensure HA updates immediately and request a single
+        # coordinator refresh at the end (non-fatal).
         self.async_write_ha_state()
-        # Trigger an immediate coordinator refresh to get authoritative state
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()
 
@@ -176,8 +231,6 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
             with contextlib.suppress(Exception):
                 await client.set_light_brightness(self._channel, 0)
 
-        self._brightness = 0
-        self._is_on = False
         self.async_write_ha_state()
         # reflect optimistic off state in coordinator cache
         new_data = dict(self.coordinator.data or {})
