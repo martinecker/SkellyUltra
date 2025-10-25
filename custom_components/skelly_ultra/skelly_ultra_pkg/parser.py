@@ -323,9 +323,15 @@ def handle_notification(sender: Any, data: bytes) -> None:
     Returns the parsed event (or None) for backward compatibility.
     """
     logger = logging.getLogger(__name__)
+    # Log raw received bytes as a space-separated hex string for debugging
+    try:
+        raw_hex = " ".join(f"{b:02X}" for b in data)
+    except Exception:
+        raw_hex = data.hex().upper()
+    logger.debug("[RAW RECV] From %s (%d bytes): %s", sender, len(data), raw_hex)
     parsed = parse_notification(sender, data)
     if parsed is not None:
         logger.debug("[PARSED] %s", parsed)
     else:
-        logger.debug("[NOTIFY] From %s: %s", sender, data.hex().upper())
+        logger.debug("[NOTIFY] No parser match for incoming data")
     return parsed

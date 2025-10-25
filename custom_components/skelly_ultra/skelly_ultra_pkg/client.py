@@ -153,6 +153,12 @@ class SkellyClient:
     async def send_command(self, cmd_bytes: bytes) -> None:
         if not self._client:
             raise RuntimeError("Not connected")
+        # Log raw outgoing bytes as a space-separated hex string for debugging
+        try:
+            raw_hex = " ".join(f"{b:02X}" for b in cmd_bytes)
+        except Exception:
+            raw_hex = cmd_bytes.hex().upper()
+        logger.debug("[RAW SEND] (%d bytes): %s", len(cmd_bytes), raw_hex)
         await self._client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
 
     # convenience wrappers
@@ -193,7 +199,7 @@ class SkellyClient:
         r: int,
         g: int,
         b: int,
-        loop: int,
+        loop: int = 0,
         cluster: int = 0,
         name: str = "",
     ) -> None:
