@@ -56,7 +56,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     _LOGGER.info("Skelly Ultra integration setup complete for entry %s", entry.entry_id)
 
     # forward async_setup_entry calls to other platforms to create entities
-    await hass.config_entries.async_forward_entry_setups(entry, ["sensor", "select"])
+    await hass.config_entries.async_forward_entry_setups(
+        entry, ["sensor", "select", "light"]
+    )
 
     return True
 
