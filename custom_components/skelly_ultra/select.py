@@ -8,6 +8,8 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.const import CONF_ADDRESS
+from homeassistant.helpers.event import async_track_time_interval
+from datetime import timedelta
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -71,6 +73,8 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         self._attr_unique_id = f"{entry_id}_eye_icon"
         self._options = EYE_ICONS
         self._current: str | None = None
+        # Unsubscribe handle for periodic polling
+        self._poll_unsub = None
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
@@ -124,3 +128,40 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         if 1 <= current_index <= len(self._options):
             self._current = self._options[current_index - 1]
             self.async_write_ha_state()
+
+        # Start periodic polling to refresh the current icon while entity is present
+        # Schedule a lightweight callback that creates a task to do the IO so
+        # we don't block the track-time callback itself.
+        def _schedule_poll(now):
+            # create_task is safe here; the coroutine will handle exceptions
+            self.hass.async_create_task(self._async_poll_eye_icon())
+
+        self._poll_unsub = async_track_time_interval(
+            self.hass, _schedule_poll, timedelta(seconds=5)
+        )
+        """Poll device for current eye icon and update state if connected."""
+        try:
+            client = self.coordinator.adapter.client
+        except Exception:
+            return
+
+        if not client or not getattr(client, "is_connected", False):
+            return
+
+        try:
+            current_index = await client.get_eye_icon()
+        except Exception:
+            return
+
+        if 1 <= current_index <= len(self._options):
+            new = self._options[current_index - 1]
+            if new != self._current:
+                self._current = new
+                self.async_write_ha_state()
+        """Clean up any periodic polling when the entity is removed."""
+        if self._poll_unsub:
+            try:
+                self._poll_unsub()
+            except Exception:
+                pass
+            self._poll_unsub = None
