@@ -52,27 +52,38 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 vol_task = asyncio.create_task(
                     self.adapter.client.get_volume(timeout=timeout_seconds)
                 )
-                live_task = asyncio.create_task(
+                live_name_task = asyncio.create_task(
                     self.adapter.client.get_live_name(timeout=timeout_seconds)
                 )
                 # capacity may return a dict or tuple with capacity and file_count
                 cap_task = asyncio.create_task(
                     self.adapter.client.get_capacity(timeout=timeout_seconds)
                 )
-                # also request current eye icon and light state for channels we
-                # expose as entities (torso=head channels 0 and 1)
-                eye_task = asyncio.create_task(
-                    self.adapter.client.get_eye_icon(timeout=timeout_seconds)
+                # Request the live mode once — it contains both the eye icon
+                # and per-channel light info in a single parsed event. This
+                # avoids multiple concurrent query_live_mode calls that can
+                # consume the same notification and confuse the event
+                # matching logic.
+                live_mode_task = asyncio.create_task(
+                    self.adapter.client.get_live_mode(timeout=timeout_seconds)
                 )
-                light0_task = asyncio.create_task(
-                    self.adapter.client.get_light_info(0, timeout=timeout_seconds)
+                vol, live_name, cap, live_mode = await asyncio.gather(
+                    vol_task, live_name_task, cap_task, live_mode_task
                 )
-                light1_task = asyncio.create_task(
-                    self.adapter.client.get_light_info(1, timeout=timeout_seconds)
-                )
-                vol, live, cap, eye, light0, light1 = await asyncio.gather(
-                    vol_task, live_task, cap_task, eye_task, light0_task, light1_task
-                )
+                # Extract eye and light info from the parsed live_mode event
+                eye = getattr(live_mode, "eye_icon", None)
+                # live_mode.lights is a list of LightInfo objects
+                light0 = None
+                light1 = None
+                try:
+                    lights_list = getattr(live_mode, "lights", []) or []
+                    if len(lights_list) > 0:
+                        light0 = lights_list[0]
+                    if len(lights_list) > 1:
+                        light1 = lights_list[1]
+                except Exception:
+                    light0 = None
+                    light1 = None
 
             # Normalize capacity result. The client may return an object that
             # contains capacity in kilobytes and file count; adapt here to the
@@ -96,7 +107,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
             data = {
                 "volume": vol,
-                "live_name": live,
+                "live_name": live_name,
                 "capacity_kb": capacity_kb,
                 "file_count": file_count,
                 # eye is expected to be an int (1-based) or None
