@@ -121,6 +121,10 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
 
         self.async_write_ha_state()
 
+        # Request an immediate coordinator refresh so we get authoritative state
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
+
     async def async_added_to_hass(self) -> None:
         """Attempt to read the current eye icon from the device when entity is added.
 
