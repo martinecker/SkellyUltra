@@ -1,4 +1,12 @@
 enable_classic_bt:
   name: Enable classic Bluetooth
   description: Make the Skelly Ultra expose a classic Bluetooth speaker to connect to for live mode.
-  fields: {}
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "select.skelly_eye_icon"

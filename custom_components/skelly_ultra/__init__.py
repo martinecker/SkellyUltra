@@ -9,6 +9,9 @@ import logging
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import config_validation as cv
+import voluptuous as vol
 
 from .client_adapter import SkellyClientAdapter
 from .coordinator import SkellyCoordinator
@@ -65,25 +68,96 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry, ["sensor", "select", "light", "number", "image"]
     )
 
-    # Register entry-specific services
+    # Register services for enabling classic Bluetooth. The service accepts
+    # either a device_id (device registry id) or an entity_id. If entity_id
+    # is provided, the device_id is derived from the entity registry.
+    SERVICE_ENABLE_CLASSIC_BT = vol.Schema(
+        {
+            vol.Optional("device_id"): cv.string,
+            vol.Optional("entity_id"): cv.entity_id,
+        }
+    )
+
     async def _enable_classic_bt_service(call) -> None:
-        """Enable classic Bluetooth speaker mode on the device."""
-        data = hass.data[DOMAIN].get(entry.entry_id)
-        if not data:
-            _LOGGER.error("Config entry data not found for service call")
+        """Enable classic Bluetooth speaker mode for a specific device.
+
+        The service accepts either `device_id` or `entity_id`. If neither is
+        provided and there is exactly one configured entry for this
+        integration, that entry will be used.
+        """
+        device_id = call.data.get("device_id")
+        entity_id = call.data.get("entity_id")
+
+        # If entity_id provided, resolve to device_id
+        if not device_id and entity_id:
+            ent_reg = er.async_get(hass)
+            ent = ent_reg.async_get(entity_id)
+            if not ent:
+                _LOGGER.error("Entity %s not found", entity_id)
+                return
+            if not ent.device_id:
+                _LOGGER.error("Entity %s has no device_id", entity_id)
+                return
+            device_id = ent.device_id
+
+        # If no device specified, attempt to use single entry if available
+        if not device_id:
+            entries = hass.data.get(DOMAIN, {})
+            if len(entries) == 1:
+                # use the only entry
+                entry_id = next(iter(entries))
+                adapter = entries[entry_id]["adapter"]
+                try:
+                    await adapter.client.enable_classic_bt()
+                    _LOGGER.info(
+                        "Requested classic Bluetooth enable for entry %s", entry_id
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to enable classic Bluetooth")
+                return
+            _LOGGER.error(
+                "No device_id or entity_id provided and multiple Skelly entries present"
+            )
             return
-        adapter: SkellyClientAdapter = data["adapter"]
+
+        # Lookup device in device registry and find a config entry that matches
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get(device_id)
+        if not device:
+            _LOGGER.error("Device %s not found", device_id)
+            return
+
+        # Find a config entry id for this integration within the device
+        entry_id: str | None = None
+        for ce in device.config_entries:
+            if ce in hass.data.get(DOMAIN, {}):
+                entry_id = ce
+                break
+
+        if not entry_id:
+            _LOGGER.error(
+                "Device %s is not associated with %s integration", device_id, DOMAIN
+            )
+            return
+
+        adapter = hass.data[DOMAIN][entry_id]["adapter"]
         try:
             await adapter.client.enable_classic_bt()
             _LOGGER.info(
-                "Requested classic Bluetooth enable for entry %s", entry.entry_id
+                "Requested classic Bluetooth enable for device %s (entry %s)",
+                device_id,
+                entry_id,
             )
         except Exception:
-            _LOGGER.exception("Failed to enable classic Bluetooth")
+            _LOGGER.exception(
+                "Failed to enable classic Bluetooth for device %s", device_id
+            )
 
-    # Register the service under the integration domain scoped to this config entry
     hass.services.async_register(
-        DOMAIN, "enable_classic_bt", _enable_classic_bt_service
+        DOMAIN,
+        "enable_classic_bt",
+        _enable_classic_bt_service,
+        schema=SERVICE_ENABLE_CLASSIC_BT,
     )
 
     return True
