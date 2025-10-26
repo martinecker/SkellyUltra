@@ -163,12 +163,12 @@ def select_rgb_channel(channel: int) -> bytes:
 
 def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
     name_utf16 = to_utf16le_hex(name)
+    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         int_to_hex(icon, 1)
-        + "000000"  # 3-byte padding
-        + int_to_hex(cluster, 2)  # 2-byte cluster ID
-        + "5C55"  # UTF-16LE BOM
-        + name_utf16  # encoded name
+        + "00"  # 1-byte padding
+        + int_to_hex(cluster, 4)
+        + (name_len + "5C55" + name_utf16 if name else name_len)
     )
     return build_cmd("F9", payload)
 
