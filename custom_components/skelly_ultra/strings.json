@@ -10,4 +10,11 @@
       }
     }
   }
+
+  ,"services": {
+    "enable_classic_bt": {
+      "name": "Enable classic Bluetooth",
+      "description": "Make the Skelly Ultra expose a classic Bluetooth speaker to connect to for live mode."
+    }
+  }
 }
