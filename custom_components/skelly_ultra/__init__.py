@@ -6,11 +6,9 @@ This file creates a client adapter and coordinator and forwards setup to platfor
 from __future__ import annotations
 
 import logging
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ConfigEntryNotReady
-
 
 from .client_adapter import SkellyClientAdapter
 from .coordinator import SkellyCoordinator
@@ -64,7 +62,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # forward async_setup_entry calls to other platforms to create entities
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "select", "light", "number"]
+        entry, ["sensor", "select", "light", "number", "image"]
     )
 
     # Register entry-specific services
