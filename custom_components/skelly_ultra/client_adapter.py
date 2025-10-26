@@ -7,9 +7,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 from bleak import BleakClient
+from bleak_retry_connector import (
+    close_stale_connections_by_address,
+    establish_connection,
+)
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
@@ -20,7 +23,19 @@ _LOGGER = logging.getLogger(__name__)
 
 
 class SkellyClientAdapter:
-    def __init__(self, hass: HomeAssistant, address: Optional[str] = None):
+    """Adapter that manages a SkellyClient and integrates with Home Assistant's BLE helpers.
+
+    The adapter prefers Home Assistant-managed connections (via
+    bleak-retry-connector) and falls back to the bundled client's discovery
+    logic when necessary.
+    """
+
+    def __init__(self, hass: HomeAssistant, address: str | None = None) -> None:
+        """Initialize the adapter.
+
+        hass: the Home Assistant core object
+        address: optional BLE address for the Skelly device
+        """
         self.hass = hass
         self.address = address
         self._client = SkellyClient(address=address)
@@ -32,7 +47,17 @@ class SkellyClientAdapter:
         transient errors with exponential backoff. Returns True on success,
         False on failure.
         """
-        last_exc: Optional[Exception] = None
+        last_exc: Exception | None = None
+
+        # Ensure any stale connections are cleaned up before attempting
+        # to establish a new connection via the retry connector.
+        if self.address:
+            try:
+                await close_stale_connections_by_address(self.address)
+            except Exception:
+                _LOGGER.debug(
+                    "close_stale_connections_by_address failed", exc_info=True
+                )
 
         for attempt in range(1, attempts + 1):
             try:
@@ -50,7 +75,27 @@ class SkellyClientAdapter:
                         ble_device = None
 
                     if ble_device:
-                        bleak_client = BleakClient(ble_device)
+                        # Prefer using bleak-retry-connector to establish a
+                        # connection so the connection uses the shared retry
+                        # logic and Home Assistant's recommended connector.
+                        bleak_client = None
+                        try:
+                            bleak_client = await establish_connection(self.address)
+                        except Exception:
+                            _LOGGER.debug(
+                                "establish_connection failed for %s, falling back to BleakClient",
+                                self.address,
+                                exc_info=True,
+                            )
+
+                        if bleak_client is None:
+                            # Last-resort fallback: create a BleakClient instance
+                            # from the resolved device. SkellyClient.connect will
+                            # avoid calling connect() if the client is already
+                            # connected, but using establish_connection above is
+                            # preferred to avoid a HA bleak-retry warning.
+                            bleak_client = BleakClient(ble_device)
+
                         # Defer notification registration to HA so entities/coordinator can be ready
                         ok = await self._client.connect(
                             client=bleak_client, start_notify=False
@@ -62,12 +107,12 @@ class SkellyClientAdapter:
                                 attempt,
                             )
                             return True
-                        else:
-                            _LOGGER.warning(
-                                "SkellyClient.connect returned False for %s on attempt %d",
-                                self.address,
-                                attempt,
-                            )
+
+                        _LOGGER.warning(
+                            "SkellyClient.connect returned False for %s on attempt %d",
+                            self.address,
+                            attempt,
+                        )
 
                 # Fallback to library discovery/connect
                 # Defer notification registration to HA
@@ -88,7 +133,7 @@ class SkellyClientAdapter:
             # Backoff before retrying
             if attempt < attempts:
                 sleep_for = backoff * (2 ** (attempt - 1))
-                _LOGGER.debug("Retrying in %.1f seconds...", sleep_for)
+                _LOGGER.debug("Retrying in %.1f seconds", sleep_for)
                 await asyncio.sleep(sleep_for)
 
         # All attempts exhausted
@@ -99,6 +144,7 @@ class SkellyClientAdapter:
         return False
 
     async def disconnect(self) -> None:
+        """Disconnect the underlying Skelly client and clean up resources."""
         _LOGGER.info("Disconnecting Skelly adapter/client")
         try:
             await self._client.disconnect()
@@ -107,6 +153,7 @@ class SkellyClientAdapter:
 
     @property
     def client(self) -> SkellyClient:
+        """Return the underlying SkellyClient instance."""
         return self._client
 
     async def start_notifications_with_retry(

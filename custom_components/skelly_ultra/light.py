@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from homeassistant.components.light import (
-    LightEntity,
-    SUPPORT_BRIGHTNESS,
-    ColorMode,
-)
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.const import CONF_ADDRESS
-from homeassistant.helpers.device_registry import DeviceInfo
 import contextlib
+
+from homeassistant.components.light import ColorMode, LightEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ADDRESS
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
@@ -53,7 +50,9 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         self._channel = channel
         self._attr_name = name
         self._attr_unique_id = f"{entry_id}_light_{channel}"
-        self._attr_supported_features = SUPPORT_BRIGHTNESS
+        # Use supported_color_modes instead of the deprecated
+        # SUPPORT_BRIGHTNESS. The light supports RGB and reports
+        # brightness via the brightness property (0-255).
         self._attr_supported_color_modes = {ColorMode.RGB}
         self._attr_color_mode = ColorMode.RGB
         if address:
