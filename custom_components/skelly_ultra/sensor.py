@@ -54,7 +54,7 @@ class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
         """Initialize the volume sensor with coordinator."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Skelly Volume"
+        self._attr_name = "Volume"
         self._attr_unique_id = f"{entry_id}_volume"
         # Volume is expressed as a percentage (0-100)
         self._attr_native_unit_of_measurement = "%"
@@ -85,7 +85,7 @@ class SkellyLiveNameSensor(CoordinatorEntity, SensorEntity):
         """Initialize the live name sensor with coordinator."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Skelly Live Name"
+        self._attr_name = "Live Name"
         self._attr_unique_id = f"{entry_id}_live_name"
         if address:
             self._attr_device_info = DeviceInfo(
@@ -114,7 +114,7 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
         """Initialize the storage capacity sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Skelly Storage Capacity"
+        self._attr_name = "Storage Capacity"
         self._attr_unique_id = f"{entry_id}_capacity_kb"
         if address:
             self._attr_device_info = DeviceInfo(
@@ -142,7 +142,7 @@ class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
         """Initialize the sound count sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Skelly Sound Count"
+        self._attr_name = "Sound Count"
         self._attr_unique_id = f"{entry_id}_sound_count"
         if address:
             self._attr_device_info = DeviceInfo(
