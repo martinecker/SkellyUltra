@@ -80,7 +80,7 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
         """Connect to the classic/live Bluetooth device exposed by the Skelly."""
         try:
             # Use the adapter-level helper so HA can use establish_connection
-            result = await self.adapter.connect_live_mode(start_notify=True)
+            result = await self.adapter.connect_live_mode()
             if result:
                 _LOGGER.info("Live mode connected: %s", result)
         except Exception:

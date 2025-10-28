@@ -381,12 +381,7 @@ class SkellyClient:
         )
         return ev.capacity_kb, ev.file_count, ev.mode_str
 
-    async def connect_live_mode(
-        self,
-        timeout: float = 10.0,
-        start_notify: bool = False,
-        connect_fn: Callable[[str], Any] | None = None,
-    ) -> str | None:
+    async def connect_live_mode(self, timeout: float = 10.0) -> str | None:
         """Enable classic BT and connect to the device exposed by the Skelly's live name.
 
         Sequence:
@@ -447,45 +442,26 @@ class SkellyClient:
                     continue
                 if d.name.strip().lower() == name_normalized:
                     addr = d.address
-                    # Attempt to connect to the classic device without touching
-                    # the existing BLE client. If the connect fails, ensure the
-                    # created client is cleaned up and do not alter existing state.
-                    # If a connect_fn is provided (e.g. from HA adapter that
-                    # uses bleak-retry-connector), prefer it. It should accept
-                    # an address and return a connected BleakClient or None.
-                    new_client = None
-                    if connect_fn is not None:
-                        try:
-                            maybe_client = await connect_fn(addr)
-                            if maybe_client is not None:
-                                new_client = maybe_client
-                        except Exception:
-                            logger.exception(
-                                "connect_fn raised while connecting to classic BT device %s",
-                                addr,
-                            )
 
-                    # Fallback to creating a BleakClient and connecting directly
-                    if new_client is None:
-                        new_client = BleakClient(d)
-                        try:
-                            await new_client.connect()
-                        except BleakError:
-                            logger.exception(
-                                "Failed to connect to classic BT device %s", addr
-                            )
-                            # Ensure client is disconnected/cleaned if partially connected
-                            with contextlib.suppress(Exception):
-                                await new_client.disconnect()
-                            continue
-                        except Exception:
-                            logger.exception(
-                                "Unexpected error connecting to classic BT device %s",
-                                addr,
-                            )
-                            with contextlib.suppress(Exception):
-                                await new_client.disconnect()
-                            continue
+                    new_client = BleakClient(d)
+                    try:
+                        await new_client.connect()
+                    except BleakError:
+                        logger.exception(
+                            "Failed to connect to classic BT device %s", addr
+                        )
+                        # Ensure client is disconnected/cleaned if partially connected
+                        with contextlib.suppress(Exception):
+                            await new_client.disconnect()
+                        continue
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error connecting to classic BT device %s",
+                            addr,
+                        )
+                        with contextlib.suppress(Exception):
+                            await new_client.disconnect()
+                        continue
 
                     # Success — store the live-mode client separately
                     self._live_mode_client = new_client
