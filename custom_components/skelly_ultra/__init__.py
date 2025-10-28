@@ -65,7 +65,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # forward async_setup_entry calls to other platforms to create entities
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "select", "light", "number", "image"]
+        entry, ["sensor", "select", "light", "number", "image", "switch"]
     )
 
     # Register services for enabling classic Bluetooth. The service accepts
@@ -166,7 +166,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry and disconnect the adapter."""
     data = hass.data[DOMAIN].pop(entry.entry_id)
-    await data["adapter"].disconnect()
+    # Ensure any live-mode classic BT client is disconnected first
+    try:
+        await data["adapter"].disconnect_live_mode()
+    except Exception:
+        _LOGGER.debug(
+            "Failed to disconnect live-mode BT classic client during unload",
+            exc_info=True,
+        )
+
+    try:
+        await data["adapter"].disconnect()
+    except Exception:
+        _LOGGER.debug("Failed to disconnect BLE client during unload", exc_info=True)
+
     # If there are no more entries for this domain, remove the service
     if not hass.data[DOMAIN]:
         # Remove the service if it was registered

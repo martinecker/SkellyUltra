@@ -187,3 +187,41 @@ class SkellyClientAdapter:
             "Failed to start notifications after %d attempts: %s", attempts, last_exc
         )
         return False
+
+    async def connect_live_mode(
+        self, timeout: float = 10.0, start_notify: bool = False
+    ) -> str | None:
+        """Connect to the classic/live Bluetooth device using HA helpers when possible.
+
+        This tries to use bleak-retry-connector.establish_connection to get a
+        reliable BleakClient. If that fails, it falls back to the client's
+        internal connection logic.
+        Returns the connected device address or None on failure.
+        """
+
+        async def _connect_fn(address: str):
+            # Try the HA/retry connector first
+            try:
+                client = await establish_connection(address)
+                return client
+            except Exception:
+                _LOGGER.debug(
+                    "establish_connection failed for %s, falling back", address
+                )
+                return None
+
+        # Delegate to the library client, passing our connect function
+        try:
+            return await self._client.connect_live_mode(
+                timeout=timeout, start_notify=start_notify, connect_fn=_connect_fn
+            )
+        except Exception:
+            _LOGGER.exception("Failed to connect live mode via adapter")
+            return None
+
+    async def disconnect_live_mode(self) -> None:
+        """Disconnect the classic/live-mode client managed by the underlying SkellyClient."""
+        try:
+            await self._client.disconnect_live_mode()
+        except Exception:
+            _LOGGER.exception("Error while disconnecting live-mode client")
