@@ -1,10 +1,13 @@
 """SkellyClient: high-level async client wrapping Bleak, using commands and parser modules."""
 
-from typing import Optional, Callable, Any
+from typing import Any, Optional
+from collections.abc import Callable
 import asyncio
 import logging
+import contextlib
 
 from bleak import BleakClient, BleakScanner
+from bleak.exc import BleakError
 
 from . import commands
 from . import parser
@@ -19,6 +22,8 @@ class SkellyClient:
         self.address = address
         self.name_filter = name_filter
         self._client: Optional[BleakClient] = None
+        self._live_mode_client: Optional[BleakClient] = None
+        self._live_mode_client_address: Optional[str] = None
         self._notification_handler: Callable[[Any, bytes], None] = (
             parser.handle_notification
         )
@@ -146,9 +151,24 @@ class SkellyClient:
                 pass
             self._client = None
 
+    async def disconnect_live_mode(self) -> None:
+        """Disconnect the separate classic (live-mode) client and clear state."""
+        if self._live_mode_client:
+            try:
+                await self._live_mode_client.disconnect()
+            except Exception:
+                pass
+            self._live_mode_client = None
+            self._live_mode_client_address = None
+
     @property
     def client(self) -> Optional[BleakClient]:
         return self._client
+
+    @property
+    def live_mode_client(self) -> Optional[BleakClient]:
+        """Return the separate classic (live-mode) BleakClient if connected."""
+        return self._live_mode_client
 
     async def send_command(self, cmd_bytes: bytes) -> None:
         if not self._client:
@@ -360,3 +380,107 @@ class SkellyClient:
             lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout
         )
         return ev.capacity_kb, ev.file_count, ev.mode_str
+
+    async def connect_live_mode(
+        self, timeout: float = 10.0, start_notify: bool = False
+    ) -> str | None:
+        """Enable classic BT and connect to the device exposed by the Skelly's live name.
+
+        Sequence:
+        - Query the device for its live name (uses the existing BLE connection).
+        - Send the enable_classic_bt command so the device will expose a classic
+          Bluetooth (non-LE) device with that name.
+        - Scan for a discoverable Bluetooth device whose name matches the live
+          name and attempt to connect to it.
+
+        Returns the address (MAC) of the connected classic device on success,
+        or None on failure.
+
+        Note: this method requires that the Skelly device is already connected
+        (so that `get_live_name`/`enable_classic_bt` can be sent). It will
+        disconnect any existing BleakClient before connecting to the classic
+        device.
+        """
+        # Must be connected to the device to request live name / enable classic
+        if not self._client or not getattr(self._client, "is_connected", False):
+            raise RuntimeError("Not connected to device to request live-mode")
+
+        try:
+            live_name = await self.get_live_name(timeout=2.0)
+        except TimeoutError:
+            logger.debug("Timed out while querying live name")
+            return None
+        except Exception:  # keep broad here since parsing could raise multiple errors
+            logger.exception("Failed to query live name")
+            return None
+
+        # Tell the device to enable classic BT advertising/visibility
+        try:
+            await self.enable_classic_bt()
+        except Exception:
+            logger.exception("Failed to send enable_classic_bt command")
+            return None
+
+        # Scan for a device with the reported live name. We loop until timeout
+        # to allow the device time to start advertising.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        name_normalized = (live_name or "").strip().lower()
+
+        while True:
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                break
+            scan_timeout = min(2.0, remaining)
+            try:
+                devices = await BleakScanner.discover(timeout=scan_timeout)
+            except BleakError:
+                logger.exception("Bleak scanner error during discover")
+                devices = []
+            except Exception:
+                logger.exception("Unexpected error during BleakScanner.discover")
+                devices = []
+
+            for d in devices:
+                if not d.name:
+                    continue
+                if d.name.strip().lower() == name_normalized:
+                    addr = d.address
+                    # Attempt to connect to the classic device without touching
+                    # the existing BLE client. If the connect fails, ensure the
+                    # created client is cleaned up and do not alter existing state.
+                    new_client = BleakClient(d)
+                    try:
+                        await new_client.connect()
+                    except BleakError:
+                        logger.exception(
+                            "Failed to connect to classic BT device %s", addr
+                        )
+                        # Ensure client is disconnected/cleaned if partially connected
+                        with contextlib.suppress(Exception):
+                            await new_client.disconnect()
+                        continue
+                    except Exception:
+                        logger.exception(
+                            "Unexpected error connecting to classic BT device %s", addr
+                        )
+                        with contextlib.suppress(Exception):
+                            await new_client.disconnect()
+                        continue
+
+                    # Success — store the live-mode client separately
+                    self._live_mode_client = new_client
+                    self._live_mode_client_address = addr
+
+                    logger.debug(
+                        "Connected to classic BT device with name %s and address %s",
+                        live_name,
+                        addr,
+                    )
+                    return addr
+
+            # small sleep to avoid tight loop when remaining time is small
+            await asyncio.sleep(0.1)
+
+        logger.debug("Could not find classic BT device with name %s", live_name)
+        return None
