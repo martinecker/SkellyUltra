@@ -3,14 +3,13 @@
 from __future__ import annotations
 
 from homeassistant.components.sensor import SensorEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.const import CONF_ADDRESS
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
-
 from .coordinator import SkellyCoordinator
 
 
@@ -20,7 +19,8 @@ async def async_setup_entry(
     """Set up Skelly sensors for a config entry."""
     data = hass.data["skelly_ultra"][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    adapter = data.get("adapter")
+    address = entry.data.get(CONF_ADDRESS) or adapter.address
     # Prefer the config entry title if provided, otherwise build a default
     # name using the BLE address so the device shows up with a friendly name
     device_name = entry.title or (
@@ -35,6 +35,7 @@ async def async_setup_entry(
                 coordinator, entry.entry_id, address, device_name
             ),
             SkellySoundCountSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
         ]
     )
 
@@ -153,3 +154,31 @@ class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the file count from coordinator data."""
         return self.coordinator.data.get("file_count")
+
+
+class SkellyLiveBTMacSensor(SensorEntity):
+    """Sensor exposing the Live Mode Bluetooth Classic MAC address."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        adapter,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the Live BT MAC sensor."""
+        self.adapter = adapter
+        self._attr_name = "Live BT MAC"
+        self._attr_unique_id = f"{entry_id}_live_bt_mac"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the Live Mode BT MAC address or '<not connected>'."""
+        mac = self.adapter.client.live_mode_client_address
+        return mac if mac else "<not connected>"
