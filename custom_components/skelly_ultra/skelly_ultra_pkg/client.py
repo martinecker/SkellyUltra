@@ -30,6 +30,7 @@ class SkellyClient:
         )
         self._parsed_handler: Callable[[Any, Any], None] | None = None
         self.events: asyncio.Queue = asyncio.Queue()
+        self._rest_session: aiohttp.ClientSession | None = None
 
     def register_notification_handler(
         self, handler: Callable[[Any, bytes], None]
@@ -152,6 +153,25 @@ class SkellyClient:
                 pass
             self._client = None
 
+        # Close REST session if it exists
+        if self._rest_session:
+            try:
+                await self._rest_session.close()
+            except Exception:
+                pass
+            self._rest_session = None
+
+    def _get_rest_session(self) -> aiohttp.ClientSession:
+        """Get or create the reusable REST session.
+
+        Returns a persistent aiohttp ClientSession to avoid creating
+        new sessions for each REST request, which prevents premature
+        disconnection warnings from the server.
+        """
+        if self._rest_session is None or self._rest_session.closed:
+            self._rest_session = aiohttp.ClientSession()
+        return self._rest_session
+
     async def disconnect_live_mode(self) -> None:
         """Disconnect the separate classic (live-mode) client via REST server."""
         if not self._live_mode_client_address:
@@ -159,14 +179,12 @@ class SkellyClient:
             return
 
         try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{self.server_url}/disconnect",
-                    json={"mac": self._live_mode_client_address},
-                    timeout=aiohttp.ClientTimeout(total=10.0),
-                ) as resp,
-            ):
+            session = self._get_rest_session()
+            async with session.post(
+                f"{self.server_url}/disconnect",
+                json={"mac": self._live_mode_client_address},
+                timeout=aiohttp.ClientTimeout(total=10.0),
+            ) as resp:
                 data = await resp.json()
                 if data.get("success"):
                     logger.info(
@@ -213,14 +231,12 @@ class SkellyClient:
             if target_mac:
                 data.add_field("mac", target_mac)
 
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{self.server_url}/play",
-                    data=data,
-                    timeout=aiohttp.ClientTimeout(total=30.0),
-                ) as resp,
-            ):
+            session = self._get_rest_session()
+            async with session.post(
+                f"{self.server_url}/play",
+                data=data,
+                timeout=aiohttp.ClientTimeout(total=30.0),
+            ) as resp:
                 return await resp.json()
         except aiohttp.ClientError:
             logger.exception("REST server communication error during play")
@@ -246,14 +262,12 @@ class SkellyClient:
             if mac:
                 request_body["mac"] = mac
 
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
-                    f"{self.server_url}/stop",
-                    json=request_body if request_body else None,
-                    timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp,
-            ):
+            session = self._get_rest_session()
+            async with session.post(
+                f"{self.server_url}/stop",
+                json=request_body if request_body else None,
+                timeout=aiohttp.ClientTimeout(total=5.0),
+            ) as resp:
                 return await resp.json()
         except aiohttp.ClientError:
             logger.exception("REST server communication error during stop")
@@ -273,13 +287,11 @@ class SkellyClient:
             aiohttp.ClientError: On REST server communication errors.
         """
         try:
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    f"{self.server_url}/status",
-                    timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp,
-            ):
+            session = self._get_rest_session()
+            async with session.get(
+                f"{self.server_url}/status",
+                timeout=aiohttp.ClientTimeout(total=5.0),
+            ) as resp:
                 return await resp.json()
         except aiohttp.ClientError:
             logger.exception("REST server communication error during status check")
@@ -559,16 +571,17 @@ class SkellyClient:
         )
 
         try:
-            # Request REST server to connect by name
-            async with (
-                aiohttp.ClientSession() as session,
-                session.post(
+            # Use a fresh session for the long-running connection request
+            # to avoid connection pool issues with the persistent session.
+            # Bluetooth pairing can take 10-30+ seconds.
+            # Set timeout on the session to ensure it applies to all operations
+            timeout_config = aiohttp.ClientTimeout(total=timeout)
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                async with session.post(
                     f"{self.server_url}/connect_by_name",
                     json={"device_name": live_name, "pin": bt_pin},
-                    timeout=aiohttp.ClientTimeout(total=timeout),
-                ) as resp,
-            ):
-                connect_data = await resp.json()
+                ) as resp:
+                    connect_data = await resp.json()
                 if not connect_data.get("success"):
                     logger.warning(
                         "REST server failed to connect to %s: %s",

@@ -88,6 +88,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Check REST server status if we think live mode is connected
             expected_mac = self.adapter.client.live_mode_client_address
             if expected_mac:
+                _LOGGER.debug(
+                    "Coordinator checking REST server for live mode device: %s",
+                    expected_mac,
+                )
                 try:
                     # Query REST server to verify connection is still active
                     rest_status = await self.adapter.client.get_audio_status_live_mode()
@@ -96,9 +100,17 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     bluetooth_info = rest_status.get("bluetooth", {})
                     connected_devices = bluetooth_info.get("devices", [])
 
+                    _LOGGER.debug(
+                        "REST server reports %d connected devices: %s",
+                        len(connected_devices),
+                        connected_devices,
+                    )
+
                     # Look for our expected MAC address in the connected devices
+                    # Use case-insensitive comparison since MAC addresses can vary in case
+                    expected_mac_lower = expected_mac.lower()
                     mac_still_connected = any(
-                        device.get("mac") == expected_mac
+                        device.get("mac", "").lower() == expected_mac_lower
                         for device in connected_devices
                     )
 
