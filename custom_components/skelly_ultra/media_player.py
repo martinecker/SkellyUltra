@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+from functools import partial
+import io
 import logging
 from pathlib import Path
 from typing import Any
+
+from scipy import signal
+import soundfile as sf
 
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
@@ -16,14 +21,18 @@ from homeassistant.components.media_player import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
 
 _LOGGER = logging.getLogger(__name__)
+
+# Target audio format for Bluetooth speaker
+TARGET_SAMPLE_RATE = 8000  # 8kHz
+TARGET_CHANNELS = 1  # Mono
 
 
 async def async_setup_entry(
@@ -120,7 +129,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         image_unique_id = f"{self._entry_id}_eye_icon_image"
 
         # Get entity registry to find the actual entity_id
-        registry = async_get_entity_registry(self.hass)
+        registry = er.async_get(self.hass)
         image_entity_id = registry.async_get_entity_id("image", DOMAIN, image_unique_id)
 
         if not image_entity_id:
@@ -166,8 +175,60 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         _LOGGER.info("Reading and uploading media file %s", media_id)
 
         try:
-            # Read the audio file into memory
-            file_data = await self.hass.async_add_executor_job(media_path.read_bytes)
+            # Read and process audio file
+            audio_data, sample_rate = await self.hass.async_add_executor_job(
+                sf.read, str(media_path)
+            )
+
+            # Check if resampling is needed
+            num_channels = audio_data.shape[1] if len(audio_data.shape) == 2 else 1
+            needs_resampling = (
+                sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS
+            )
+
+            if needs_resampling:
+                _LOGGER.debug(
+                    "Resampling audio: %dHz %s -> %dHz mono",
+                    sample_rate,
+                    "stereo" if num_channels == 2 else "mono",
+                    TARGET_SAMPLE_RATE,
+                )
+
+                # Convert to mono if stereo
+                if num_channels == 2:
+                    audio_data = audio_data.mean(axis=1)
+
+                # Resample to target sample rate if needed
+                if sample_rate != TARGET_SAMPLE_RATE:
+                    num_samples = int(
+                        len(audio_data) * TARGET_SAMPLE_RATE / sample_rate
+                    )
+                    audio_data = await self.hass.async_add_executor_job(
+                        signal.resample, audio_data, num_samples
+                    )
+
+                _LOGGER.info(
+                    "Audio resampled to %dHz mono (%d samples)",
+                    TARGET_SAMPLE_RATE,
+                    len(audio_data),
+                )
+            else:
+                _LOGGER.debug(
+                    "Audio already in target format: %dHz mono", TARGET_SAMPLE_RATE
+                )
+
+            # Write the (possibly resampled) audio to a bytes buffer
+            file_buffer = io.BytesIO()
+            await self.hass.async_add_executor_job(
+                partial(
+                    sf.write,
+                    file=file_buffer,
+                    data=audio_data,
+                    samplerate=TARGET_SAMPLE_RATE,
+                    format="WAV",
+                )
+            )
+            file_data = file_buffer.getvalue()
 
             # Use the client to upload and play audio via REST server
             # The client will handle the MAC address and target formatting
@@ -193,8 +254,8 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
-        except Exception:
-            _LOGGER.exception("Failed to start media playback via REST server")
+        except (OSError, ValueError, RuntimeError):
+            _LOGGER.exception("Failed to start media playback")
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
@@ -216,11 +277,11 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
                         _LOGGER.debug("Playback completed (detected via REST server)")
                         break
 
-                except Exception:
+                except (OSError, RuntimeError, ValueError, KeyError):
                     _LOGGER.debug("Failed to check playback status, assuming complete")
                     break
 
-        except Exception:
+        except (OSError, RuntimeError, asyncio.CancelledError):
             _LOGGER.exception("Error monitoring playback status")
         finally:
             # Clear playback state
