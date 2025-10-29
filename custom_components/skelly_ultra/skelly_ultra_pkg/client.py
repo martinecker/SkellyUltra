@@ -604,7 +604,104 @@ class SkellyClient:
 
         except TimeoutError:
             logger.warning("REST server connection request timed out")
-            return None
+            # Check if connection actually succeeded despite timeout
+            logger.info(
+                "Checking REST server status to verify connection for %s", live_name
+            )
+            try:
+                status_data = await self.get_audio_status_live_mode()
+                bluetooth_info = status_data.get("bluetooth", {})
+                connected_devices = bluetooth_info.get("devices", [])
+
+                # Look for a device with matching name
+                live_name_lower = live_name.lower()
+                for device in connected_devices:
+                    device_name = device.get("name", "").lower()
+                    if device_name == live_name_lower:
+                        mac_address = device.get("mac")
+                        if mac_address:
+                            logger.info(
+                                "Found connected device %s with MAC %s in REST server status",
+                                live_name,
+                                mac_address,
+                            )
+                            self._live_mode_client_address = mac_address
+                            return mac_address
+
+                # Device not found in status, retry the connection once
+                logger.info(
+                    "Device %s not found in REST server status, retrying connection",
+                    live_name,
+                )
+                try:
+                    # Retry with fresh session
+                    timeout_config = aiohttp.ClientTimeout(total=timeout)
+                    async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                        async with session.post(
+                            f"{self.server_url}/connect_by_name",
+                            json={"device_name": live_name, "pin": bt_pin},
+                        ) as resp:
+                            connect_data = await resp.json()
+
+                        if not connect_data.get("success"):
+                            logger.warning(
+                                "REST server retry failed to connect to %s: %s",
+                                live_name,
+                                connect_data.get("error", "Unknown error"),
+                            )
+                            return None
+
+                        mac_address = connect_data.get("mac")
+                        if not mac_address:
+                            logger.warning(
+                                "REST server retry connected but did not return MAC address"
+                            )
+                            return None
+
+                        logger.info(
+                            "Successfully connected to classic BT device %s on retry",
+                            mac_address,
+                        )
+                        self._live_mode_client_address = mac_address
+                        return mac_address
+
+                except TimeoutError:
+                    logger.warning("REST server retry connection also timed out")
+                    # One more status check after retry timeout
+                    try:
+                        status_data = await self.get_audio_status_live_mode()
+                        bluetooth_info = status_data.get("bluetooth", {})
+                        connected_devices = bluetooth_info.get("devices", [])
+
+                        for device in connected_devices:
+                            device_name = device.get("name", "").lower()
+                            if device_name == live_name_lower:
+                                mac_address = device.get("mac")
+                                if mac_address:
+                                    logger.info(
+                                        "Found connected device %s with MAC %s after retry timeout",
+                                        live_name,
+                                        mac_address,
+                                    )
+                                    self._live_mode_client_address = mac_address
+                                    return mac_address
+                    except Exception:
+                        logger.debug(
+                            "Failed to check status after retry timeout", exc_info=True
+                        )
+
+                    return None
+
+                except aiohttp.ClientError as err:
+                    logger.warning("REST server retry communication error: %s", err)
+                    return None
+
+            except (aiohttp.ClientError, KeyError, ValueError) as err:
+                logger.warning(
+                    "Error checking REST server status after timeout: %s", err
+                )
+                return None
+
         except aiohttp.ClientError as err:
             logger.warning("REST server communication error: %s", err)
             return None
