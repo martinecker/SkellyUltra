@@ -288,6 +288,11 @@ advEdit?.addEventListener('change', () => {
       $('#statVolume').textContent = (v==null) ? '—' : `${v}%`;
     }
     $('#statAction') && ($('#statAction').textContent = status.live.action ?? '—');
+    
+    // Update live movement UI based on action bitfield
+    if (status.live.action != null) {
+      updateMovementUI('liveMove', status.live.action);
+    }
 
     if (!targetsBuiltFromE0 && status.channels && status.channels.length) {
       buildTargetOptions(status.channels.length);
@@ -911,13 +916,57 @@ function initMoveGroup(rootId) {
     initMoveGroup('liveMove');
     initMoveGroup('edMove');
 
-    // Action codes per your Android "CA" command (setMusicPlayAnimation)
-    // Head: 1 on, 2 off | Arm: 3 on, 4 off
-    // Torso codes were inconsistent in logs (6 vs 7). Use 6/7 but swap by context.
-    const MOV_MAP = {
-    live: { HEAD: {on:1, off:2}, ARM:{on:3, off:4}, TORSO:{on:6, off:7}, ALL_ON:255 },
-    file: { HEAD: {on:1, off:2}, ARM:{on:3, off:4}, TORSO:{on:7, off:6}, ALL_ON:255 } // note torso swapped
+    // Action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
+    // If a bit is set movement for that body part is enabled, otherwise disabled.
+    // Can send a value of 255 to enable all (head+arm+torso) which in the phone app has a unique icon.
+    const MOV_BITS = {
+        HEAD: 0b001,  // bit 0
+        ARM: 0b010,   // bit 1
+        TORSO: 0b100, // bit 2
+        ALL_ON: 255
     };
+
+    // Update movement UI based on action bitfield
+    function updateMovementUI(rootId, actionNumber) {
+        const root = document.getElementById(rootId);
+        if (!root || actionNumber == null) return;
+
+        const allBtn   = root.querySelector('[data-part="all"]');
+        const headBtn  = root.querySelector('[data-part="head"]');
+        const armBtn   = root.querySelector('[data-part="arm"]');
+        const torsoBtn = root.querySelector('[data-part="torso"]');
+
+        if (!allBtn || !headBtn || !armBtn || !torsoBtn) return;
+
+        // Check if ALL (255)
+        if (actionNumber === MOV_BITS.ALL_ON) {
+            allBtn.classList.add('selected');
+            headBtn.classList.remove('selected');
+            armBtn.classList.remove('selected');
+            torsoBtn.classList.remove('selected');
+        } else {
+            // Clear ALL and set individual bits
+            allBtn.classList.remove('selected');
+            
+            if (actionNumber & MOV_BITS.HEAD) {
+                headBtn.classList.add('selected');
+            } else {
+                headBtn.classList.remove('selected');
+            }
+            
+            if (actionNumber & MOV_BITS.ARM) {
+                armBtn.classList.add('selected');
+            } else {
+                armBtn.classList.remove('selected');
+            }
+            
+            if (actionNumber & MOV_BITS.TORSO) {
+                torsoBtn.classList.add('selected');
+            } else {
+                torsoBtn.classList.remove('selected');
+            }
+        }
+    }
 
     // Build CA payload: action(1B) + 00 + cluster(4B) + nameLen+5C55+UTF16LE(name) | 00
     function buildCAPayload(actionNumber, clusterNumber, name) {
@@ -943,8 +992,6 @@ function initMoveGroup(rootId) {
     const ARM   = sel('arm');
     const TORSO = sel('torso');
 
-    const map = context === 'live' ? MOV_MAP.live : MOV_MAP.file;
-
     // Determine addressing
     let cluster = 0, name = '';
     if (context === 'file') {
@@ -952,27 +999,29 @@ function initMoveGroup(rootId) {
         name    = ($('#edName').value || '').trim();
     }
 
-    // If ALL is selected -> single CA with FF
+    // If ALL is selected -> single CA with 255 (all enabled)
     if (ALL) {
-        const payload = buildCAPayload(map.ALL_ON, cluster, context === 'file' ? name : '');
+        const payload = buildCAPayload(MOV_BITS.ALL_ON, cluster, context === 'file' ? name : '');
         send(buildCmd('CA', payload, PAD_MEDIA));
         log(`Movement: ALL ON (CA) ${context==='file' ? `(file "${name}" cluster=${cluster})` : '(live)'}`);
         return;
     }
 
-    // Otherwise: send each part ON/OFF to match the toggles
-    const ops = [
-        { label:'HEAD',  on:HEAD,  codes:map.HEAD  },
-        { label:'ARM',   on:ARM,   codes:map.ARM   },
-        { label:'TORSO', on:TORSO, codes:map.TORSO },
-    ];
+    // Otherwise: build bitfield based on selected toggles
+    let actionNumber = 0;
+    if (HEAD) actionNumber |= MOV_BITS.HEAD;
+    if (ARM) actionNumber |= MOV_BITS.ARM;
+    if (TORSO) actionNumber |= MOV_BITS.TORSO;
 
-    ops.forEach(o => {
-        const code = o.on ? o.codes.on : o.codes.off;
-        const payload = buildCAPayload(code, cluster, context === 'file' ? name : '');
-        send(buildCmd('CA', payload, PAD_MEDIA));
-        log(`Movement: ${o.label} ${o.on ? 'ON' : 'OFF'} (CA) ${context==='file' ? `(file "${name}" cluster=${cluster})` : '(live)'}`);
-    });
+    const parts = [];
+    if (HEAD) parts.push('HEAD');
+    if (ARM) parts.push('ARM');
+    if (TORSO) parts.push('TORSO');
+    const status = parts.length > 0 ? parts.join('+') : 'NONE';
+
+    const payload = buildCAPayload(actionNumber, cluster, context === 'file' ? name : '');
+    send(buildCmd('CA', payload, PAD_MEDIA));
+    log(`Movement: ${status} (action=0x${actionNumber.toString(16)}) ${context==='file' ? `(file "${name}" cluster=${cluster})` : '(live)'}`);
     }
 
     // Buttons to apply the current toggles
