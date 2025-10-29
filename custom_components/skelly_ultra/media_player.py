@@ -312,8 +312,8 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
             # Check if resampling is needed
             num_channels = audio_data.shape[1] if len(audio_data.shape) == 2 else 1
-            needs_resampling = (
-                TARGET_RESAMPLING and (sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS)
+            needs_resampling = TARGET_RESAMPLING and (
+                sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS
             )
 
             if needs_resampling:
@@ -336,13 +336,14 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
                     audio_data = await self.hass.async_add_executor_job(
                         signal.resample, audio_data, num_samples
                     )
+                    sample_rate = TARGET_SAMPLE_RATE
 
                 _LOGGER.info(
                     "Audio resampled to %dHz mono (%d samples)",
-                    TARGET_SAMPLE_RATE,
+                    sample_rate,
                     len(audio_data),
                 )
-            else:
+            elif TARGET_RESAMPLING:
                 _LOGGER.debug(
                     "Audio already in target format: %dHz mono", TARGET_SAMPLE_RATE
                 )
@@ -354,7 +355,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
                     sf.write,
                     file=file_buffer,
                     data=audio_data,
-                    samplerate=TARGET_SAMPLE_RATE,
+                    samplerate=sample_rate,
                     format="WAV",
                 )
             )
