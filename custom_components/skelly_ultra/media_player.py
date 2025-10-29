@@ -7,21 +7,26 @@ from functools import partial
 import io
 import logging
 from pathlib import Path
+import tempfile
 from typing import Any
+from urllib.parse import urlparse
 
 from scipy import signal
 import soundfile as sf
 
+from homeassistant.components import media_source
 from homeassistant.components.media_player import (
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
+    async_process_play_media_url,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -156,7 +161,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         Args:
             media_type: Type of media (should be 'music' or similar)
-            media_id: Path to the local audio file to play
+            media_id: Path to local audio file, URL, or media source URI
             **kwargs: Additional arguments
         """
         if not self.available:
@@ -166,22 +171,70 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         # Stop any existing playback
         await self.async_media_stop()
 
-        # Validate the media file exists
-        media_path = Path(media_id)
-        if not media_path.is_file():
-            _LOGGER.error("Media file does not exist: %s", media_id)
-            return
+        # Resolve media source URIs (e.g., from TTS services)
+        if media_source.is_media_source_id(media_id):
+            _LOGGER.debug("Resolving media source URI: %s", media_id)
+            play_item = await media_source.async_resolve_media(
+                self.hass, media_id, self.entity_id
+            )
+            media_id = async_process_play_media_url(self.hass, play_item.url)
+            _LOGGER.info("Resolved media source to URL: %s", media_id)
 
-        # Extract filename for display
-        self._current_media_title = media_path.name
+        # Determine if media_id is a URL or local file path
+        parsed = urlparse(media_id)
+        is_url = parsed.scheme in ("http", "https")
 
-        _LOGGER.info(
-            "Reading and processing audio file: %s (format: %s)",
-            media_path.name,
-            media_path.suffix.upper(),
-        )
-
+        temp_file = None
         try:
+            if is_url:
+                # Download the file from URL
+                _LOGGER.info("Downloading audio from URL: %s", media_id)
+                session = async_get_clientsession(self.hass)
+
+                async with session.get(media_id) as response:
+                    if response.status != 200:
+                        _LOGGER.error(
+                            "Failed to download audio from %s: HTTP %d",
+                            media_id,
+                            response.status,
+                        )
+                        return
+
+                    # Save to temporary file
+                    audio_content = await response.read()
+                    # Create temp file with suffix from URL
+                    suffix = Path(parsed.path).suffix or ".mp3"
+                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                    await self.hass.async_add_executor_job(
+                        temp_file.write, audio_content
+                    )
+                    await self.hass.async_add_executor_job(temp_file.close)
+                    media_path = Path(temp_file.name)
+                    _LOGGER.debug(
+                        "Downloaded %d bytes to temporary file: %s",
+                        len(audio_content),
+                        media_path,
+                    )
+            else:
+                # Local file path
+                media_path = Path(media_id)
+                if not media_path.is_file():
+                    _LOGGER.error("Media file does not exist: %s", media_id)
+                    return
+
+            # Extract filename for display
+            if is_url:
+                # For URLs, use the last part of the path or a generic name
+                self._current_media_title = Path(parsed.path).name or "Audio"
+            else:
+                self._current_media_title = media_path.name
+
+            _LOGGER.info(
+                "Reading and processing audio file: %s (format: %s)",
+                self._current_media_title,
+                media_path.suffix.upper(),
+            )
+
             # Read and process audio file (supports WAV, MP3, FLAC, OGG, etc.)
             audio_data, sample_rate = await self.hass.async_add_executor_job(
                 sf.read, str(media_path)
@@ -247,7 +300,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             # Use the client to upload and play audio via REST server
             # The client will handle the MAC address and target formatting
             data = await self.adapter.client.play_audio_live_mode(
-                file_data, filename=media_path.name
+                file_data, filename=self._current_media_title
             )
 
             if not data.get("success"):
@@ -276,13 +329,24 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         except ValueError as err:
             # soundfile raises ValueError for unsupported formats
             _LOGGER.error(
-                "Unsupported audio format for file %s: %s. Supported formats: WAV, MP3, FLAC, OGG, and more",
-                media_path.name,
+                "Unsupported audio format: %s. Supported formats: WAV, MP3, FLAC, OGG, and more",
                 err,
             )
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
+        finally:
+            # Clean up temporary file if it was created
+            if temp_file is not None:
+                try:
+                    await self.hass.async_add_executor_job(Path(temp_file.name).unlink)
+                    _LOGGER.debug("Cleaned up temporary file: %s", temp_file.name)
+                except (OSError, FileNotFoundError) as cleanup_err:
+                    _LOGGER.debug(
+                        "Failed to clean up temporary file %s: %s",
+                        temp_file.name,
+                        cleanup_err,
+                    )
 
     async def _monitor_playback_status(self) -> None:
         """Monitor playback status via REST server and update state when done."""
