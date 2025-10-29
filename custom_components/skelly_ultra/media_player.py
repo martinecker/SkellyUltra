@@ -17,6 +17,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.entity_registry import async_get as async_get_entity_registry
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
@@ -65,6 +66,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.adapter = adapter
+        self._entry_id = entry_id
         self._attr_name = "Live Mode Speaker"
         self._attr_unique_id = f"{entry_id}_live_mode_speaker"
         self._attr_media_content_type = MediaType.MUSIC
@@ -82,14 +84,12 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     @property
     def available(self) -> bool:
-        """Entity is only available when live mode is connected."""
-        # Check if the live mode is enabled
-        is_connected = self.adapter.client.live_mode_client_address is not None
+        """Entity is only available when live mode is connected.
 
-        # Also check coordinator is available
-        return is_connected and bool(
-            getattr(self.coordinator, "last_update_success", False)
-        )
+        Directly checks the client's connection status for immediate updates,
+        rather than waiting for coordinator refresh.
+        """
+        return self.adapter.client.live_mode_client_address is not None
 
     @property
     def state(self) -> MediaPlayerState:
@@ -107,6 +107,35 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     def media_title(self) -> str | None:
         """Return the title of current playing media."""
         return self._current_media_title
+
+    @property
+    def entity_picture(self) -> str | None:
+        """Return entity picture URL.
+
+        Returns the same entity_picture as the eye icon image entity, which shares
+        the same coordinator data. This ensures both entities show the same image.
+        """
+        # Look up the actual entity_id of the image entity from the registry
+        # Image entity unique_id: {entry_id}_eye_icon_image
+        image_unique_id = f"{self._entry_id}_eye_icon_image"
+
+        # Get entity registry to find the actual entity_id
+        registry = async_get_entity_registry(self.hass)
+        image_entity_id = registry.async_get_entity_id("image", DOMAIN, image_unique_id)
+
+        if not image_entity_id:
+            # Image entity not found in registry
+            return None
+
+        # Get the state of the image entity to access its entity_picture
+        image_state = self.hass.states.get(image_entity_id)
+        if not image_state:
+            # Image entity has no state yet
+            return None
+
+        # Return the same entity_picture that the image entity uses
+        # This includes the proper access token
+        return image_state.attributes.get("entity_picture")
 
     async def async_play_media(
         self, media_type: str, media_id: str, **kwargs: Any
@@ -227,4 +256,17 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
         await self.async_media_stop()
+        # Unregister live mode callback
+        self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
         await super().async_will_remove_from_hass()
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass."""
+        await super().async_added_to_hass()
+        # Register for live mode connection state changes
+        self.adapter.register_live_mode_callback(self._handle_live_mode_change)
+
+    def _handle_live_mode_change(self) -> None:
+        """Handle live mode connection state change."""
+        # Update entity state immediately when live mode connects/disconnects
+        self.async_write_ha_state()
