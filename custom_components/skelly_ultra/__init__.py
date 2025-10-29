@@ -28,7 +28,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     forward setup to platforms.
     """
     address = entry.data.get("address")
-    adapter = SkellyClientAdapter(hass, address=address)
+    server_url = entry.data.get("server_url", "http://localhost:8765")
+    adapter = SkellyClientAdapter(hass, address=address, server_url=server_url)
     coordinator = SkellyCoordinator(hass, adapter)
     ok = await adapter.connect()
     if not ok:

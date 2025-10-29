@@ -30,15 +30,40 @@ class SkellyClientAdapter:
     logic when necessary.
     """
 
-    def __init__(self, hass: HomeAssistant, address: str | None = None) -> None:
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        address: str | None = None,
+        server_url: str = "http://localhost:8765",
+    ) -> None:
         """Initialize the adapter.
 
         hass: the Home Assistant core object
         address: optional BLE address for the Skelly device
+        server_url: URL of the REST server for live mode features
         """
         self.hass = hass
         self.address = address
-        self._client = SkellyClient(address=address)
+        self._client = SkellyClient(address=address, server_url=server_url)
+        self._live_mode_callbacks: list = []
+
+    def register_live_mode_callback(self, callback) -> None:
+        """Register a callback to be notified when live mode connection state changes."""
+        if callback not in self._live_mode_callbacks:
+            self._live_mode_callbacks.append(callback)
+
+    def unregister_live_mode_callback(self, callback) -> None:
+        """Unregister a live mode callback."""
+        if callback in self._live_mode_callbacks:
+            self._live_mode_callbacks.remove(callback)
+
+    def _notify_live_mode_change(self) -> None:
+        """Notify all registered callbacks that live mode state has changed."""
+        for callback in self._live_mode_callbacks:
+            try:
+                callback()
+            except Exception:
+                _LOGGER.exception("Error in live mode callback")
 
     async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
         """Connect using HA's bluetooth helpers when possible, with retries.
@@ -202,7 +227,10 @@ class SkellyClientAdapter:
     async def connect_live_mode(self, timeout: float = 10.0) -> str | None:
         """Connect to the classic/live Bluetooth device aka live mode."""
         try:
-            return await self._client.connect_live_mode(timeout=timeout)
+            result = await self._client.connect_live_mode(timeout=timeout)
+            # Notify callbacks that connection state changed
+            self._notify_live_mode_change()
+            return result
         except Exception:
             _LOGGER.exception("Failed to connect live mode via adapter")
             return None
@@ -211,5 +239,7 @@ class SkellyClientAdapter:
         """Disconnect the classic/live-mode client managed by the underlying SkellyClient."""
         try:
             await self._client.disconnect_live_mode()
+            # Notify callbacks that connection state changed
+            self._notify_live_mode_change()
         except Exception:
             _LOGGER.exception("Error while disconnecting live-mode client")

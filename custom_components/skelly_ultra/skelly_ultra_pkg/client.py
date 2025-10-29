@@ -563,9 +563,6 @@ class SkellyClient:
             logger.exception("Failed to send enable_classic_bt command")
             return None
 
-        # Give device time to start advertising
-        await asyncio.sleep(2)
-
         logger.info(
             "Requesting REST server to connect to classic BT device: %s", live_name
         )

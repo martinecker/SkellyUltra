@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+import aiohttp
 import voluptuous as vol
 from bleak import BleakScanner
 
@@ -21,6 +22,8 @@ _LOGGER = logging.getLogger(__name__)
 
 DOMAIN = "skelly_ultra"
 SHOW_ALL_TOKEN = "__show_all__"
+CONF_SERVER_URL = "server_url"
+DEFAULT_SERVER_URL = "http://localhost:8765"
 
 
 class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -31,6 +34,30 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     def __init__(self) -> None:
         """Initialize flow state."""
         self._discovered: dict[str, str] = {}
+        self._server_url: str = DEFAULT_SERVER_URL
+
+    async def _validate_rest_server(self, server_url: str) -> dict[str, str] | None:
+        """Validate the REST server is accessible.
+
+        Returns None if valid, or a dict with error key if invalid.
+        """
+        try:
+            timeout = aiohttp.ClientTimeout(total=5.0)
+            async with (
+                aiohttp.ClientSession(timeout=timeout) as session,
+                session.get(f"{server_url}/status") as resp,
+            ):
+                if resp.status == 200:
+                    # Server is accessible
+                    return None
+                _LOGGER.warning("REST server returned status %d", resp.status)
+                return {"base": "rest_server_error"}
+        except aiohttp.ClientConnectorError:
+            _LOGGER.warning("Cannot connect to REST server at %s", server_url)
+            return {"base": "rest_server_unreachable"}
+        except Exception:
+            _LOGGER.exception("Error validating REST server")
+            return {"base": "rest_server_error"}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Initial step offering manual entry or discovery.
@@ -39,6 +66,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         - mode: 'manual' or 'scan'
         - CONF_ADDRESS: optional address when using manual mode
         - CONF_NAME: optional friendly name
+        - CONF_SERVER_URL: REST server URL for live mode features
         """
         # Build form schema
         schema = vol.Schema(
@@ -46,6 +74,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Required("mode", default="manual"): vol.In(["manual", "scan"]),
                 vol.Optional(CONF_ADDRESS, default=""): str,
                 vol.Optional(CONF_NAME, default="Animated Skelly"): str,
+                vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
             }
         )
 
@@ -64,8 +93,18 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=schema)
 
+        # Validate the REST server is accessible
+        server_url = user_input.get(CONF_SERVER_URL, DEFAULT_SERVER_URL).rstrip("/")
+        errors = await self._validate_rest_server(server_url)
+        if errors:
+            return self.async_show_form(
+                step_id="user", data_schema=schema, errors=errors
+            )
+
         mode = user_input.get("mode", "manual")
         if mode == "scan":
+            # Store server URL for later use in scan step
+            self._server_url = server_url
             return await self.async_step_scan()
 
         # Manual mode: create entry directly
@@ -77,6 +116,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             data={
                 CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""),
                 CONF_NAME: user_input.get(CONF_NAME, ""),
+                CONF_SERVER_URL: server_url,
             },
         )
 
@@ -254,5 +294,10 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         title = self._discovered.get(address) or address
         return self.async_create_entry(
-            title=title, data={CONF_ADDRESS: address, CONF_NAME: title}
+            title=title,
+            data={
+                CONF_ADDRESS: address,
+                CONF_NAME: title,
+                CONF_SERVER_URL: self._server_url,
+            },
         )
