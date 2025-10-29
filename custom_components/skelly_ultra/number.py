@@ -100,7 +100,12 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
 
 
 class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
-    """Number entity representing the effect speed for a light channel (0-255)."""
+    """Number entity representing the effect speed for a light channel (0-254).
+
+    The speed is inverted for intuitive control:
+    - User value 0 = slowest (device speed 254)
+    - User value 254 = fastest (device speed 0)
+    """
 
     _attr_has_entity_name = True
 
@@ -130,52 +135,68 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         self._attr_name = "Torso Effect Speed" if channel == 0 else "Head Effect Speed"
         self._attr_unique_id = f"{entry_id}_effect_speed_{channel}"
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 255
+        self._attr_native_max_value = 254
         self._attr_native_step = 1
         if address:
             self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
 
     @property
     def native_value(self) -> int | None:
-        """Return the current effect speed from the coordinator cache.
+        """Return the current effect speed from the coordinator cache (inverted).
+
+        The device reports speed where 0=fast, 254=slow, and 255=fast (same as 0).
+        We invert this so the UI shows 0=slow and 254=fast for intuitive control.
 
         Returns:
-            int | None: The current effect speed (0-255), or None if unknown.
+            int | None: The inverted speed (0-254), or None if unknown.
         """
         data = getattr(self.coordinator, "data", None)
         if data:
             lights = data.get("lights", [])
             if self.channel < len(lights):
-                speed = lights[self.channel].get("speed")
-                if speed is not None:
+                device_speed = lights[self.channel].get("speed")
+                if device_speed is not None:
                     try:
-                        return int(speed)
+                        speed_int = int(device_speed)
+                        # Device speed 255 is fastest (same as 0), map to UI 254
+                        if speed_int == 255:
+                            return 254
+                        # Invert: device 0 (fast) -> UI 254 (fast)
+                        #         device 254 (slow) -> UI 0 (slow)
+                        return 254 - speed_int
                     except (ValueError, TypeError):
                         return None
         return None
 
     async def async_set_native_value(self, value: float) -> None:
-        """Set the effect speed on the device via the client.
+        """Set the effect speed on the device via the client (inverted).
+
+        The UI value is inverted before sending to the device:
+        - UI 0 (slow) -> device 254 (slow)
+        - UI 254 (fast) -> device 0 (fast)
 
         Parameters
         ----------
         value : float
-            Effect speed (0-255)
+            Effect speed from UI (0=slow to 254=fast)
         """
+        # Invert the value: UI 0 -> device 254, UI 254 -> device 0
+        device_speed = 254 - int(value)
+
         try:
             await self.coordinator.adapter.client.set_light_speed(
-                channel=self.channel, speed=int(value)
+                channel=self.channel, speed=device_speed
             )
         except Exception:
             # Setting failed; do not change optimistic state
             return
 
-        # Push optimistic value into coordinator cache
+        # Push optimistic value into coordinator cache (store device value)
         new_data = dict(self.coordinator.data or {})
         lights = list(new_data.get("lights", [{}, {}]))
         if self.channel < len(lights):
             light_data = dict(lights[self.channel])
-            light_data["speed"] = int(value)
+            light_data["speed"] = device_speed
             lights[self.channel] = light_data
             new_data["lights"] = lights
             with contextlib.suppress(Exception):
