@@ -1,0 +1,26 @@
+[Unit]
+Description=Skelly Ultra REST Server for Bluetooth Classic Audio
+Documentation=https://github.com/martinecker/home-assistant-core
+After=network.target bluetooth.target pipewire.service
+Wants=bluetooth.target
+
+[Service]
+Type=simple
+User=YOUR_USERNAME_HERE
+Group=YOUR_USERNAME_HERE
+WorkingDirectory=/path/to/custom_components/skelly_ultra
+ExecStart=/usr/bin/python3 -m skelly_ultra_srv.server
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening (optional but recommended)
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/tmp
+
+[Install]
+WantedBy=multi-user.target
