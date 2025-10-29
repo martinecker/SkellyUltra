@@ -151,9 +151,12 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     ) -> None:
         """Play a media file to the classic BT device via REST server.
 
+        Supports multiple audio formats including WAV, MP3, FLAC, OGG, and more.
+        Audio is automatically resampled to 8kHz mono for optimal BT speaker compatibility.
+
         Args:
             media_type: Type of media (should be 'music' or similar)
-            media_id: Path to the local .wav file to play
+            media_id: Path to the local audio file to play
             **kwargs: Additional arguments
         """
         if not self.available:
@@ -172,12 +175,23 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         # Extract filename for display
         self._current_media_title = media_path.name
 
-        _LOGGER.info("Reading and uploading media file %s", media_id)
+        _LOGGER.info(
+            "Reading and processing audio file: %s (format: %s)",
+            media_path.name,
+            media_path.suffix.upper(),
+        )
 
         try:
-            # Read and process audio file
+            # Read and process audio file (supports WAV, MP3, FLAC, OGG, etc.)
             audio_data, sample_rate = await self.hass.async_add_executor_job(
                 sf.read, str(media_path)
+            )
+
+            _LOGGER.debug(
+                "Audio file loaded: %dHz, %s, %d samples",
+                sample_rate,
+                "stereo" if len(audio_data.shape) == 2 else "mono",
+                len(audio_data),
             )
 
             # Check if resampling is needed
@@ -254,8 +268,18 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
-        except (OSError, ValueError, RuntimeError):
-            _LOGGER.exception("Failed to start media playback")
+        except (OSError, RuntimeError):
+            _LOGGER.exception("Failed to read or process audio file")
+            self._current_media_title = None
+            self._is_playing = False
+            self.async_write_ha_state()
+        except ValueError as err:
+            # soundfile raises ValueError for unsupported formats
+            _LOGGER.error(
+                "Unsupported audio format for file %s: %s. Supported formats: WAV, MP3, FLAC, OGG, and more",
+                media_path.name,
+                err,
+            )
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
