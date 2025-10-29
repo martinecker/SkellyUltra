@@ -29,7 +29,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """
     address = entry.data.get("address")
     server_url = entry.data.get("server_url", "http://localhost:8765")
-    adapter = SkellyClientAdapter(hass, address=address, server_url=server_url)
+    live_mode_pin = entry.data.get("live_mode_pin", "1234")
+    adapter = SkellyClientAdapter(
+        hass, address=address, server_url=server_url, live_mode_pin=live_mode_pin
+    )
     coordinator = SkellyCoordinator(hass, adapter)
     ok = await adapter.connect()
     if not ok:

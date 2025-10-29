@@ -35,15 +35,18 @@ class SkellyClientAdapter:
         hass: HomeAssistant,
         address: str | None = None,
         server_url: str = "http://localhost:8765",
+        live_mode_pin: str = "1234",
     ) -> None:
         """Initialize the adapter.
 
         hass: the Home Assistant core object
         address: optional BLE address for the Skelly device
         server_url: URL of the REST server for live mode features
+        live_mode_pin: PIN code for pairing Live Mode Bluetooth device
         """
         self.hass = hass
         self.address = address
+        self.live_mode_pin = live_mode_pin
         self._client = SkellyClient(address=address, server_url=server_url)
         self._live_mode_callbacks: list = []
 
@@ -227,7 +230,9 @@ class SkellyClientAdapter:
     async def connect_live_mode(self, timeout: float = 10.0) -> str | None:
         """Connect to the classic/live Bluetooth device aka live mode."""
         try:
-            result = await self._client.connect_live_mode(timeout=timeout)
+            result = await self._client.connect_live_mode(
+                timeout=timeout, bt_pin=self.live_mode_pin
+            )
             # Notify callbacks that connection state changed
             self._notify_live_mode_change()
             return result

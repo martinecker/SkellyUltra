@@ -23,7 +23,9 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "skelly_ultra"
 SHOW_ALL_TOKEN = "__show_all__"
 CONF_SERVER_URL = "server_url"
+CONF_LIVE_MODE_PIN = "live_mode_pin"
 DEFAULT_SERVER_URL = "http://localhost:8765"
+DEFAULT_LIVE_MODE_PIN = "1234"
 
 
 class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -75,6 +77,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 vol.Optional(CONF_ADDRESS, default=""): str,
                 vol.Optional(CONF_NAME, default="Animated Skelly"): str,
                 vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
+                vol.Optional(CONF_LIVE_MODE_PIN, default=DEFAULT_LIVE_MODE_PIN): str,
             }
         )
 
@@ -117,6 +120,9 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""),
                 CONF_NAME: user_input.get(CONF_NAME, ""),
                 CONF_SERVER_URL: server_url,
+                CONF_LIVE_MODE_PIN: user_input.get(
+                    CONF_LIVE_MODE_PIN, DEFAULT_LIVE_MODE_PIN
+                ),
             },
         )
 
@@ -299,5 +305,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: address,
                 CONF_NAME: title,
                 CONF_SERVER_URL: self._server_url,
+                CONF_LIVE_MODE_PIN: DEFAULT_LIVE_MODE_PIN,
             },
         )
