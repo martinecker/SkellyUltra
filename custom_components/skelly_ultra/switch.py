@@ -65,10 +65,10 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
     @property
     def is_on(self) -> bool:
         """Return True if live-mode client is connected."""
-        client = None
+        address = None
         with contextlib.suppress(Exception):
-            client = self.coordinator.adapter.client.live_mode_client
-        return client is not None and getattr(client, "is_connected", False)
+            address = self.coordinator.adapter.client.live_mode_client_address
+        return address is not None
 
     async def async_added_to_hass(self) -> None:
         """When entity is added, subscribe to coordinator updates."""
@@ -83,19 +83,19 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
             result = await self.adapter.connect_live_mode()
             if result:
                 _LOGGER.info("Live mode connected: %s", result)
+                # Update state immediately
+                self.async_write_ha_state()
+            else:
+                _LOGGER.warning("Live mode connection failed")
         except Exception:
             _LOGGER.exception("Failed to connect live mode")
-        finally:
-            # Trigger coordinator refresh so entities update availability/state
-            with contextlib.suppress(Exception):
-                await self.coordinator.async_request_refresh()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disconnect the classic/live Bluetooth device."""
         try:
             await self.adapter.disconnect_live_mode()
+            _LOGGER.info("Live mode disconnected")
+            # Update state immediately
+            self.async_write_ha_state()
         except Exception:
             _LOGGER.exception("Failed to disconnect live mode")
-        finally:
-            with contextlib.suppress(Exception):
-                await self.coordinator.async_request_refresh()

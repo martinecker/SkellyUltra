@@ -6,9 +6,9 @@ fetches state from the Skelly BLE device via the provided adapter.
 
 from __future__ import annotations
 
-from datetime import timedelta
 import asyncio
 import logging
+from datetime import timedelta
 from typing import Any
 
 from homeassistant.core import HomeAssistant
@@ -84,6 +84,46 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 except Exception:
                     light0 = None
                     light1 = None
+
+            # Check REST server status if we think live mode is connected
+            expected_mac = self.adapter.client.live_mode_client_address
+            if expected_mac:
+                try:
+                    # Query REST server to verify connection is still active
+                    rest_status = await self.adapter.client.get_audio_status_live_mode()
+
+                    # Check if the REST server reports any connected devices
+                    bluetooth_info = rest_status.get("bluetooth", {})
+                    connected_devices = bluetooth_info.get("devices", [])
+
+                    # Look for our expected MAC address in the connected devices
+                    mac_still_connected = any(
+                        device.get("mac") == expected_mac
+                        for device in connected_devices
+                    )
+
+                    if not mac_still_connected:
+                        _LOGGER.warning(
+                            "Live mode device %s is no longer connected to REST server, cleaning up",
+                            expected_mac,
+                        )
+                        # Disconnect on our side to sync state
+                        await self.adapter.disconnect_live_mode()
+                    else:
+                        _LOGGER.debug(
+                            "Live mode device %s is still connected to REST server",
+                            expected_mac,
+                        )
+
+                except Exception as ex:
+                    # REST server may be down or unreachable
+                    _LOGGER.warning(
+                        "Failed to check REST server status for live mode device %s: %s. Assuming disconnected",
+                        expected_mac,
+                        ex,
+                    )
+                    # Clean up our state since we can't verify the connection
+                    await self.adapter.disconnect_live_mode()
 
             # Normalize capacity result. The client may return an object that
             # contains capacity in kilobytes and file count; adapt here to the

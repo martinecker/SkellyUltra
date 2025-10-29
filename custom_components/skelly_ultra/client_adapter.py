@@ -62,10 +62,17 @@ class SkellyClientAdapter:
         for attempt in range(1, attempts + 1):
             try:
                 if self.address:
+                    ble_device = None
                     try:
-                        ble_device = await bluetooth.async_ble_device_from_address(
+                        # Try to get BLE device from HA's bluetooth integration
+                        result = bluetooth.async_ble_device_from_address(
                             self.hass, self.address
                         )
+                        # Handle both sync and async versions of the API
+                        if hasattr(result, "__await__"):
+                            ble_device = await result
+                        else:
+                            ble_device = result
                     except Exception as exc:
                         _LOGGER.debug(
                             "HA bluetooth helper couldn't resolve address %s: %s",
@@ -80,7 +87,11 @@ class SkellyClientAdapter:
                         # logic and Home Assistant's recommended connector.
                         bleak_client = None
                         try:
-                            bleak_client = await establish_connection(self.address)
+                            bleak_client = await establish_connection(
+                                BleakClient,
+                                ble_device,
+                                ble_device.name or "Animated Skelly",
+                            )
                         except Exception:
                             _LOGGER.debug(
                                 "establish_connection failed for %s, falling back to BleakClient",

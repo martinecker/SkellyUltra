@@ -1,33 +1,34 @@
 """SkellyClient: high-level async client wrapping Bleak, using commands and parser modules."""
 
-from typing import Any, Optional
-from collections.abc import Callable
 import asyncio
+from collections.abc import Callable
 import logging
-import contextlib
+from typing import Any
 
+import aiohttp
 from bleak import BleakClient, BleakScanner
-from bleak.exc import BleakError
 
-from . import commands
-from . import parser
+from . import commands, parser
 
 logger = logging.getLogger(__name__)
 
 
 class SkellyClient:
     def __init__(
-        self, address: Optional[str] = None, name_filter: str = "Animated Skelly"
+        self,
+        address: str | None = None,
+        name_filter: str = "Animated Skelly",
+        server_url: str = "http://localhost:8765",
     ) -> None:
         self.address = address
         self.name_filter = name_filter
-        self._client: Optional[BleakClient] = None
-        self._live_mode_client: Optional[BleakClient] = None
-        self._live_mode_client_address: Optional[str] = None
+        self.server_url = server_url
+        self._client: BleakClient | None = None
+        self._live_mode_client_address: str | None = None
         self._notification_handler: Callable[[Any, bytes], None] = (
             parser.handle_notification
         )
-        self._parsed_handler: Optional[Callable[[Any, Any], None]] = None
+        self._parsed_handler: Callable[[Any, Any], None] | None = None
         self.events: asyncio.Queue = asyncio.Queue()
 
     def register_notification_handler(
@@ -43,7 +44,7 @@ class SkellyClient:
     async def connect(
         self,
         timeout: float = 10.0,
-        client: Optional[BleakClient] = None,
+        client: BleakClient | None = None,
         start_notify: bool = True,
     ) -> bool:
         """Connect logic separated from notification registration.
@@ -152,23 +153,149 @@ class SkellyClient:
             self._client = None
 
     async def disconnect_live_mode(self) -> None:
-        """Disconnect the separate classic (live-mode) client and clear state."""
-        if self._live_mode_client:
-            try:
-                await self._live_mode_client.disconnect()
-            except Exception:
-                pass
-            self._live_mode_client = None
+        """Disconnect the separate classic (live-mode) client via REST server."""
+        if not self._live_mode_client_address:
+            logger.debug("No live mode device connected to disconnect")
+            return
+
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.server_url}/disconnect",
+                    json={"mac": self._live_mode_client_address},
+                    timeout=aiohttp.ClientTimeout(total=10.0),
+                ) as resp,
+            ):
+                data = await resp.json()
+                if data.get("success"):
+                    logger.info(
+                        "Successfully disconnected live mode device %s via REST server",
+                        self._live_mode_client_address,
+                    )
+                    self._live_mode_client_address = None
+                else:
+                    logger.warning("REST server reported disconnect failure: %s", data)
+        except Exception:
+            logger.exception("Failed to disconnect via REST server")
+            # Clear the address anyway since we can't reliably maintain state
             self._live_mode_client_address = None
 
+    async def play_audio_live_mode(
+        self, file_data: bytes, filename: str = "audio.wav", mac: str | None = None
+    ) -> dict[str, Any]:
+        """Play audio file via REST server to classic BT device.
+
+        Args:
+            file_data: Audio file data as bytes.
+            filename: Name of the file (for logging/identification).
+            mac: Optional MAC address target. If None, uses the stored live_mode_client_address.
+
+        Returns:
+            Response data dict with 'success', 'error', 'is_playing', etc.
+
+        Raises:
+            RuntimeError: If no live mode device is connected.
+            aiohttp.ClientError: On REST server communication errors.
+        """
+        if not mac and not self._live_mode_client_address:
+            raise RuntimeError("No live mode device connected")
+
+        # Use stored address if no mac specified
+        target_mac = mac or self._live_mode_client_address
+
+        try:
+            # Create multipart form data
+            data = aiohttp.FormData()
+            data.add_field(
+                "file", file_data, filename=filename, content_type="audio/wav"
+            )
+            if target_mac:
+                data.add_field("mac", target_mac)
+
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.server_url}/play",
+                    data=data,
+                    timeout=aiohttp.ClientTimeout(total=30.0),
+                ) as resp,
+            ):
+                return await resp.json()
+        except aiohttp.ClientError:
+            logger.exception("REST server communication error during play")
+            raise
+        except Exception:
+            logger.exception("Unexpected error during play request")
+            raise
+
+    async def stop_audio_live_mode(self, mac: str | None = None) -> dict[str, Any]:
+        """Stop audio playback via REST server.
+
+        Args:
+            mac: Optional specific MAC address to stop. If None, stops all playback.
+
+        Returns:
+            Response data dict with 'success', 'error', etc.
+
+        Raises:
+            aiohttp.ClientError: On REST server communication errors.
+        """
+        try:
+            request_body = {}
+            if mac:
+                request_body["mac"] = mac
+
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.server_url}/stop",
+                    json=request_body if request_body else None,
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp,
+            ):
+                return await resp.json()
+        except aiohttp.ClientError:
+            logger.exception("REST server communication error during stop")
+            raise
+        except Exception:
+            logger.exception("Unexpected error during stop request")
+            raise
+
+    async def get_audio_status_live_mode(self) -> dict[str, Any]:
+        """Get current audio playback status via REST server.
+
+        Returns:
+            Status data dict with 'bluetooth' and 'audio' keys containing
+            device and playback session information.
+
+        Raises:
+            aiohttp.ClientError: On REST server communication errors.
+        """
+        try:
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
+                    f"{self.server_url}/status",
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp,
+            ):
+                return await resp.json()
+        except aiohttp.ClientError:
+            logger.exception("REST server communication error during status check")
+            raise
+        except Exception:
+            logger.exception("Unexpected error during status request")
+            raise
+
     @property
-    def client(self) -> Optional[BleakClient]:
+    def client(self) -> BleakClient | None:
         return self._client
 
     @property
-    def live_mode_client(self) -> Optional[BleakClient]:
-        """Return the separate classic (live-mode) BleakClient if connected."""
-        return self._live_mode_client
+    def live_mode_client_address(self) -> str | None:
+        """Return the MAC address of the connected classic BT device."""
+        return self._live_mode_client_address
 
     async def send_command(self, cmd_bytes: bytes) -> None:
         if not self._client:
@@ -301,10 +428,10 @@ class SkellyClient:
             while True:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
-                    raise asyncio.TimeoutError()
+                    raise TimeoutError
                 try:
                     ev = await asyncio.wait_for(self.events.get(), timeout=remaining)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     raise
                 if predicate(ev):
                     logger.debug("Matched event: %s", ev)
@@ -381,18 +508,25 @@ class SkellyClient:
         )
         return ev.capacity_kb, ev.file_count, ev.mode_str
 
-    async def connect_live_mode(self, timeout: float = 10.0) -> str | None:
-        """Enable classic BT and connect to the device exposed by the Skelly's live name.
+    async def connect_live_mode(
+        self, timeout: float = 30.0, bt_pin: str = "8947"
+    ) -> str | None:
+        """Enable classic BT and connect via REST server.
 
         Sequence:
         - Query the device for its live name (uses the existing BLE connection).
         - Send the enable_classic_bt command so the device will expose a classic
           Bluetooth (non-LE) device with that name.
-        - Scan for a discoverable Bluetooth device whose name matches the live
-          name and attempt to connect to it.
+        - Request the REST server to connect to the device by name.
+        - Poll the REST server to retrieve the connected device's MAC address.
 
-        Returns the address (MAC) of the connected classic device on success,
-        or None on failure.
+        Args:
+            timeout: Total timeout for the entire process (default 30s).
+            bt_pin: PIN code for pairing (default "8947").
+
+        Returns:
+            The address (MAC) of the connected classic device on success,
+            or None on failure.
 
         Note: this method requires that the Skelly device is already connected
         (so that `get_live_name`/`enable_classic_bt` can be sent).
@@ -417,65 +551,53 @@ class SkellyClient:
             logger.exception("Failed to send enable_classic_bt command")
             return None
 
-        # Scan for a device with the reported live name. We loop until timeout
-        # to allow the device time to start advertising.
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        name_normalized = (live_name or "").strip().lower()
+        # Give device time to start advertising
+        await asyncio.sleep(2)
 
-        while True:
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                break
-            scan_timeout = min(2.0, remaining)
-            try:
-                devices = await BleakScanner.discover(timeout=scan_timeout)
-            except BleakError:
-                logger.exception("Bleak scanner error during discover")
-                devices = []
-            except Exception:
-                logger.exception("Unexpected error during BleakScanner.discover")
-                devices = []
+        logger.info(
+            "Requesting REST server to connect to classic BT device: %s", live_name
+        )
 
-            for d in devices:
-                if not d.name:
-                    continue
-                if d.name.strip().lower() == name_normalized:
-                    addr = d.address
-
-                    new_client = BleakClient(d)
-                    try:
-                        await new_client.connect()
-                    except BleakError:
-                        logger.exception(
-                            "Failed to connect to classic BT device %s", addr
-                        )
-                        # Ensure client is disconnected/cleaned if partially connected
-                        with contextlib.suppress(Exception):
-                            await new_client.disconnect()
-                        continue
-                    except Exception:
-                        logger.exception(
-                            "Unexpected error connecting to classic BT device %s",
-                            addr,
-                        )
-                        with contextlib.suppress(Exception):
-                            await new_client.disconnect()
-                        continue
-
-                    # Success — store the live-mode client separately
-                    self._live_mode_client = new_client
-                    self._live_mode_client_address = addr
-
-                    logger.debug(
-                        "Connected to classic BT device with name %s and address %s",
+        try:
+            # Request REST server to connect by name
+            async with (
+                aiohttp.ClientSession() as session,
+                session.post(
+                    f"{self.server_url}/connect_by_name",
+                    json={"device_name": live_name, "pin": bt_pin},
+                    timeout=aiohttp.ClientTimeout(total=timeout),
+                ) as resp,
+            ):
+                connect_data = await resp.json()
+                if not connect_data.get("success"):
+                    logger.warning(
+                        "REST server failed to connect to %s: %s",
                         live_name,
-                        addr,
+                        connect_data.get("error", "Unknown error"),
                     )
-                    return addr
+                    return None
 
-            # small sleep to avoid tight loop when remaining time is small
-            await asyncio.sleep(0.1)
+                # Use the MAC address directly from the response
+                mac_address = connect_data.get("mac")
+                if not mac_address:
+                    logger.warning(
+                        "REST server connected but did not return MAC address"
+                    )
+                    return None
 
-        logger.debug("Could not find classic BT device with name %s", live_name)
-        return None
+                logger.info(
+                    "Successfully connected to classic BT device %s",
+                    mac_address,
+                )
+                self._live_mode_client_address = mac_address
+                return mac_address
+
+        except TimeoutError:
+            logger.warning("REST server connection request timed out")
+            return None
+        except aiohttp.ClientError as err:
+            logger.warning("REST server communication error: %s", err)
+            return None
+        except Exception:
+            logger.exception("Unexpected error during REST server communication")
+            return None

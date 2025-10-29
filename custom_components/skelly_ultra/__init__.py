@@ -65,7 +65,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # forward async_setup_entry calls to other platforms to create entities
     await hass.config_entries.async_forward_entry_setups(
-        entry, ["sensor", "select", "light", "number", "image", "switch"]
+        entry,
+        ["sensor", "select", "light", "number", "image", "switch", "media_player"],
     )
 
     # Register services for enabling classic Bluetooth. The service accepts
