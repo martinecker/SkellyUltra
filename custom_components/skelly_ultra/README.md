@@ -35,20 +35,37 @@ For installation and setup of the REST server, see the [REST Server Documentatio
 
 **Live Mode uses Classic Bluetooth**, which requires manual, interactive pairing:
 
-1. On the Linux host running the REST server, use `bluetoothctl`:
-   ```bash
-   bluetoothctl
-   > scan on
-   # Wait for your Skelly device to appear
-   > pair <MAC_ADDRESS>
-   # Enter PIN when prompted (default: 1234)
-   > trust <MAC_ADDRESS>
-   > exit
-   ```
+#### Step 1: Make the Bluetooth Speaker Discoverable
 
-2. This only needs to be done **once per device**. The pairing will persist.
+The Skelly Ultra device only makes its Classic Bluetooth speaker discoverable after you tell it to enable Live Mode:
 
-3. You can configure the PIN in the Home Assistant integration config flow (default: 1234).
+1. **First, add the integration in Home Assistant** (see Installation section below)
+2. **Turn on the "Live Mode" switch** in Home Assistant
+   - This tells the Skelly device to enable its Bluetooth speaker
+   - The switch will likely turn off again because pairing hasn't been completed yet - **this is expected**
+   - Alternatively, you can call the `skelly_ultra.enable_classic_bt` service
+
+The Skelly device will now be discoverable via Bluetooth as `<Device Name>(Live)`. For example, if your device is named "Animated Skelly" (the default), it will appear as **"Animated Skelly(Live)"**.
+
+#### Step 2: Pair Using bluetoothctl
+
+On the Linux host running the REST server, use `bluetoothctl` to pair with the device:
+
+```bash
+bluetoothctl
+> scan on
+# Wait for your device to appear as "Animated Skelly(Live)" or "<Your Device Name>(Live)"
+> pair <MAC_ADDRESS>
+# Enter PIN when prompted (default: 1234)
+> trust <MAC_ADDRESS>
+> exit
+```
+
+**Important notes**:
+- Pairing only needs to be done **once per device**. The pairing will persist.
+- You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
+- Look for the device name with **(Live)** suffix - this is the Classic Bluetooth speaker
+- You can configure the PIN in the Home Assistant integration config flow (default: 1234)
 
 **Why manual pairing?** Classic Bluetooth devices require interactive PIN entry during pairing. This is a limitation of the Bluetooth Classic protocol and cannot be automated by the integration.
 
