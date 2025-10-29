@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from functools import partial
 import io
 import logging
@@ -36,6 +37,7 @@ from .coordinator import SkellyCoordinator
 _LOGGER = logging.getLogger(__name__)
 
 # Target audio format for Bluetooth speaker
+TARGET_RESAMPLING = False
 TARGET_SAMPLE_RATE = 8000  # 8kHz
 TARGET_CHANNELS = 1  # Mono
 
@@ -65,7 +67,10 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     _attr_has_entity_name = True
     _attr_supported_features = (
-        MediaPlayerEntityFeature.PLAY_MEDIA | MediaPlayerEntityFeature.STOP
+        MediaPlayerEntityFeature.PLAY_MEDIA
+        | MediaPlayerEntityFeature.STOP
+        | MediaPlayerEntityFeature.VOLUME_SET
+        | MediaPlayerEntityFeature.VOLUME_STEP
     )
 
     def __init__(
@@ -151,13 +156,71 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         # This includes the proper access token
         return image_state.attributes.get("entity_picture")
 
+    @property
+    def volume_level(self) -> float | None:
+        """Return the volume level (0.0 to 1.0).
+
+        Returns:
+            float | None: Volume level as a fraction (0.0-1.0), or None if unknown.
+        """
+        data = getattr(self.coordinator, "data", None)
+        if data and (vol := data.get("volume")) is not None:
+            try:
+                # Convert from 0-100 percentage to 0.0-1.0 fraction
+                return int(vol) / 100.0
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume level (0.0 to 1.0).
+
+        Args:
+            volume: Volume level as a fraction (0.0-1.0)
+        """
+        # Convert from 0.0-1.0 fraction to 0-100 percentage
+        volume_percent = int(volume * 100)
+
+        try:
+            await self.coordinator.adapter.client.set_volume(volume_percent)
+        except (OSError, RuntimeError, ValueError):
+            # Setting failed; do not change state
+            return
+
+        # Update coordinator cache for immediate UI update
+        new_data = dict(self.coordinator.data or {})
+        new_data["volume"] = volume_percent
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+
+        self.async_write_ha_state()
+
+        # Request refresh to get authoritative state
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
+
+    async def async_volume_up(self) -> None:
+        """Turn volume up by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = min(1.0, current + 0.05)
+        await self.async_set_volume_level(new_volume)
+
+    async def async_volume_down(self) -> None:
+        """Turn volume down by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = max(0.0, current - 0.05)
+        await self.async_set_volume_level(new_volume)
+
     async def async_play_media(
         self, media_type: str, media_id: str, **kwargs: Any
     ) -> None:
         """Play a media file to the classic BT device via REST server.
 
         Supports multiple audio formats including WAV, MP3, FLAC, OGG, and more.
-        Audio is automatically resampled to 8kHz mono for optimal BT speaker compatibility.
 
         Args:
             media_type: Type of media (should be 'music' or similar)
@@ -250,7 +313,7 @@ class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             # Check if resampling is needed
             num_channels = audio_data.shape[1] if len(audio_data.shape) == 2 else 1
             needs_resampling = (
-                sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS
+                TARGET_RESAMPLING and (sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS)
             )
 
             if needs_resampling:
