@@ -177,7 +177,7 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.channel = channel
-        self._attr_name = "Torso Effect mode" if channel == 0 else "Head Effect Mode"
+        self._attr_name = "Torso Effect Mode" if channel == 0 else "Head Effect Mode"
         self._attr_unique_id = f"{entry_id}_effect_mode_{channel}"
         self._options = EFFECT_MODES
         if address:

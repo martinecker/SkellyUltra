@@ -164,7 +164,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "file_count": file_count,
                 # eye is expected to be an int (1-based) or None
                 "eye_icon": eye,
-                # lights is a list of small dicts with brightness, rgb, and mode
+                # lights is a list of small dicts with brightness, rgb, mode, and effect
                 "lights": [
                     {
                         "brightness": int(getattr(light0, "brightness", 0))
@@ -176,6 +176,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         "mode": int(getattr(light0, "mode", 1))
                         if light0 is not None
                         else None,
+                        "effect": int(getattr(light0, "effect", 0))
+                        if light0 is not None
+                        else None,
                     },
                     {
                         "brightness": int(getattr(light1, "brightness", 0))
@@ -185,6 +188,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         if light1 is not None
                         else None,
                         "mode": int(getattr(light1, "mode", 1))
+                        if light1 is not None
+                        else None,
+                        "effect": int(getattr(light1, "effect", 0))
                         if light1 is not None
                         else None,
                     },
