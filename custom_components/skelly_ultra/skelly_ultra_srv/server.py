@@ -66,11 +66,11 @@ class SkellyUltraServer:
                 )
 
             _LOGGER.info("Received connect_by_name request for: %s", device_name)
-            success = await self.bt_manager.connect_by_name(device_name, pin)
+            await self.bt_manager.connect_by_name(device_name, pin)
 
             return web.json_response(
                 {
-                    "success": success,
+                    "success": True,
                     "device_name": self.bt_manager.get_connected_device_name(),
                     "mac": self.bt_manager.get_connected_device_mac(),
                 }
@@ -80,8 +80,12 @@ class SkellyUltraServer:
             return web.json_response(
                 {"success": False, "error": "Invalid JSON"}, status=400
             )
+        except RuntimeError as exc:
+            # RuntimeError contains the specific error message from bluetooth_manager
+            _LOGGER.warning("Connect by name failed: %s", exc)
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
         except Exception as exc:
-            _LOGGER.exception("Error in connect_by_name")
+            _LOGGER.exception("Unexpected error in connect_by_name")
             return web.json_response({"success": False, "error": str(exc)}, status=500)
 
     async def handle_connect_by_mac(self, request: web.Request) -> web.Response:
@@ -104,11 +108,11 @@ class SkellyUltraServer:
                 )
 
             _LOGGER.info("Received connect_by_mac request for: %s", mac)
-            success = await self.bt_manager.connect_by_mac(mac, pin)
+            await self.bt_manager.connect_by_mac(mac, pin)
 
             return web.json_response(
                 {
-                    "success": success,
+                    "success": True,
                     "device_name": self.bt_manager.get_connected_device_name(),
                     "mac": self.bt_manager.get_connected_device_mac(),
                 }
@@ -118,8 +122,12 @@ class SkellyUltraServer:
             return web.json_response(
                 {"success": False, "error": "Invalid JSON"}, status=400
             )
+        except RuntimeError as exc:
+            # RuntimeError contains the specific error message from bluetooth_manager
+            _LOGGER.warning("Connect by MAC failed: %s", exc)
+            return web.json_response({"success": False, "error": str(exc)}, status=400)
         except Exception as exc:
-            _LOGGER.exception("Error in connect_by_mac")
+            _LOGGER.exception("Unexpected error in connect_by_mac")
             return web.json_response({"success": False, "error": str(exc)}, status=500)
 
     async def handle_get_name(self, request: web.Request) -> web.Response:

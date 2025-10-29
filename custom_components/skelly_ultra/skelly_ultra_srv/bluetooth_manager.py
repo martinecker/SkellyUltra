@@ -133,15 +133,19 @@ class BluetoothManager:
                         break
 
             if not mac_address:
-                _LOGGER.error("Could not find device with name: %s", device_name)
-                return False
+                error_msg = f"Could not find device with name: {device_name}"
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
 
             # Now connect using the MAC address
             return await self.connect_by_mac(mac_address, pin)
 
-        except Exception:
+        except RuntimeError:
+            # Re-raise RuntimeError with specific message
+            raise
+        except Exception as exc:
             _LOGGER.exception("Failed to connect by name")
-            return False
+            raise RuntimeError(f"Failed to connect by name: {exc}") from exc
 
     async def connect_by_mac(self, mac: str, pin: str) -> bool:
         """Connect and pair to a Bluetooth device by MAC address.
@@ -173,15 +177,9 @@ class BluetoothManager:
             if already_paired:
                 _LOGGER.info("Device %s is already paired, attempting connection", mac)
             else:
-                _LOGGER.warning(
-                    "Device %s is NOT paired. You must manually pair it first.", mac
-                )
-                _LOGGER.info(
-                    "To pair manually: bluetoothctl -> pair %s -> enter PIN: %s when prompted",
-                    mac,
-                    pin,
-                )
-                # Still try to connect in case it pairs automatically
+                error_msg = f"Device {mac} is NOT paired. You must manually pair it first (bluetoothctl -> pair {mac} -> enter PIN: {pin} when prompted)"
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
 
             # Build commands to connect
             commands = ["power on"]
@@ -218,15 +216,17 @@ class BluetoothManager:
                 # Check if device is now connected
                 connected = "Connected: yes" in info_stdout
 
-            if not connected and not already_paired:
-                _LOGGER.error(
-                    "Connection failed. Device must be paired manually first with PIN: %s",
-                    pin,
-                )
+            if not connected:
+                error_msg = f"Connection failed for device {mac} (device is paired but connection did not succeed)"
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
 
-        except Exception:
+        except RuntimeError:
+            # Re-raise RuntimeError with specific message
+            raise
+        except Exception as exc:
             _LOGGER.exception("Failed to connect by MAC")
-            return False
+            raise RuntimeError(f"Failed to connect by MAC: {exc}") from exc
         else:
             if connected:
                 # Try to get device name
@@ -243,8 +243,9 @@ class BluetoothManager:
                 )
                 return True
 
-            _LOGGER.warning("Connection attempt did not succeed for MAC: %s", mac)
-            return False
+            error_msg = f"Connection attempt did not succeed for MAC: {mac}"
+            _LOGGER.warning(error_msg)
+            raise RuntimeError(error_msg)
 
     async def disconnect(self, mac: str | None = None) -> bool:
         """Disconnect a device or all devices.

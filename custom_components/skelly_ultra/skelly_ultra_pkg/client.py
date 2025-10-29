@@ -521,7 +521,7 @@ class SkellyClient:
         return ev.capacity_kb, ev.file_count, ev.mode_str
 
     async def connect_live_mode(
-        self, timeout: float = 30.0, bt_pin: str = "8947"
+        self, timeout: float = 30.0, bt_pin: str = "1234"
     ) -> str | None:
         """Enable classic BT and connect via REST server.
 
@@ -534,7 +534,7 @@ class SkellyClient:
 
         Args:
             timeout: Total timeout for the entire process (default 30s).
-            bt_pin: PIN code for pairing (default "8947").
+            bt_pin: PIN code for pairing (default "1234").
 
         Returns:
             The address (MAC) of the connected classic device on success,
@@ -580,10 +580,16 @@ class SkellyClient:
                 ) as resp:
                     connect_data = await resp.json()
                 if not connect_data.get("success"):
+                    error_msg = (
+                        connect_data.get("error")
+                        or connect_data.get("message")
+                        or "Unknown error"
+                    )
                     logger.warning(
-                        "REST server failed to connect to %s: %s",
+                        "REST server failed to connect to %s: %s (response: %s)",
                         live_name,
-                        connect_data.get("error", "Unknown error"),
+                        error_msg,
+                        connect_data,
                     )
                     return None
 
@@ -644,10 +650,16 @@ class SkellyClient:
                             connect_data = await resp.json()
 
                         if not connect_data.get("success"):
+                            error_msg = (
+                                connect_data.get("error")
+                                or connect_data.get("message")
+                                or "Unknown error"
+                            )
                             logger.warning(
-                                "REST server retry failed to connect to %s: %s",
+                                "REST server retry failed to connect to %s: %s (response: %s)",
                                 live_name,
-                                connect_data.get("error", "Unknown error"),
+                                error_msg,
+                                connect_data,
                             )
                             return None
 
