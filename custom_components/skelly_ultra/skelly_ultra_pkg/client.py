@@ -461,7 +461,7 @@ class SkellyClient:
         Raises:
             TimeoutError: If not all events are received within the timeout period
         """
-        await self.send_command(commands.query_file_infos())
+        await self.send_command(commands.query_file_list())
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout

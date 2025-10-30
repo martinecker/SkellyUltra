@@ -17,6 +17,7 @@ import soundfile as sf
 
 from homeassistant.components import media_source
 from homeassistant.components.media_player import (
+    BrowseMedia,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
@@ -57,7 +58,10 @@ async def async_setup_entry(
         [
             SkellyLiveMediaPlayer(
                 coordinator, data.get("adapter"), entry.entry_id, address, device_name
-            )
+            ),
+            SkellyInternalFilesPlayer(
+                coordinator, data.get("adapter"), entry.entry_id, address, device_name
+            ),
         ]
     )
 
@@ -483,3 +487,311 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         """Handle live mode connection state change."""
         # Update entity state immediately when live mode connects/disconnects
         self.async_write_ha_state()
+
+
+class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
+    """Media player for playing files stored on the device's internal storage."""
+
+    _attr_has_entity_name = True
+    _attr_supported_features = (
+        MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.STOP
+        | MediaPlayerEntityFeature.NEXT_TRACK
+        | MediaPlayerEntityFeature.PREVIOUS_TRACK
+        | MediaPlayerEntityFeature.SELECT_SOURCE
+        | MediaPlayerEntityFeature.VOLUME_SET
+        | MediaPlayerEntityFeature.VOLUME_STEP
+        | MediaPlayerEntityFeature.BROWSE_MEDIA
+    )
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        adapter,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the internal files media player entity."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.adapter = adapter
+        self._entry_id = entry_id
+        self._attr_name = "Internal Files"
+        self._attr_unique_id = f"{entry_id}_internal_files"
+        self._attr_media_content_type = MediaType.MUSIC
+
+        # Playlist state
+        self._file_list: list[Any] = []
+        self._current_file_index: int | None = None
+        self._is_playing = False
+
+        # Device grouping
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added to hass, load the file list."""
+        await super().async_added_to_hass()
+        # Load file list on startup
+        await self._async_refresh_file_list()
+
+    async def _async_refresh_file_list(self) -> None:
+        """Refresh the list of files from the device."""
+        try:
+            self._file_list = await self.adapter.client.get_file_list(timeout=10.0)
+            _LOGGER.debug("Loaded %d files from device", len(self._file_list))
+        except TimeoutError:
+            _LOGGER.warning("Timeout loading file list from device")
+            self._file_list = []
+        except Exception:
+            _LOGGER.exception("Failed to load file list from device")
+            self._file_list = []
+
+    @property
+    def state(self) -> MediaPlayerState:
+        """Return the state of the media player."""
+        if self._is_playing:
+            return MediaPlayerState.PLAYING
+        return MediaPlayerState.IDLE
+
+    @property
+    def media_title(self) -> str | None:
+        """Return the title of current playing media."""
+        if self._current_file_index is None:
+            return None
+        # Find the file with this index
+        for file_info in self._file_list:
+            if file_info.file_index == self._current_file_index:
+                return file_info.name or f"File {self._current_file_index}"
+        return f"File {self._current_file_index}"
+
+    @property
+    def media_content_id(self) -> str | None:
+        """Return the content ID of current playing media."""
+        if self._current_file_index is None:
+            return None
+        return str(self._current_file_index)
+
+    @property
+    def source(self) -> str | None:
+        """Return the current input source (current file name)."""
+        return self.media_title
+
+    @property
+    def source_list(self) -> list[str]:
+        """Return the list of available input sources (file names)."""
+        return [
+            file_info.name or f"File {file_info.file_index}"
+            for file_info in self._file_list
+        ]
+
+    @property
+    def volume_level(self) -> float | None:
+        """Return the volume level (0.0 to 1.0) from coordinator data."""
+        data = getattr(self.coordinator, "data", None)
+        if data and (vol := data.get("volume")) is not None:
+            try:
+                return int(vol) / 100.0
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return entity specific state attributes.
+
+        Includes file metadata for use in automations.
+        """
+        attrs = {}
+
+        if self._current_file_index is not None:
+            # Find current file metadata
+            for file_info in self._file_list:
+                if file_info.file_index == self._current_file_index:
+                    attrs["file_index"] = file_info.file_index
+                    attrs["file_name"] = file_info.name
+                    attrs["file_length"] = file_info.length
+                    attrs["file_action"] = file_info.action
+                    attrs["file_eye_icon"] = file_info.eye_icon
+                    attrs["file_cluster"] = file_info.cluster
+                    break
+
+        # Include playlist information
+        attrs["total_files"] = len(self._file_list)
+        attrs["file_order"] = self.coordinator.data.get("file_order", [])
+
+        return attrs
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume level (0.0 to 1.0)."""
+        volume_percent = int(volume * 100)
+
+        try:
+            await self.coordinator.adapter.client.set_volume(volume_percent)
+        except (OSError, RuntimeError, ValueError):
+            return
+
+        # Update coordinator cache
+        new_data = dict(self.coordinator.data or {})
+        new_data["volume"] = volume_percent
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+
+        self.async_write_ha_state()
+
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
+
+    async def async_volume_up(self) -> None:
+        """Turn volume up by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = min(1.0, current + 0.05)
+        await self.async_set_volume_level(new_volume)
+
+    async def async_volume_down(self) -> None:
+        """Turn volume down by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = max(0.0, current - 0.05)
+        await self.async_set_volume_level(new_volume)
+
+    async def async_media_play(self) -> None:
+        """Play the current file or first file if none selected."""
+        if self._current_file_index is None and self._file_list:
+            # No file selected, play first file
+            self._current_file_index = self._file_list[0].file_index
+
+        if self._current_file_index is not None:
+            try:
+                await self.adapter.client.play_file(self._current_file_index)
+                self._is_playing = True
+                self.async_write_ha_state()
+            except Exception:
+                _LOGGER.exception("Failed to play file %d", self._current_file_index)
+
+    async def async_media_stop(self) -> None:
+        """Stop the currently playing file."""
+        if self._current_file_index is not None:
+            try:
+                await self.adapter.client.stop_file(self._current_file_index)
+            except Exception:
+                _LOGGER.exception("Failed to stop file %d", self._current_file_index)
+        self._is_playing = False
+        self.async_write_ha_state()
+
+    async def async_media_next_track(self) -> None:
+        """Play the next file in the list."""
+        if not self._file_list:
+            return
+
+        # Find current index in list
+        current_idx = 0
+        if self._current_file_index is not None:
+            for i, file_info in enumerate(self._file_list):
+                if file_info.file_index == self._current_file_index:
+                    current_idx = i
+                    break
+
+        # Move to next file (wrap around)
+        next_idx = (current_idx + 1) % len(self._file_list)
+        self._current_file_index = self._file_list[next_idx].file_index
+
+        if self._is_playing:
+            await self.async_media_play()
+        else:
+            self.async_write_ha_state()
+
+    async def async_media_previous_track(self) -> None:
+        """Play the previous file in the list."""
+        if not self._file_list:
+            return
+
+        # Find current index in list
+        current_idx = 0
+        if self._current_file_index is not None:
+            for i, file_info in enumerate(self._file_list):
+                if file_info.file_index == self._current_file_index:
+                    current_idx = i
+                    break
+
+        # Move to previous file (wrap around)
+        prev_idx = (current_idx - 1) % len(self._file_list)
+        self._current_file_index = self._file_list[prev_idx].file_index
+
+        if self._is_playing:
+            await self.async_media_play()
+        else:
+            self.async_write_ha_state()
+
+    async def async_select_source(self, source: str) -> None:
+        """Select a file to play by name."""
+        # Find file by name
+        for file_info in self._file_list:
+            file_name = file_info.name or f"File {file_info.file_index}"
+            if file_name == source:
+                self._current_file_index = file_info.file_index
+                self.async_write_ha_state()
+                return
+
+        _LOGGER.warning("File not found: %s", source)
+
+    async def async_browse_media(
+        self, media_content_type: str | None = None, media_content_id: str | None = None
+    ) -> Any:
+        """Return a browsable media library structure.
+
+        This allows the media browser to show the list of files.
+        """
+        # Refresh file list when browsing
+        await self._async_refresh_file_list()
+
+        # Build media library structure
+        children = []
+        for file_info in self._file_list:
+            file_name = file_info.name or f"File {file_info.file_index}"
+            children.append(
+                {
+                    "title": file_name,
+                    "media_content_type": MediaType.MUSIC,
+                    "media_content_id": str(file_info.file_index),
+                    "can_play": True,
+                    "can_expand": False,
+                }
+            )
+
+        return BrowseMedia(
+            title="Internal Files",
+            media_class="directory",
+            media_content_type="library",
+            media_content_id="library",
+            can_play=False,
+            can_expand=True,
+            children=[
+                BrowseMedia(
+                    title=child["title"],
+                    media_class="music",
+                    media_content_type=child["media_content_type"],
+                    media_content_id=child["media_content_id"],
+                    can_play=child["can_play"],
+                    can_expand=child["can_expand"],
+                )
+                for child in children
+            ],
+        )
+
+    async def async_play_media(
+        self, media_type: str, media_id: str, **kwargs: Any
+    ) -> None:
+        """Play a file by its index."""
+        try:
+            file_index = int(media_id)
+            self._current_file_index = file_index
+            await self.async_media_play()
+        except ValueError:
+            _LOGGER.error("Invalid file index: %s", media_id)

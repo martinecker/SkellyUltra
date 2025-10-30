@@ -13,9 +13,15 @@ Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween anim
 - **Number entities**: Volume control, effect speed (for Torso and Head)
 - **Select entities**: Eye icon selection, effect mode (Static/Strobe/Pulse for Torso and Head)
 - **Image entities**: Eye icon preview
-- **Media Player entity**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
-  - Supports TTS (Text-to-Speech) services
-  - Supports multiple audio formats (WAV, MP3, FLAC, OGG, etc.)
+- **Media Player entities**:
+  - **Live Mode Speaker**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
+    - Supports TTS (Text-to-Speech) services
+    - Supports multiple audio formats (WAV, MP3, FLAC, OGG, etc.)
+  - **Internal Files**: Control playback of audio files stored on the device
+    - Browse and play files from device storage
+    - Next/previous track controls
+    - File metadata available as entity attributes
+    - Select files by name
 - **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
 
 ## Prerequisites
@@ -134,11 +140,19 @@ Set up and start the Skelly Ultra REST server on your Linux host. See [skelly_ul
 
 The integration creates the following entities:
 
-- **Media Player** (`media_player.skelly_ultra_live_mode_speaker`):
+- **Media Player - Live Mode Speaker** (`media_player.skelly_ultra_live_mode_speaker`):
   - Control audio playback when Live Mode is enabled
   - Supports volume control, play/pause, stop
   - Works with TTS (Text-to-Speech) services
   - Supports multiple audio formats (MP3, WAV, FLAC, OGG, M4A, etc.)
+
+- **Media Player - Internal Files** (`media_player.skelly_ultra_internal_files`):
+  - Play audio files stored on the device's internal storage
+  - Browse files via media browser UI
+  - Next/previous track navigation
+  - Select files by name
+  - File metadata exposed as entity attributes (file_index, file_name, file_length, file_action, file_eye_icon)
+  - Shared volume control with device
 
 - **Sensors**: Monitor device status (mode, volume, battery, connection)
 - **Switches**: Toggle Live Mode and other features
@@ -255,7 +269,93 @@ automation:
 - Pairing must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
 
-### Playing Files Stored on Device
+### Using the Internal Files Media Player
+
+The **Internal Files** media player entity provides a full playlist interface for audio files stored on the device's internal storage.
+
+#### Features
+
+- **Media Browser**: Browse and select files through Home Assistant's media browser UI
+- **Playback Controls**: Play, stop, next track, previous track
+- **Source Selection**: Select files by name from a dropdown list
+- **Volume Control**: Shared volume control with the device (same as other media players and volume number entity)
+- **File Metadata**: Access detailed file information via entity attributes
+
+#### Controlling Playback
+
+```yaml
+# Play a specific file by selecting it as a source
+service: media_player.select_source
+target:
+  entity_id: media_player.skelly_ultra_internal_files
+data:
+  source: "Spooky Laugh.mp3"
+
+# Play the selected file
+service: media_player.media_play
+target:
+  entity_id: media_player.skelly_ultra_internal_files
+
+# Skip to next file
+service: media_player.media_next_track
+target:
+  entity_id: media_player.skelly_ultra_internal_files
+
+# Stop playback
+service: media_player.media_stop
+target:
+  entity_id: media_player.skelly_ultra_internal_files
+```
+
+#### Using File Metadata in Automations
+
+File metadata is available as entity attributes and can be used in automation conditions and templates:
+
+```yaml
+automation:
+  - alias: "React to specific file playing"
+    trigger:
+      - platform: state
+        entity_id: media_player.skelly_ultra_internal_files
+        to: "playing"
+    condition:
+      - condition: template
+        value_template: "{{ state_attr('media_player.skelly_ultra_internal_files', 'file_name') == 'Spooky Laugh.mp3' }}"
+    action:
+      - service: light.turn_on
+        target:
+          entity_id: light.front_porch
+        data:
+          effect: "flash"
+
+  - alias: "Log file metadata when playing"
+    trigger:
+      - platform: state
+        entity_id: media_player.skelly_ultra_internal_files
+        to: "playing"
+    action:
+      - service: system_log.write
+        data:
+          message: >
+            Playing file {{ state_attr('media_player.skelly_ultra_internal_files', 'file_name') }}
+            (index: {{ state_attr('media_player.skelly_ultra_internal_files', 'file_index') }},
+            length: {{ state_attr('media_player.skelly_ultra_internal_files', 'file_length') }}ms)
+```
+
+#### Available Metadata Attributes
+
+The media player exposes the following attributes when a file is selected/playing:
+
+- `file_index`: The 1-based index of the file
+- `file_name`: The filename
+- `file_length`: Duration in milliseconds
+- `file_action`: Associated action/movement setting
+- `file_eye_icon`: Associated eye icon
+- `file_cluster`: File cluster information
+- `total_files`: Total number of files on device
+- `file_order`: Playback order list (same as File Order sensor)
+
+### Playing Files Stored on Device (via Services)
 
 The Skelly Ultra can store audio files on its internal storage. You can play or stop these files using the integration's services.
 
