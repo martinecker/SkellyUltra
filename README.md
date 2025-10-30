@@ -32,7 +32,7 @@ The REST server handles:
 
 **Important**: The REST server requires `pipewire`, `bluetoothctl`, and related audio tools on the Linux host where it runs.
 
-For installation and setup of the REST server, see the [REST Server Documentation](skelly_ultra_srv/README.md).
+For installation and setup of the REST server, see the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md).
 
 ### Live Mode Bluetooth Pairing
 
@@ -87,7 +87,7 @@ Or use HACS (if published) or manually download and extract to `<config>/custom_
 
 ### Step 2: Set Up the REST Server
 
-Set up and start the Skelly Ultra REST server on your Linux host. See [skelly_ultra_srv/README.md](skelly_ultra_srv/README.md) for detailed instructions.
+Set up and start the Skelly Ultra REST server on your Linux host. See [skelly_ultra_srv/README.md](custom_components/skelly_ultra/skelly_ultra_srv/README.md) for detailed instructions.
 
 ### Step 3: Add the Integration in Home Assistant
 
