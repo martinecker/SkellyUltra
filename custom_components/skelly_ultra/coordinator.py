@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from datetime import timedelta
 from typing import Any
 
@@ -40,42 +41,84 @@ class SkellyCoordinator(DataUpdateCoordinator):
         )
         self.adapter = adapter
         self.action_lock = asyncio.Lock()
+        self._last_refresh_request = 0.0
         _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    async def async_request_refresh(self) -> None:
+        """Request a refresh with debouncing and delay.
+
+        Waits 2 seconds before actually refreshing to allow multiple rapid
+        changes to be sent to the device, then polls the final state.
+        """
+        now = time.monotonic()
+        time_since_last = now - self._last_refresh_request
+
+        # Debounce: ignore requests within 3 seconds of last request
+        if time_since_last < 3.0:
+            _LOGGER.debug(
+                "Ignoring refresh request - last request was %.3fs ago (debounce: 3.0s)",
+                time_since_last,
+            )
+            return
+
+        self._last_refresh_request = now
+        _LOGGER.debug("Delaying coordinator refresh by 2s to allow changes to settle")
+
+        # Wait 2 seconds to give the device time to process the change
+        # and allow any rapid consecutive changes to complete
+        await asyncio.sleep(2.0)
+
+        _LOGGER.debug("Requesting coordinator refresh after delay")
+        await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
         _LOGGER.debug("Coordinator polling Skelly device for updates")
+
         try:
-            # Query volume and live name concurrently with a combined timeout
-            # to avoid per-call cancellation interfering when notifications
-            # arrive slightly late.
+            # Query device state with overall timeout.
+            # Clear event queue first to ensure we only get fresh responses.
+            self.adapter.client.drain_event_queue()
+
+            # Send queries first, then wait for all responses to avoid race
+            # conditions where responses arrive before tasks start waiting.
             timeout_seconds = 5.0
-            async with asyncio.timeout(timeout_seconds):
-                vol_task = asyncio.create_task(
-                    self.adapter.client.get_volume(timeout=timeout_seconds)
+            try:
+                async with asyncio.timeout(timeout_seconds):
+                    # Send all queries first to trigger device responses
+                    await self.adapter.client.query_volume()
+                    await self.adapter.client.query_live_name()
+                    await self.adapter.client.query_capacity()
+                    await self.adapter.client.query_live_mode()
+
+                    # Now wait for all responses concurrently
+                    vol_task = asyncio.create_task(
+                        self.adapter.client.get_volume(timeout=timeout_seconds)
+                    )
+                    live_name_task = asyncio.create_task(
+                        self.adapter.client.get_live_name(timeout=timeout_seconds)
+                    )
+                    cap_task = asyncio.create_task(
+                        self.adapter.client.get_capacity(timeout=timeout_seconds)
+                    )
+                    live_mode_task = asyncio.create_task(
+                        self.adapter.client.get_live_mode(timeout=timeout_seconds)
+                    )
+                    vol, live_name, cap, live_mode = await asyncio.gather(
+                        vol_task, live_name_task, cap_task, live_mode_task
+                    )
+            except TimeoutError as ex:
+                _LOGGER.warning(
+                    "Coordinator update timed out after %s seconds", timeout_seconds
                 )
-                live_name_task = asyncio.create_task(
-                    self.adapter.client.get_live_name(timeout=timeout_seconds)
-                )
-                # capacity may return a dict or tuple with capacity and file_count
-                cap_task = asyncio.create_task(
-                    self.adapter.client.get_capacity(timeout=timeout_seconds)
-                )
-                # Request the live mode once — it contains both the eye icon
-                # and per-channel light info in a single parsed event. This
-                # avoids multiple concurrent query_live_mode calls that can
-                # consume the same notification and confuse the event
-                # matching logic.
-                live_mode_task = asyncio.create_task(
-                    self.adapter.client.get_live_mode(timeout=timeout_seconds)
-                )
-                vol, live_name, cap, live_mode = await asyncio.gather(
-                    vol_task, live_name_task, cap_task, live_mode_task
-                )
-                # Extract eye, action, and light info from the parsed live_mode event
-                eye = getattr(live_mode, "eye_icon", None)
-                action = getattr(live_mode, "action", None)
-                # live_mode.lights is a list of LightInfo objects
-                light0 = None
+                raise UpdateFailed(
+                    f"Device polling timed out after {timeout_seconds}s"
+                ) from ex
+
+            # Extract eye, action, and light info from the parsed live_mode event
+            eye = getattr(live_mode, "eye_icon", None)
+            action = getattr(live_mode, "action", None)
+            # live_mode.lights is a list of LightInfo objects
+            light0 = None
             light1 = None
             try:
                 lights_list = getattr(live_mode, "lights", []) or []
