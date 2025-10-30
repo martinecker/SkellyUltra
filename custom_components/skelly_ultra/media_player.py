@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 from functools import partial
 import io
@@ -539,7 +540,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         await super().async_added_to_hass()
         # Load file list on startup
         await self._async_refresh_file_list()
-        # Start monitoring PlayPauseEvent notifications from device
+        # Start monitoring PlaybackEvent notifications from device
         self._monitor_task = asyncio.create_task(self._monitor_play_pause_events())
 
     async def async_will_remove_from_hass(self) -> None:
@@ -563,16 +564,16 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
             self._file_list = []
 
     async def _monitor_play_pause_events(self) -> None:
-        """Monitor the client's event queue for PlayPauseEvent notifications.
+        """Monitor the client's event queue for PlaybackEvent notifications.
 
         This background task watches for device-initiated play/pause state changes
         and updates the media player state accordingly.
         """
-        _LOGGER.debug("Started monitoring PlayPauseEvent notifications")
+        _LOGGER.debug("Started monitoring PlaybackEvent notifications")
 
         try:
             while True:
-                # Check the event queue for PlayPauseEvent
+                # Check the event queue for PlaybackEvent
                 # We check without blocking to avoid interfering with other queue consumers
                 events_to_requeue = []
 
@@ -582,9 +583,9 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
                         try:
                             event = self.adapter.client.events.get_nowait()
 
-                            if isinstance(event, parser.PlayPauseEvent):
+                            if isinstance(event, parser.PlaybackEvent):
                                 _LOGGER.debug(
-                                    "Received PlayPauseEvent: file_index=%d, playing=%s, duration=%d",
+                                    "Received PlaybackEvent: file_index=%d, playing=%s, duration=%d",
                                     event.file_index,
                                     event.playing,
                                     event.duration,
@@ -597,13 +598,13 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
                                 # Update Home Assistant immediately
                                 self.async_write_ha_state()
                             else:
-                                # Not a PlayPauseEvent, re-queue it for other consumers
+                                # Not a PlaybackEvent, re-queue it for other consumers
                                 events_to_requeue.append(event)
 
                         except asyncio.QueueEmpty:
                             break
 
-                    # Re-queue non-PlayPauseEvent events
+                    # Re-queue non-PlaybackEvent events
                     for event in events_to_requeue:
                         try:
                             self.adapter.client.events.put_nowait(event)
@@ -619,10 +620,10 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
                 await asyncio.sleep(0.1)
 
         except asyncio.CancelledError:
-            _LOGGER.debug("PlayPauseEvent monitoring task cancelled")
+            _LOGGER.debug("PlaybackEvent monitoring task cancelled")
             raise
         except Exception:
-            _LOGGER.exception("Unexpected error in PlayPauseEvent monitoring")
+            _LOGGER.exception("Unexpected error in PlaybackEvent monitoring")
 
     @property
     def state(self) -> MediaPlayerState:
@@ -630,6 +631,52 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         if self._is_playing:
             return MediaPlayerState.PLAYING
         return MediaPlayerState.IDLE
+
+    @property
+    def entity_picture(self) -> str | None:
+        """Return entity picture URL for the current file's eye icon.
+
+        Returns a URL to an image entity that displays the current file's eye icon.
+        Since the eye icon changes per file, we construct a URL that points to a
+        dynamically-served image based on the file's eye_icon value.
+
+        Note: The eye_icon value is also available in the entity's attributes as
+        'file_eye_icon' for use in automations and templates.
+        """
+        if self._current_file_index is None:
+            return None
+
+        # Find the current file's eye_icon value
+        current_eye_icon = None
+        for file_info in self._file_list:
+            if file_info.file_index == self._current_file_index:
+                current_eye_icon = file_info.eye_icon
+                break
+
+        if current_eye_icon is None or not isinstance(current_eye_icon, int):
+            return None
+
+        # Validate eye_icon is in valid range (1..18)
+        if current_eye_icon < 1 or current_eye_icon > 18:
+            return None
+
+        # Serve the image as a base64 data URI
+        # This allows the icon to be displayed without requiring www folder access
+        images_path = Path(__file__).parent / "images"
+        img_path = images_path / f"eye_icon_{current_eye_icon}.png"
+
+        if not img_path.is_file():
+            _LOGGER.debug("Eye icon image not found: %s", img_path)
+            return None
+
+        try:
+            img_data = img_path.read_bytes()
+            img_base64 = base64.b64encode(img_data).decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            _LOGGER.exception("Failed to encode eye icon image: %s", img_path)
+            return None
+        else:
+            return f"data:image/png;base64,{img_base64}"
 
     @property
     def media_title(self) -> str | None:

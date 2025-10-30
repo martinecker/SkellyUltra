@@ -73,7 +73,7 @@ class ResumeWriteEvent:
 
 
 @dataclass
-class PlayPauseEvent:
+class PlaybackEvent:
     file_index: int
     playing: bool
     duration: int
@@ -146,7 +146,7 @@ def parse_notification(
         ChunkDroppedEvent,
         TransferEndEvent,
         ResumeWriteEvent,
-        PlayPauseEvent,
+        PlaybackEvent,
         DeleteFileEvent,
         FormatEvent,
         CapacityEvent,
@@ -250,7 +250,7 @@ def parse_notification(
         file_index = int(hexstr[4:8], 16)
         playing = int(hexstr[8:10], 16)
         duration = int(hexstr[10:14], 16)
-        return PlayPauseEvent(
+        return PlaybackEvent(
             file_index=file_index, playing=bool(playing), duration=duration
         )
 
