@@ -1,6 +1,6 @@
 # Skelly Ultra Integration
 
-Home Assistant integration for the Skelly Ultra Halloween animatronic BLE device.
+Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
 
 ## Features
 
@@ -16,7 +16,6 @@ Home Assistant integration for the Skelly Ultra Halloween animatronic BLE device
 - **Media Player entity**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
   - Supports TTS (Text-to-Speech) services
   - Supports multiple audio formats (WAV, MP3, FLAC, OGG, etc.)
-  - Automatic audio resampling to 8kHz mono for optimal compatibility
 
 ## Prerequisites
 
@@ -83,7 +82,7 @@ Copy the integration files to your Home Assistant configuration directory:
 cp -r skelly_ultra <config_directory>/custom_components/
 ```
 
-Or use HACS (if published) or manually download and extract to `<config>/custom_components/skelly_ultra/`.
+Or use HACS and add https://github.com/martinecker/SkellyUltra as a custom repository, or manually download and extract to `<config>/custom_components/skelly_ultra/`.
 
 ### Step 2: Set Up the REST Server
 
@@ -355,4 +354,5 @@ automation:
 
 ## License
 
-This integration is provided as-is for use with Skelly Ultra devices.
+This integration is provided as-is for use with Ultra Skelly devices. Use it at your own risk. It might brick your Skelly.
+

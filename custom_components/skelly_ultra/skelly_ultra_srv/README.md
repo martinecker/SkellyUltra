@@ -1,50 +1,97 @@
 # Skelly Ultra REST Server
 
-A Python REST API server using aiohttp for managing Bluetooth Classic device connections and audio playback for the Skelly Ultra Halloween animatronic.
+A Python REST API server using aiohttp for managing Bluetooth Classic device connections and audio playback for the Home Depot Ultra Skelly Halloween animatronic.
 
-## Purpose
+## Overview
 
 This server is designed to work around limitations of managing Bluetooth Classic audio devices from within Home Assistant containers. It provides a REST API interface to:
 - Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
 - Play audio files through the connected device
-- Manage device connections
+- Manage multiple device connections simultaneously
 
 ## Requirements
 
-- Python 3.11+
-- aiohttp
-- bluetoothctl (part of bluez)
-- pw-play (part of PipeWire)
+- **Python 3.11+**
+- **aiohttp** (Python web framework)
+- **bluetoothctl** (part of bluez - Bluetooth management)
+- **pw-play** (part of PipeWire - audio playback)
 
 ## Installation
 
-```bash
-pip install aiohttp
-```
+### 1. Install System Dependencies
 
-Ensure system dependencies are installed:
 ```bash
 # On Debian/Ubuntu
-sudo apt-get install bluez pipewire-bin
+sudo apt-get update
+sudo apt-get install bluez pipewire-bin python3-pip
 
 # On Fedora
-sudo dnf install bluez pipewire-utils
+sudo dnf install bluez pipewire-utils python3-pip
+```
+
+### 2. Install Python Dependencies
+
+```bash
+cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
+pip3 install -r requirements.txt
 ```
 
 ## Running the Server
 
-### As a standalone script:
+### Option 1: Using the provided run script (easiest)
+
 ```bash
-python -m skelly_ultra_srv.server
+cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
+python3 run_server.py
 ```
 
-### Programmatically:
+For debug logging:
+```bash
+python3 run_server.py --verbose
+```
+
+### Option 2: Using the server module directly
+
+```bash
+cd /path/to/custom_components/skelly_ultra
+python3 -m skelly_ultra_srv.server
+```
+
+### Option 3: Programmatically
+
 ```python
 from skelly_ultra_srv.server import SkellyUltraServer
 
 server = SkellyUltraServer(host="0.0.0.0", port=8765)
 server.run()
 ```
+
+### Option 4: As a systemd service (recommended for production)
+
+A systemd service file is provided: `skelly-ultra-server.service`
+
+1. Edit the service file to set your username and paths:
+   ```bash
+   nano skelly-ultra-server.service
+   ```
+
+2. Copy to systemd directory:
+   ```bash
+   sudo cp skelly-ultra-server.service /etc/systemd/system/
+   ```
+
+3. Enable and start:
+   ```bash
+   sudo systemctl daemon-reload
+   sudo systemctl enable skelly-ultra-server
+   sudo systemctl start skelly-ultra-server
+   sudo systemctl status skelly-ultra-server
+   ```
+
+4. View logs:
+   ```bash
+   sudo journalctl -u skelly-ultra-server -f
+   ```
 
 ## Important: Bluetooth Pairing
 
@@ -251,19 +298,29 @@ Disconnect Bluetooth device(s).
 ```
 
 ### GET /status
-Get comprehensive status information.
+Get comprehensive status information including all connected devices and their playback sessions.
 
 **Response:**
 ```json
 {
     "bluetooth": {
         "connected": true,
-        "device_name": "Skelly Speaker",
-        "mac": "AA:BB:CC:DD:EE:FF"
+        "devices": [
+            {
+                "name": "Skelly Speaker",
+                "mac": "AA:BB:CC:DD:EE:FF",
+                "connected": true
+            }
+        ]
     },
     "audio": {
         "is_playing": true,
-        "current_file": "/path/to/audio.wav"
+        "sessions": {
+            "AA:BB:CC:DD:EE:FF": {
+                "file": "/tmp/skelly_audio_xyz/audio.wav",
+                "playing": true
+            }
+        }
     }
 }
 ```
@@ -344,48 +401,66 @@ curl -X POST http://localhost:8765/disconnect \
 curl -X POST http://localhost:8765/disconnect
 ```
 
+
+
+## Quick Testing
+
+### Basic connectivity test:
+
+```bash
+curl http://localhost:8765/health
+# Expected: {"status": "ok"}
+```
+
+### Check status:
+
+```bash
+curl http://localhost:8765/status
+```
+
+## Troubleshooting
+
+### Server won't start
+- Check if port 8765 is already in use: `sudo netstat -tulpn | grep 8765`
+- Check if bluetoothctl is available: `which bluetoothctl`
+- Check if pw-play is available: `which pw-play`
+
+### Can't connect to Bluetooth device
+- Make sure Bluetooth is powered on: `bluetoothctl power on`
+- Try scanning manually first: `bluetoothctl scan on`
+- Check if device is already paired: `bluetoothctl devices`
+- If device is already paired, try removing it first: `bluetoothctl remove AA:BB:CC:DD:EE:FF`
+
+### Audio playback not working
+- Check PipeWire is running: `systemctl --user status pipewire`
+- List available audio devices: `pw-cli list-objects | grep node.name`
+- Test pw-play directly: `pw-play /path/to/test.wav`
+
+### Permission issues
+- Make sure your user is in the `bluetooth` group: `sudo usermod -aG bluetooth $USER`
+- Log out and back in for group changes to take effect
+
+## Default Configuration
+
+- **Host**: `0.0.0.0` (all interfaces)
+- **Port**: `8765`
+- **Default PIN**: `0000` (if not specified)
+- **Scan timeout**: 5 seconds
+- **Connection timeout**: 30 seconds
+
+These can be modified in the `SkellyUltraServer` class initialization.
+
 ## Architecture
 
 The server consists of three main components:
 
 1. **server.py**: Main REST API server using aiohttp
 2. **bluetooth_manager.py**: Manages Bluetooth connections using bluetoothctl
-3. **audio_player.py**: Manages audio playback using pw-play
-
-## Running as a Service
-
-You can run this as a systemd service for automatic startup. Create `/etc/systemd/system/skelly-ultra-server.service`:
-
-```ini
-[Unit]
-Description=Skelly Ultra REST Server
-After=network.target bluetooth.target
-
-[Service]
-Type=simple
-User=your-user
-WorkingDirectory=/path/to/custom_components/skelly_ultra
-ExecStart=/usr/bin/python3 -m skelly_ultra_srv.server
-Restart=always
-RestartSec=10
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Then enable and start:
-```bash
-sudo systemctl enable skelly-ultra-server
-sudo systemctl start skelly-ultra-server
-```
-
-## Logging
-
-The server logs to stdout with INFO level by default. You can adjust the logging level by modifying the `main()` function in `server.py`.
+3. **audio_player.py**: Manages audio playback using pw-play (PipeWire)
 
 ## Notes
 
 - The server uses bluetoothctl in interactive mode to handle pairing and connections
-- Audio playback uses PipeWire's pw-play command
+- Audio playback uses PipeWire's pw-play command for streaming
 - The server is designed to run outside of the Home Assistant container to have direct access to the host's Bluetooth stack
-- Only .wav files are supported for audio playback
+- Multiple devices can be connected and controlled simultaneously
