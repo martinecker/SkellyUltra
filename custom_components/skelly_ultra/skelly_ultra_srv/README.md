@@ -444,7 +444,7 @@ curl http://localhost:8765/status
 
 - **Host**: `0.0.0.0` (all interfaces)
 - **Port**: `8765`
-- **Default PIN**: `0000` (if not specified)
+- **Default PIN**: `1234` (if not specified)
 - **Scan timeout**: 5 seconds
 - **Connection timeout**: 30 seconds
 

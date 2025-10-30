@@ -60,7 +60,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 cap_task = asyncio.create_task(
                     self.adapter.client.get_capacity(timeout=timeout_seconds)
                 )
-                # Request the live mode once â€” it contains both the eye icon
+                # Request the live mode once — it contains both the eye icon
                 # and per-channel light info in a single parsed event. This
                 # avoids multiple concurrent query_live_mode calls that can
                 # consume the same notification and confuse the event
@@ -76,16 +76,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 action = getattr(live_mode, "action", None)
                 # live_mode.lights is a list of LightInfo objects
                 light0 = None
+            light1 = None
+            try:
+                lights_list = getattr(live_mode, "lights", []) or []
+                if len(lights_list) > 0:
+                    light0 = lights_list[0]
+                if len(lights_list) > 1:
+                    light1 = lights_list[1]
+            except Exception:
+                light0 = None
                 light1 = None
-                try:
-                    lights_list = getattr(live_mode, "lights", []) or []
-                    if len(lights_list) > 0:
-                        light0 = lights_list[0]
-                    if len(lights_list) > 1:
-                        light1 = lights_list[1]
-                except Exception:
-                    light0 = None
-                    light1 = None
 
             # Check REST server status if we think live mode is connected
             expected_mac = self.adapter.client.live_mode_client_address
@@ -139,25 +139,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     # Clean up our state since we can't verify the connection
                     await self.adapter.disconnect_live_mode()
 
-            # Normalize capacity result. The client may return an object that
-            # contains capacity in kilobytes and file count; adapt here to the
-            # expected output: capacity_kb and file_count
-            capacity_kb = None
-            file_count = None
-            if cap is None:
-                capacity_kb = None
-                file_count = None
-            elif isinstance(cap, dict):
-                capacity_kb = cap.get("capacity_kb") or cap.get("capacity")
-                file_count = cap.get("file_count") or cap.get("files")
-            elif isinstance(cap, (list, tuple)) and len(cap) >= 2:
-                capacity_kb, file_count = cap[0], cap[1]
-            else:
-                # Fallback: if single numeric returned, treat as capacity
-                try:
-                    capacity_kb = int(cap)
-                except Exception:
-                    capacity_kb = None
+            # Extract capacity_kb and file_count from CapacityEvent
+            capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
+            file_count = getattr(cap, "file_count", None) if cap else None
 
             data = {
                 "volume": vol,

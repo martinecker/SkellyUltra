@@ -62,11 +62,11 @@ def query_version() -> bytes:
     return build_cmd("EE")
 
 
-def query_file_info() -> bytes:
+def query_file_list() -> bytes:
     return build_cmd("D0")
 
 
-def query_song_order() -> bytes:
+def query_file_order() -> bytes:
     return build_cmd("D1")
 
 
@@ -96,6 +96,9 @@ def set_music_mode(mode: int) -> bytes:
 
 
 # Light Controls. If channel == -1 all lights are affected. Otherwise channel is 0-5, but Skelly Ultra only uses 0 and 1.
+
+
+# Sets the light mode aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
 def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") -> bytes:
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
     name_utf16 = to_utf16le_hex(name)
@@ -173,7 +176,22 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
     return build_cmd("F9", payload)
 
 
-# File transfers and other builders (kept minimal for now)
+# Action here is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
+# If a bit is set movement for that body part is enabled, otherwise disabled.
+# Can send a value of 255 to enable all (head+arm+torso) which in the phone app has a unique icon.
+def set_action(action: int, cluster: int, name: str) -> bytes:
+    name_utf16 = to_utf16le_hex(name)
+    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
+    payload = (
+        int_to_hex(action, 1)
+        + "00"  # 1-byte padding
+        + int_to_hex(cluster, 4)
+        + (name_len + "5C55" + name_utf16 if name else name_len)
+    )
+    return build_cmd("CA", payload)
+
+
+# File transfer and playback
 def start_send_data(size: int, max_pack: int, filename: str) -> bytes:
     return build_cmd(
         "C0",
@@ -194,3 +212,19 @@ def end_send_data() -> bytes:
 
 def confirm_file(filename: str) -> bytes:
     return build_cmd("C3", "5C55" + to_utf16le_hex(filename))
+
+
+def cancel_send() -> bytes:
+    return build_cmd("C4")
+
+
+def play_file(file_index: int) -> bytes:
+    return build_cmd("C6", int_to_hex(file_index, 2) + "01")
+
+
+def stop_file(file_index: int) -> bytes:
+    return build_cmd("C6", int_to_hex(file_index, 2) + "00")
+
+
+def delete_file(file_index: int, cluster: int) -> bytes:
+        return build_cmd("C7", int_to_hex(file_index, 2) + int_to_hex(cluster, 4))

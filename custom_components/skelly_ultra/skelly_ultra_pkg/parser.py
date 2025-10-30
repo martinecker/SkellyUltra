@@ -74,7 +74,7 @@ class ResumeWriteEvent:
 
 @dataclass
 class PlayPauseEvent:
-    serial: int
+    file_index: int
     playing: bool
     duration: int
 
@@ -97,8 +97,8 @@ class CapacityEvent:
 
 
 @dataclass
-class MusicOrderEvent:
-    orders: List[int]
+class FileOrderEvent:
+    file_indices: List[int]
 
 
 @dataclass
@@ -107,11 +107,16 @@ class FileInfoEvent:
     cluster: int
     total_files: int
     length: int
-    attr: int
+    action: int
     eye_icon: int
     db_pos: int
     name: str
     lights: List[LightInfo]
+
+
+@dataclass
+class EnableClassicBTEvent:
+    status: int
 
 
 def get_utf16le_from_bytes(b: bytes) -> str:
@@ -145,7 +150,7 @@ def parse_notification(
         DeleteFileEvent,
         FormatEvent,
         CapacityEvent,
-        MusicOrderEvent,
+        FileOrderEvent,
         FileInfoEvent,
     ]
 ]:
@@ -207,6 +212,10 @@ def parse_notification(
             name=name,
         )
 
+    if hexstr.startswith("BBFD"):
+        status = int(hexstr[4:6])
+        return EnableClassicBTEvent(status=status)
+
     if hexstr.startswith("BBCC"):
         mac = hexstr[4:16]
         return WifiMacEvent(mac=mac)
@@ -238,10 +247,12 @@ def parse_notification(
         return ResumeWriteEvent(written=written)
 
     if hexstr.startswith("BBC6"):
-        serial = int(hexstr[4:8], 16)
+        file_index = int(hexstr[4:8], 16)
         playing = int(hexstr[8:10], 16)
         duration = int(hexstr[10:14], 16)
-        return PlayPauseEvent(serial=serial, playing=bool(playing), duration=duration)
+        return PlayPauseEvent(
+            file_index=file_index, playing=bool(playing), duration=duration
+        )
 
     if hexstr.startswith("BBC7"):
         success = int(hexstr[4:6], 16)
@@ -265,15 +276,15 @@ def parse_notification(
         data_str = hexstr[6:]
         if len(data_str) < count * 4:
             count = len(data_str) // 4
-        orders = [int(data_str[i * 4 : i * 4 + 4], 16) for i in range(count)]
-        return MusicOrderEvent(orders=orders)
+        file_indices = [int(data_str[i * 4 : i * 4 + 4], 16) for i in range(count)]
+        return FileOrderEvent(file_indices=file_indices)
 
     if hexstr.startswith("BBD0"):
         file_index = int(hexstr[4:8], 16)
         cluster = int(hexstr[8:16], 16)
         total_files = int(hexstr[16:20], 16)
         length = int(hexstr[20:24], 16)
-        attr = int(hexstr[24:26], 16)
+        action = int(hexstr[24:26], 16)
         light_data = hexstr[26:110]
         lights: List[LightInfo] = []
         for i in range(6):
@@ -307,7 +318,7 @@ def parse_notification(
             cluster=cluster,
             total_files=total_files,
             length=length,
-            attr=attr,
+            action=action,
             eye_icon=eye_icon,
             db_pos=db_pos,
             name=name,

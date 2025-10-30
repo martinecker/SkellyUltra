@@ -141,6 +141,22 @@ class SkellyClient:
             # swallow notify registration errors; higher-level code can call again
             logger.exception("Failed to start notifications")
 
+    def drain_event_queue(self) -> None:
+        """Remove all pending events from the queue.
+
+        This should be called before sending new queries to ensure
+        only fresh responses are consumed.
+        """
+        drained_count = 0
+        while not self.events.empty():
+            try:
+                self.events.get_nowait()
+                drained_count += 1
+            except asyncio.QueueEmpty:
+                break
+        if drained_count > 0:
+            logger.debug("Drained %d old events from queue", drained_count)
+
     async def disconnect(self) -> None:
         if self._client:
             try:
@@ -327,8 +343,8 @@ class SkellyClient:
     async def query_live_mode(self) -> None:
         await self.send_command(commands.query_live_mode())
 
-    async def query_song_order(self) -> None:
-        await self.send_command(commands.query_song_order())
+    async def query_file_order(self) -> None:
+        await self.send_command(commands.query_file_order())
 
     async def query_volume(self) -> None:
         await self.send_command(commands.query_volume())
@@ -341,6 +357,9 @@ class SkellyClient:
 
     async def query_capacity(self) -> None:
         await self.send_command(commands.query_capacity())
+
+    async def query_file_infos(self) -> None:
+        await self.send_command(commands.query_file_infos())
 
     async def set_volume(self, vol: int) -> None:
         await self.send_command(commands.set_volume(vol))
@@ -383,6 +402,15 @@ class SkellyClient:
     ) -> None:
         await self.send_command(commands.set_light_speed(channel, speed, cluster, name))
 
+    async def set_action(self, action: int, cluster: int = 0, name: str = "") -> None:
+        """Set movement action bitfield.
+
+        Action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
+        If a bit is set, movement for that body part is enabled, otherwise disabled.
+        Value of 255 enables all (head+arm+torso).
+        """
+        await self.send_command(commands.set_action(action, cluster, name))
+
     async def select_rgb_channel(self, channel: int) -> None:
         await self.send_command(commands.select_rgb_channel(channel))
 
@@ -405,14 +433,82 @@ class SkellyClient:
     async def cancel_send(self) -> None:
         await self.send_command(commands.cancel_send())
 
-    async def play_or_pause_file(self, serial: int, action: int) -> None:
-        await self.send_command(commands.play_or_pause_file(serial, action))
-
-    async def delete_file(self, serial: int, cluster: int) -> None:
-        await self.send_command(commands.delete_file(serial, cluster))
+    async def delete_file(self, file_index: int, cluster: int) -> None:
+        await self.send_command(commands.delete_file(file_index, cluster))
 
     async def format_device(self) -> None:
         await self.send_command(commands.format_device())
+
+    async def get_file_list(self, timeout: float = 10.0) -> list[parser.FileInfoEvent]:
+        """Query list of files and await all FileInfoEvents from the device.
+
+        The device responds with multiple FileInfoEvent notifications. The first
+        event's total_files field indicates how many events will be sent in total.
+        This function collects all events with a timeout.
+
+        Args:
+            timeout: Maximum time to wait for all file info events (default 10 seconds)
+
+        Returns:
+            List of FileInfoEvent objects received from the device
+
+        Raises:
+            TimeoutError: If not all events are received within the timeout period
+        """
+        await self.send_command(commands.query_file_infos())
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        temp = []
+        file_info_events = []
+        expected_count = None
+
+        try:
+            while True:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Timeout waiting for file info events. "
+                        f"Expected {expected_count}, received {len(file_info_events)}"
+                    )
+
+                try:
+                    ev = await asyncio.wait_for(self.events.get(), timeout=remaining)
+                except TimeoutError:
+                    raise
+
+                if isinstance(ev, parser.FileInfoEvent):
+                    file_info_events.append(ev)
+                    logger.debug("Received FileInfoEvent %d", len(file_info_events))
+
+                    # First event tells us how many total to expect
+                    if expected_count is None:
+                        expected_count = ev.total_files
+                        logger.debug(
+                            "Expecting %d total FileInfoEvents", expected_count
+                        )
+
+                    # Check if we've received all expected events
+                    if len(file_info_events) >= expected_count:
+                        logger.debug(
+                            "Collected all %d FileInfoEvents", len(file_info_events)
+                        )
+                        return file_info_events
+                else:
+                    # Non-FileInfoEvent - save for re-queuing
+                    logger.debug(
+                        "Non-FileInfoEvent received while waiting: %s",
+                        type(ev).__name__,
+                    )
+                    temp.append(ev)
+
+        finally:
+            # Re-queue non-FileInfoEvent events
+            for e in temp:
+                try:
+                    self.events.put_nowait(e)
+                except Exception:
+                    pass
 
     async def set_music_order(
         self, total: int, index: int, file_serial: int, filename: str
@@ -475,10 +571,10 @@ class SkellyClient:
         )
         return ev.name
 
-    async def get_music_order(self, timeout: float = 2.0):
-        await self.send_command(commands.query_song_order())
+    async def get_file_order(self, timeout: float = 2.0) -> list[int]:
+        await self.send_command(commands.query_file_order())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.MusicOrderEvent), timeout=timeout
+            lambda e: isinstance(e, parser.FileOrderEvent), timeout=timeout
         )
         return ev.orders
 
@@ -490,7 +586,7 @@ class SkellyClient:
         )
         return ev.eye_icon
 
-    async def get_live_mode(self, timeout: float = 2.0):
+    async def get_live_mode(self, timeout: float = 2.0) -> parser.LiveModeEvent:
         """Query the device live mode and return the parsed LiveModeEvent."""
         await self.send_command(commands.query_live_mode())
         ev = await self._wait_for_event(
@@ -498,7 +594,9 @@ class SkellyClient:
         )
         return ev
 
-    async def get_light_info(self, channel: int, timeout: float = 2.0):
+    async def get_light_info(
+        self, channel: int, timeout: float = 2.0
+    ) -> parser.LightInfo:
         """Query the device live mode and return the LightInfo for the specified channel index.
 
         Channel is zero-based and valid values are 0..5. Raises IndexError if
@@ -513,12 +611,12 @@ class SkellyClient:
             raise IndexError("Channel out of range")
         return lights[channel]
 
-    async def get_capacity(self, timeout: float = 2.0):
+    async def get_capacity(self, timeout: float = 2.0) -> parser.CapacityEvent:
         await self.send_command(commands.query_capacity())
         ev = await self._wait_for_event(
             lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout
         )
-        return ev.capacity_kb, ev.file_count, ev.mode_str
+        return ev
 
     async def connect_live_mode(
         self, timeout: float = 30.0, bt_pin: str = "1234"
