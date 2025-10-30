@@ -39,6 +39,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=30),
         )
         self.adapter = adapter
+        self.action_lock = asyncio.Lock()
         _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     async def _async_update_data(self) -> Any:
@@ -70,8 +71,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 vol, live_name, cap, live_mode = await asyncio.gather(
                     vol_task, live_name_task, cap_task, live_mode_task
                 )
-                # Extract eye and light info from the parsed live_mode event
+                # Extract eye, action, and light info from the parsed live_mode event
                 eye = getattr(live_mode, "eye_icon", None)
+                action = getattr(live_mode, "action", None)
                 # live_mode.lights is a list of LightInfo objects
                 light0 = None
                 light1 = None
@@ -164,6 +166,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "file_count": file_count,
                 # eye is expected to be an int (1-based) or None
                 "eye_icon": eye,
+                # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
+                "action": action,
                 # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
                 "lights": [
                     {

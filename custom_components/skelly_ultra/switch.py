@@ -33,6 +33,10 @@ async def async_setup_entry(
             ),
             SkellyColorCycleSwitch(coordinator, entry.entry_id, address, channel=0),
             SkellyColorCycleSwitch(coordinator, entry.entry_id, address, channel=1),
+            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="head"),
+            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="arm"),
+            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="torso"),
+            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="all"),
         ]
     )
 
@@ -235,3 +239,162 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
             _LOGGER.exception(
                 "Failed to disable color cycle for channel %d", self.channel
             )
+
+
+class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch entity to control movement for head, arm, torso, or all body parts."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        part: str,
+    ) -> None:
+        """Initialize the movement switch for a specific body part.
+
+        Parameters
+        ----------
+        coordinator: SkellyCoordinator
+            Coordinator providing access to the adapter/client
+        entry_id: str
+            Config entry id used to form unique id
+        address: str | None
+            BLE address used for device grouping
+        part: str
+            Body part: "head", "arm", "torso", or "all"
+        """
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.part = part
+        part_display = part.capitalize()
+        self._attr_name = f"Movement {part_display}"
+        self._attr_unique_id = f"{entry_id}_movement_{part}"
+        if address:
+            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+
+    @property
+    def available(self) -> bool:
+        """The switch is available after coordinator has a successful update."""
+        return bool(getattr(self.coordinator, "last_update_success", False))
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if this body part's movement is enabled.
+
+        For individual parts (head/arm/torso), check if the corresponding bit is set.
+        For "all", return True only if action == 255.
+        """
+        data = getattr(self.coordinator, "data", None)
+        if not data:
+            return False
+
+        action = data.get("action")
+        if action is None:
+            return False
+
+        if self.part == "all":
+            # "All" is on only if action is exactly 255
+            return action == 255
+
+        # Individual part: check corresponding bit
+        # bit 0 = head, bit 1 = arm, bit 2 = torso
+        bit_map = {"head": 0, "arm": 1, "torso": 2}
+        bit = bit_map.get(self.part)
+        if bit is None:
+            return False
+
+        return bool(action & (1 << bit))
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added, subscribe to coordinator updates."""
+        await super().async_added_to_hass()
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable movement for this body part."""
+        try:
+            # Use lock to prevent race conditions when multiple switches are toggled quickly
+            async with self.coordinator.action_lock:
+                # Get current action from coordinator
+                data = getattr(self.coordinator, "data", None)
+                current_action = data.get("action", 0) if data else 0
+
+                if self.part == "all":
+                    # Turning on "all" always sends 255
+                    new_action = 255
+                else:
+                    # Set the bit for this part
+                    bit_map = {"head": 0, "arm": 1, "torso": 2}
+                    bit = bit_map.get(self.part)
+                    if bit is None:
+                        return
+
+                    new_action = current_action | (1 << bit)
+
+                    # Check if all three individual parts are now on
+                    # If so, send 255 instead
+                    if (new_action & 0b111) == 0b111:  # all three bits set
+                        new_action = 255
+
+                # Send the command
+                await self.coordinator.adapter.client.set_action(new_action)
+
+                # Push optimistic value into coordinator cache
+                new_data = dict(self.coordinator.data or {})
+                new_data["action"] = new_action
+                with contextlib.suppress(Exception):
+                    self.coordinator.async_set_updated_data(new_data)
+
+                self.async_write_ha_state()
+
+            # Request coordinator refresh (outside lock to avoid blocking)
+            with contextlib.suppress(Exception):
+                await self.coordinator.async_request_refresh()
+        except Exception:
+            _LOGGER.exception("Failed to enable movement for %s", self.part)
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable movement for this body part."""
+        try:
+            # Use lock to prevent race conditions when multiple switches are toggled quickly
+            async with self.coordinator.action_lock:
+                # Get current action from coordinator
+                data = getattr(self.coordinator, "data", None)
+                current_action = data.get("action", 0) if data else 0
+
+                if self.part == "all":
+                    # Turning off "all" clears all bits
+                    new_action = 0
+                else:
+                    # Clear the bit for this part
+                    bit_map = {"head": 0, "arm": 1, "torso": 2}
+                    bit = bit_map.get(self.part)
+                    if bit is None:
+                        return
+
+                    new_action = current_action & ~(1 << bit)
+
+                    # If current action was 255 (all enabled), turning off one part
+                    # means we need to clear that specific bit from 0b111
+                    if current_action == 255:
+                        new_action = 0b111 & ~(1 << bit)
+
+                # Send the command
+                await self.coordinator.adapter.client.set_action(new_action)
+
+                # Push optimistic value into coordinator cache
+                new_data = dict(self.coordinator.data or {})
+                new_data["action"] = new_action
+                with contextlib.suppress(Exception):
+                    self.coordinator.async_set_updated_data(new_data)
+
+                self.async_write_ha_state()
+
+            # Request coordinator refresh (outside lock to avoid blocking)
+            with contextlib.suppress(Exception):
+                await self.coordinator.async_request_refresh()
+        except Exception:
+            _LOGGER.exception("Failed to disable movement for %s", self.part)

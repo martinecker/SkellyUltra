@@ -5,10 +5,13 @@ Home Assistant integration for the Skelly Ultra Halloween animatronic BLE device
 ## Features
 
 - **Sensor entities**: Volume, live name, storage capacity, sound count
-- **Light entities**: RGB lighting control for multiple channels
-- **Switch entities**: Live Mode (enables classic Bluetooth speaker)
-- **Number entities**: Volume control, light speed/brightness
-- **Select entities**: Eye icon selection
+- **Light entities**: RGB lighting control for Torso and Head channels
+- **Switch entities**:
+  - Live Mode (enables classic Bluetooth speaker)
+  - Color Cycle (rainbow effect for Torso and Head lights)
+  - Movement controls (Head, Arm, Torso, and All body parts)
+- **Number entities**: Volume control, effect speed (for Torso and Head)
+- **Select entities**: Eye icon selection, effect mode (Static/Strobe/Pulse for Torso and Head)
 - **Image entities**: Eye icon preview
 - **Media Player entity**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
   - Supports TTS (Text-to-Speech) services
