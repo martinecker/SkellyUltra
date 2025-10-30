@@ -280,6 +280,7 @@ The **Internal Files** media player entity provides a full playlist interface fo
 - **Source Selection**: Select files by name from a dropdown list
 - **Volume Control**: Shared volume control with the device (same as other media players and volume number entity)
 - **File Metadata**: Access detailed file information via entity attributes
+- **Real-time State Sync**: Automatically tracks device play/pause state from device events
 
 #### Controlling Playback
 

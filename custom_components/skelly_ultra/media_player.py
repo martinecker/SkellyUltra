@@ -34,6 +34,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
+from .skelly_ultra_pkg import parser
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -525,6 +526,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._file_list: list[Any] = []
         self._current_file_index: int | None = None
         self._is_playing = False
+        self._monitor_task: asyncio.Task | None = None
 
         # Device grouping
         if address:
@@ -533,10 +535,20 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
             )
 
     async def async_added_to_hass(self) -> None:
-        """When entity is added to hass, load the file list."""
+        """When entity is added to hass, load the file list and start event monitoring."""
         await super().async_added_to_hass()
         # Load file list on startup
         await self._async_refresh_file_list()
+        # Start monitoring PlayPauseEvent notifications from device
+        self._monitor_task = asyncio.create_task(self._monitor_play_pause_events())
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Clean up when entity is removed."""
+        if self._monitor_task:
+            self._monitor_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._monitor_task
+        await super().async_will_remove_from_hass()
 
     async def _async_refresh_file_list(self) -> None:
         """Refresh the list of files from the device."""
@@ -549,6 +561,68 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         except Exception:
             _LOGGER.exception("Failed to load file list from device")
             self._file_list = []
+
+    async def _monitor_play_pause_events(self) -> None:
+        """Monitor the client's event queue for PlayPauseEvent notifications.
+
+        This background task watches for device-initiated play/pause state changes
+        and updates the media player state accordingly.
+        """
+        _LOGGER.debug("Started monitoring PlayPauseEvent notifications")
+
+        try:
+            while True:
+                # Check the event queue for PlayPauseEvent
+                # We check without blocking to avoid interfering with other queue consumers
+                events_to_requeue = []
+
+                try:
+                    # Try to get an event without blocking
+                    while not self.adapter.client.events.empty():
+                        try:
+                            event = self.adapter.client.events.get_nowait()
+
+                            if isinstance(event, parser.PlayPauseEvent):
+                                _LOGGER.debug(
+                                    "Received PlayPauseEvent: file_index=%d, playing=%s, duration=%d",
+                                    event.file_index,
+                                    event.playing,
+                                    event.duration,
+                                )
+
+                                # Update our state to match the device
+                                self._current_file_index = event.file_index
+                                self._is_playing = event.playing
+
+                                # Update Home Assistant immediately
+                                self.async_write_ha_state()
+                            else:
+                                # Not a PlayPauseEvent, re-queue it for other consumers
+                                events_to_requeue.append(event)
+
+                        except asyncio.QueueEmpty:
+                            break
+
+                    # Re-queue non-PlayPauseEvent events
+                    for event in events_to_requeue:
+                        try:
+                            self.adapter.client.events.put_nowait(event)
+                        except asyncio.QueueFull:
+                            _LOGGER.warning(
+                                "Event queue full, dropping event: %s", event
+                            )
+
+                except Exception:
+                    _LOGGER.exception("Error processing event queue")
+
+                # Sleep briefly before checking again
+                await asyncio.sleep(0.1)
+
+        except asyncio.CancelledError:
+            _LOGGER.debug("PlayPauseEvent monitoring task cancelled")
+            raise
+        except Exception:
+            _LOGGER.exception("Unexpected error in PlayPauseEvent monitoring")
 
     @property
     def state(self) -> MediaPlayerState:
