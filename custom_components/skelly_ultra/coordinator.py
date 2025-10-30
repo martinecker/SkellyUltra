@@ -89,6 +89,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     await self.adapter.client.query_live_name()
                     await self.adapter.client.query_capacity()
                     await self.adapter.client.query_live_mode()
+                    await self.adapter.client.query_file_order()
 
                     # Now wait for all responses concurrently
                     vol_task = asyncio.create_task(
@@ -103,8 +104,15 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     live_mode_task = asyncio.create_task(
                         self.adapter.client.get_live_mode(timeout=timeout_seconds)
                     )
-                    vol, live_name, cap, live_mode = await asyncio.gather(
-                        vol_task, live_name_task, cap_task, live_mode_task
+                    file_order_task = asyncio.create_task(
+                        self.adapter.client.get_file_order(timeout=timeout_seconds)
+                    )
+                    vol, live_name, cap, live_mode, file_order = await asyncio.gather(
+                        vol_task,
+                        live_name_task,
+                        cap_task,
+                        live_mode_task,
+                        file_order_task,
                     )
             except TimeoutError as ex:
                 _LOGGER.warning(
@@ -195,6 +203,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "eye_icon": eye,
                 # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
                 "action": action,
+                # file_order is a list of integers representing playback order
+                "file_order": file_order,
                 # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
                 "lights": [
                     {

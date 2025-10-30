@@ -35,6 +35,7 @@ async def async_setup_entry(
                 coordinator, entry.entry_id, address, device_name
             ),
             SkellySoundCountSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyFileOrderSensor(coordinator, entry.entry_id, address, device_name),
             SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
         ]
     )
@@ -154,6 +155,35 @@ class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
     def native_value(self):
         """Return the file count from coordinator data."""
         return self.coordinator.data.get("file_count")
+
+
+class SkellyFileOrderSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the file playback order as a list string."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the file order sensor."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "File Order"
+        self._attr_unique_id = f"{entry_id}_file_order"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the file order list as a string representation."""
+        file_order = self.coordinator.data.get("file_order", [])
+        return str(file_order)
 
 
 class SkellyLiveBTMacSensor(SensorEntity):

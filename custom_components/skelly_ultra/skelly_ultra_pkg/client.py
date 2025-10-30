@@ -576,7 +576,7 @@ class SkellyClient:
         ev = await self._wait_for_event(
             lambda e: isinstance(e, parser.FileOrderEvent), timeout=timeout
         )
-        return ev.orders
+        return ev.file_indices
 
     async def get_eye_icon(self, timeout: float = 2.0) -> int:
         """Query the device live mode and return the eye_icon integer."""
