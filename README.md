@@ -2,6 +2,8 @@
 
 Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
 
+![Example Skelly Dashboard](ha_skelly_ultra.png)
+
 ## Features
 
 - **Sensor entities**: Volume, live name, storage capacity, file count, file order
