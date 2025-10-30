@@ -10,3 +10,49 @@ enable_classic_bt:
       name: Entity id
       description: An entity id associated with the device. If provided, the device_id will be derived from this entity
       example: "select.skelly_eye_icon"
+
+play_file:
+  name: Play file
+  description: Play a file from the device's internal storage by file index.
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "sensor.skelly_ultra_volume"
+    file_index:
+      name: File index
+      description: The 1-based index of the file to play (must be at least 1)
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box
+
+stop_file:
+  name: Stop file
+  description: Stop a file that is currently playing on the device by file index.
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "sensor.skelly_ultra_volume"
+    file_index:
+      name: File index
+      description: The 1-based index of the file to stop (must be at least 1)
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 1
+          step: 1
+          mode: box

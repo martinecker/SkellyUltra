@@ -165,6 +165,184 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=SERVICE_ENABLE_CLASSIC_BT,
     )
 
+    # Register play_file and stop_file services. Both accept device_id,
+    # entity_id, and file_index (1-based).
+    SERVICE_FILE_CONTROL = vol.Schema(
+        {
+            vol.Optional("device_id"): cv.string,
+            vol.Optional("entity_id"): cv.entity_id,
+            vol.Required("file_index"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        }
+    )
+
+    async def _play_file_service(call) -> None:
+        """Play a file on the device by file index.
+
+        The service accepts either `device_id` or `entity_id`. If neither is
+        provided and there is exactly one configured entry for this
+        integration, that entry will be used.
+        """
+        device_id = call.data.get("device_id")
+        entity_id = call.data.get("entity_id")
+        file_index = call.data["file_index"]
+
+        # If entity_id provided, resolve to device_id
+        if not device_id and entity_id:
+            ent_reg = er.async_get(hass)
+            ent = ent_reg.async_get(entity_id)
+            if not ent:
+                _LOGGER.error("Entity %s not found", entity_id)
+                return
+            if not ent.device_id:
+                _LOGGER.error("Entity %s has no device_id", entity_id)
+                return
+            device_id = ent.device_id
+
+        # If no device specified, attempt to use single entry if available
+        if not device_id:
+            entries = hass.data.get(DOMAIN, {})
+            if len(entries) == 1:
+                # use the only entry
+                entry_id = next(iter(entries))
+                adapter = entries[entry_id]["adapter"]
+                try:
+                    await adapter.client.play_file(file_index)
+                    _LOGGER.info(
+                        "Requested play file %s for entry %s", file_index, entry_id
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to play file %s", file_index)
+                return
+            _LOGGER.error(
+                "No device_id or entity_id provided and multiple Skelly entries present"
+            )
+            return
+
+        # Lookup device in device registry and find a config entry that matches
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get(device_id)
+        if not device:
+            _LOGGER.error("Device %s not found", device_id)
+            return
+
+        # Find a config entry id for this integration within the device
+        entry_id: str | None = None
+        for ce in device.config_entries:
+            if ce in hass.data.get(DOMAIN, {}):
+                entry_id = ce
+                break
+
+        if not entry_id:
+            _LOGGER.error(
+                "Device %s is not associated with %s integration", device_id, DOMAIN
+            )
+            return
+
+        adapter = hass.data[DOMAIN][entry_id]["adapter"]
+        try:
+            await adapter.client.play_file(file_index)
+            _LOGGER.info(
+                "Requested play file %s for device %s (entry %s)",
+                file_index,
+                device_id,
+                entry_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to play file %s for device %s", file_index, device_id
+            )
+
+    async def _stop_file_service(call) -> None:
+        """Stop a file on the device by file index.
+
+        The service accepts either `device_id` or `entity_id`. If neither is
+        provided and there is exactly one configured entry for this
+        integration, that entry will be used.
+        """
+        device_id = call.data.get("device_id")
+        entity_id = call.data.get("entity_id")
+        file_index = call.data["file_index"]
+
+        # If entity_id provided, resolve to device_id
+        if not device_id and entity_id:
+            ent_reg = er.async_get(hass)
+            ent = ent_reg.async_get(entity_id)
+            if not ent:
+                _LOGGER.error("Entity %s not found", entity_id)
+                return
+            if not ent.device_id:
+                _LOGGER.error("Entity %s has no device_id", entity_id)
+                return
+            device_id = ent.device_id
+
+        # If no device specified, attempt to use single entry if available
+        if not device_id:
+            entries = hass.data.get(DOMAIN, {})
+            if len(entries) == 1:
+                # use the only entry
+                entry_id = next(iter(entries))
+                adapter = entries[entry_id]["adapter"]
+                try:
+                    await adapter.client.stop_file(file_index)
+                    _LOGGER.info(
+                        "Requested stop file %s for entry %s", file_index, entry_id
+                    )
+                except Exception:
+                    _LOGGER.exception("Failed to stop file %s", file_index)
+                return
+            _LOGGER.error(
+                "No device_id or entity_id provided and multiple Skelly entries present"
+            )
+            return
+
+        # Lookup device in device registry and find a config entry that matches
+        dev_reg = dr.async_get(hass)
+        device = dev_reg.async_get(device_id)
+        if not device:
+            _LOGGER.error("Device %s not found", device_id)
+            return
+
+        # Find a config entry id for this integration within the device
+        entry_id: str | None = None
+        for ce in device.config_entries:
+            if ce in hass.data.get(DOMAIN, {}):
+                entry_id = ce
+                break
+
+        if not entry_id:
+            _LOGGER.error(
+                "Device %s is not associated with %s integration", device_id, DOMAIN
+            )
+            return
+
+        adapter = hass.data[DOMAIN][entry_id]["adapter"]
+        try:
+            await adapter.client.stop_file(file_index)
+            _LOGGER.info(
+                "Requested stop file %s for device %s (entry %s)",
+                file_index,
+                device_id,
+                entry_id,
+            )
+        except Exception:
+            _LOGGER.exception(
+                "Failed to stop file %s for device %s", file_index, device_id
+            )
+
+    hass.services.async_register(
+        DOMAIN,
+        "play_file",
+        _play_file_service,
+        schema=SERVICE_FILE_CONTROL,
+    )
+
+    hass.services.async_register(
+        DOMAIN,
+        "stop_file",
+        _stop_file_service,
+        schema=SERVICE_FILE_CONTROL,
+    )
+
     return True
 
 
@@ -185,10 +363,14 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     except Exception:
         _LOGGER.debug("Failed to disconnect BLE client during unload", exc_info=True)
 
-    # If there are no more entries for this domain, remove the service
+    # If there are no more entries for this domain, remove the services
     if not hass.data[DOMAIN]:
-        # Remove the service if it was registered
+        # Remove the services if they were registered
         if hass.services.has_service(DOMAIN, "enable_classic_bt"):
             hass.services.async_remove(DOMAIN, "enable_classic_bt")
+        if hass.services.has_service(DOMAIN, "play_file"):
+            hass.services.async_remove(DOMAIN, "play_file")
+        if hass.services.has_service(DOMAIN, "stop_file"):
+            hass.services.async_remove(DOMAIN, "stop_file")
 
     return True

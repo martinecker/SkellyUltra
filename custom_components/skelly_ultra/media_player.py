@@ -55,14 +55,14 @@ async def async_setup_entry(
 
     async_add_entities(
         [
-            SkellyMediaPlayer(
+            SkellyLiveMediaPlayer(
                 coordinator, data.get("adapter"), entry.entry_id, address, device_name
             )
         ]
     )
 
 
-class SkellyMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
+class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
     """Media player for playing audio to Skelly's classic BT speaker in live mode."""
 
     _attr_has_entity_name = True

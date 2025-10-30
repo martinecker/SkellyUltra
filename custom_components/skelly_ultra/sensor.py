@@ -34,7 +34,7 @@ async def async_setup_entry(
             SkellyStorageCapacitySensor(
                 coordinator, entry.entry_id, address, device_name
             ),
-            SkellySoundCountSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyFileCountSensor(coordinator, entry.entry_id, address, device_name),
             SkellyFileOrderSensor(coordinator, entry.entry_id, address, device_name),
             SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
         ]
@@ -129,8 +129,8 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.data.get("capacity_kb")
 
 
-class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the number of sound files on the device."""
+class SkellyFileCountSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the number of files on the device."""
 
     _attr_has_entity_name = True
 
@@ -141,11 +141,11 @@ class SkellySoundCountSensor(CoordinatorEntity, SensorEntity):
         address: str | None,
         device_name: str | None = None,
     ) -> None:
-        """Initialize the sound count sensor."""
+        """Initialize the file count sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Sound Count"
-        self._attr_unique_id = f"{entry_id}_sound_count"
+        self._attr_name = "File Count"
+        self._attr_unique_id = f"{entry_id}_file_count"
         if address:
             self._attr_device_info = DeviceInfo(
                 name=device_name, identifiers={(DOMAIN, address)}

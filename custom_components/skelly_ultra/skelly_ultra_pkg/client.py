@@ -370,6 +370,12 @@ class SkellyClient:
     async def pause(self) -> None:
         await self.send_command(commands.pause())
 
+    async def play_file(self, file_index: int) -> None:
+        await self.send_command(commands.play_file(file_index))
+
+    async def stop_file(self, file_index: int) -> None:
+        await self.send_command(commands.stop_file(file_index))
+
     # RGB / light convenience wrappers
     async def set_light_rgb(
         self,

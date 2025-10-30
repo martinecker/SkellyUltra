@@ -4,7 +4,7 @@ Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween anim
 
 ## Features
 
-- **Sensor entities**: Volume, live name, storage capacity, sound count
+- **Sensor entities**: Volume, live name, storage capacity, file count, file order
 - **Light entities**: RGB lighting control for Torso and Head channels
 - **Switch entities**:
   - Live Mode (enables classic Bluetooth speaker)
@@ -16,6 +16,7 @@ Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween anim
 - **Media Player entity**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
   - Supports TTS (Text-to-Speech) services
   - Supports multiple audio formats (WAV, MP3, FLAC, OGG, etc.)
+- **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
 
 ## Prerequisites
 
@@ -253,6 +254,76 @@ automation:
 - The integration automatically handles connecting the Bluetooth speaker
 - Pairing must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
+
+### Playing Files Stored on Device
+
+The Skelly Ultra can store audio files on its internal storage. You can play or stop these files using the integration's services.
+
+#### File Order Sensor
+
+The **File Order** sensor shows the current playback order of files stored on the device as a list, for example: `[1, 2, 3, 4]`. This represents the order in which files will play.
+
+#### Play File Service
+
+Play a specific file from the device's internal storage:
+
+```yaml
+service: skelly_ultra.play_file
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  file_index: 1  # File index (1-based, must be ≥ 1)
+```
+
+Or using an entity ID instead of device ID:
+
+```yaml
+service: skelly_ultra.play_file
+data:
+  entity_id: sensor.skelly_ultra_volume  # Any entity from the device
+  file_index: 2
+```
+
+#### Stop File Service
+
+Stop a specific file that's currently playing:
+
+```yaml
+service: skelly_ultra.stop_file
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  file_index: 1  # File index (1-based, must be ≥ 1)
+```
+
+#### Automation Example: Play Different Files Based on Time
+
+```yaml
+automation:
+  - alias: "Skelly Morning Greeting"
+    trigger:
+      - platform: time
+        at: "09:00:00"
+    action:
+      - service: skelly_ultra.play_file
+        data:
+          file_index: 1  # Play the first stored file
+
+  - alias: "Skelly Evening Sounds"
+    trigger:
+      - platform: time
+        at: "18:00:00"
+    action:
+      - service: skelly_ultra.play_file
+        data:
+          file_index: 3  # Play the third stored file
+```
+
+**Notes**:
+- File indices are 1-based (first file is index 1, not 0)
+- The valid range is [1, N] where N is the number of files on the device
+- Check the **File Count** sensor to see how many files are stored
+- Check the **File Order** sensor to see the playback order
+- If you have multiple Skelly devices, specify `device_id` or `entity_id`
+- If you have only one device, these parameters can be omitted
 
 ## Troubleshooting
 

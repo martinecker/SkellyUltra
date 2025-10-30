@@ -27,6 +27,26 @@
     "enable_classic_bt": {
       "name": "Enable classic Bluetooth",
       "description": "Make the Skelly Ultra expose a classic Bluetooth speaker to connect to for live mode."
+    },
+    "play_file": {
+      "name": "Play file",
+      "description": "Play a file from the device's internal storage by file index.",
+      "fields": {
+        "file_index": {
+          "name": "File index",
+          "description": "The 1-based index of the file to play (must be at least 1)."
+        }
+      }
+    },
+    "stop_file": {
+      "name": "Stop file",
+      "description": "Stop a file that is currently playing on the device by file index.",
+      "fields": {
+        "file_index": {
+          "name": "File index",
+          "description": "The 1-based index of the file to stop (must be at least 1)."
+        }
+      }
     }
   }
 }
