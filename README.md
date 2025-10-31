@@ -1,5 +1,7 @@
 # Skelly Ultra Integration
 
+![Skelly Ultra](https://raw.githubusercontent.com/martinecker/SkellyUltra/main/skelly_ultra.png)
+
 Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
 
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
