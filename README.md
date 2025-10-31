@@ -2,10 +2,6 @@
 
 Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
 
-![Skelly Ultra](https://raw.githubusercontent.com/martinecker/SkellyUltra/main/logo.png)
-
-Here's an example dashboard built with the entities provided by this integration:
-
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
 
 ## Features
@@ -84,7 +80,6 @@ bluetoothctl
 - Pairing only needs to be done **once per device**. The pairing will persist.
 - You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
 - Look for the device name with **(Live)** suffix - this is the Classic Bluetooth speaker
-- You can configure the PIN in the Home Assistant integration config flow (default: 1234)
 
 **Why manual pairing?** Classic Bluetooth devices require interactive PIN entry during pairing. This is a limitation of the Bluetooth Classic protocol and cannot be automated by the integration.
 

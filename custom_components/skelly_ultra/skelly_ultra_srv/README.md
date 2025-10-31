@@ -6,8 +6,8 @@ A Python REST API server using aiohttp for managing Bluetooth Classic device con
 
 This server is designed to work around limitations of managing Bluetooth Classic audio devices from within Home Assistant containers. It provides a REST API interface to:
 - Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
-- Play audio files through the connected device
-- Manage multiple device connections simultaneously
+- Play audio files through connected devices
+- **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
 
 ## Requirements
 
@@ -166,25 +166,73 @@ Connect to a Bluetooth device by MAC address.
 ```
 
 ### GET /name
-Get the name of the currently connected device.
+Get the names of all connected devices, or query for a specific device by MAC address.
 
-**Response:**
+**Query Parameters:**
+- `mac` (optional): MAC address to query a specific device
+
+**Response (all devices):**
 ```json
 {
+    "devices": [
+        {"name": "Skelly Speaker 1", "mac": "AA:BB:CC:DD:EE:FF"},
+        {"name": "Skelly Speaker 2", "mac": "AA:BB:CC:DD:EE:FE"}
+    ],
+    "count": 2
+}
+```
+
+**Response (specific device by MAC):**
+```json
+{
+    "device_name": "Skelly Speaker",
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "connected": true
+}
+```
+
+**Example:**
+```bash
+# Get all connected devices
+curl http://localhost:8765/name
+
+# Get specific device by MAC
+curl "http://localhost:8765/name?mac=AA:BB:CC:DD:EE:FF"
+```
+
+### GET /mac
+Get the MAC addresses of all connected devices, or search for a device by name.
+
+**Query Parameters:**
+- `name` (optional): Device name to search for
+
+**Response (all devices):**
+```json
+{
+    "devices": [
+        {"name": "Skelly Speaker 1", "mac": "AA:BB:CC:DD:EE:FF"},
+        {"name": "Skelly Speaker 2", "mac": "AA:BB:CC:DD:EE:FE"}
+    ],
+    "count": 2
+}
+```
+
+**Response (specific device by name):**
+```json
+{
+    "mac": "AA:BB:CC:DD:EE:FF",
     "device_name": "Skelly Speaker",
     "connected": true
 }
 ```
 
-### GET /mac
-Get the MAC address of the currently connected device.
+**Example:**
+```bash
+# Get all connected devices
+curl http://localhost:8765/mac
 
-**Response:**
-```json
-{
-    "mac": "AA:BB:CC:DD:EE:FF",
-    "connected": true
-}
+# Search for device by name
+curl "http://localhost:8765/mac?name=Skelly%20Speaker"
 ```
 
 ### POST /play
