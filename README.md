@@ -28,7 +28,9 @@ Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween anim
 
 ## Prerequisites
 
-### Required: Skelly Ultra REST Server
+### Skelly Ultra REST Server
+
+If you want to use Skelly's live mode and the live mode media player provided by this integration you have to set up and run the Skelly Ultra REST server.
 
 The Skelly Ultra REST server **must be running on a Linux host** (e.g., Raspberry Pi, Ubuntu server, etc.) that can connect to both:
 1. Your Home Assistant instance (via network)
@@ -39,6 +41,8 @@ The REST server handles:
 - Audio processing and streaming to the Skelly Ultra speaker
 
 **Important**: The REST server requires `pipewire`, `bluetoothctl`, and related audio tools on the Linux host where it runs.
+
+**Important**: When using a Raspberry Pi to run the server it is *highly* recommended to use a dedicated Bluetooth USB dongle. The built-in Bluetooth controller usually has problems to stream audio to a classic Bluetooth speaker device like the Ultra Skelly, resulting in very choppy playback.
 
 For installation and setup of the REST server, see the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md).
 
@@ -95,7 +99,9 @@ Or use HACS and add https://github.com/martinecker/SkellyUltra as a custom repos
 
 ### Step 2: Set Up the REST Server
 
-Set up and start the Skelly Ultra REST server on your Linux host. See [skelly_ultra_srv/README.md](custom_components/skelly_ultra/skelly_ultra_srv/README.md) for detailed instructions.
+This step is optional but highly recommended and required if you want to use the live mode media player provided by this integration.
+
+If you want to use the live mode audio feature, set up and start the Skelly Ultra REST server on your Linux host. See [skelly_ultra_srv/README.md](custom_components/skelly_ultra/skelly_ultra_srv/README.md) for detailed instructions.
 
 ### Step 3: Add the Integration in Home Assistant
 
