@@ -37,6 +37,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow state."""
         self._discovered: dict[str, str] = {}
         self._server_url: str = DEFAULT_SERVER_URL
+        self._user_input: dict[str, Any] | None = None
 
     async def _validate_rest_server(self, server_url: str) -> dict[str, str] | None:
         """Validate the REST server is accessible.
@@ -96,18 +97,20 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=schema)
 
-        # Validate the REST server is accessible
+        # Validate the REST server is accessible (soft check - show warning if unavailable)
         server_url = user_input.get(CONF_SERVER_URL, DEFAULT_SERVER_URL).rstrip("/")
-        errors = await self._validate_rest_server(server_url)
-        if errors:
-            return self.async_show_form(
-                step_id="user", data_schema=schema, errors=errors
-            )
+        server_errors = await self._validate_rest_server(server_url)
+
+        # Store user input for later use
+        self._user_input = user_input
+        self._server_url = server_url
+
+        # If server is not accessible, show warning modal
+        if server_errors:
+            return await self.async_step_server_warning()
 
         mode = user_input.get("mode", "manual")
         if mode == "scan":
-            # Store server URL for later use in scan step
-            self._server_url = server_url
             return await self.async_step_scan()
 
         # Manual mode: create entry directly
@@ -123,6 +126,54 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_LIVE_MODE_PIN: user_input.get(
                     CONF_LIVE_MODE_PIN, DEFAULT_LIVE_MODE_PIN
                 ),
+            },
+        )
+
+    async def async_step_server_warning(self, user_input: dict[str, Any] | None = None):
+        """Show warning about REST server not being available.
+
+        Live mode features require the REST server to be running, but the
+        integration can still function without it for basic device control.
+        """
+        if user_input is not None:
+            # User acknowledged the warning, proceed with setup
+            if self._user_input is None:
+                return self.async_abort(reason="unknown")
+
+            mode = self._user_input.get("mode", "manual")
+            if mode == "scan":
+                return await self.async_step_scan()
+
+            # Manual mode: create entry directly
+            title = (
+                self._user_input.get(CONF_NAME)
+                or self._user_input.get(CONF_ADDRESS)
+                or "Skelly Ultra"
+            )
+            return self.async_create_entry(
+                title=title,
+                data={
+                    CONF_ADDRESS: self._user_input.get(CONF_ADDRESS, ""),
+                    CONF_NAME: self._user_input.get(CONF_NAME, ""),
+                    CONF_SERVER_URL: self._server_url,
+                    CONF_LIVE_MODE_PIN: self._user_input.get(
+                        CONF_LIVE_MODE_PIN, DEFAULT_LIVE_MODE_PIN
+                    ),
+                },
+            )
+
+        # Show warning form with link to documentation
+        # Note: Empty schemas don't display descriptions in Home Assistant,
+        # so we add a confirmation checkbox to make the description visible
+        return self.async_show_form(
+            step_id="server_warning",
+            data_schema=vol.Schema(
+                {
+                    vol.Required("acknowledged", default=True): bool,
+                }
+            ),
+            description_placeholders={
+                "docs_url": "https://github.com/martinecker/SkellyUltra/blob/main/custom_components/skelly_ultra/skelly_ultra_srv/README.md"
             },
         )
 
