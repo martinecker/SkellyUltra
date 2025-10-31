@@ -30,6 +30,13 @@
       }
     }
   },
+  "entity": {
+    "switch": {
+      "connected": {
+        "name": "Connected"
+      }
+    }
+  },
   "services": {
     "enable_classic_bt": {
       "name": "Enable classic Bluetooth",

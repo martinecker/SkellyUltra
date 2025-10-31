@@ -27,6 +27,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Create the client adapter and coordinator, start notifications and
     forward setup to platforms.
     """
+    # Ensure "connected" option exists and defaults to True
+    if "connected" not in entry.options:
+        hass.config_entries.async_update_entry(
+            entry, options={**entry.options, "connected": True}
+        )
+
     address = entry.data.get("address")
     server_url = entry.data.get("server_url", "http://localhost:8765")
     live_mode_pin = entry.data.get("live_mode_pin", "1234")
@@ -34,37 +40,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass, address=address, server_url=server_url, live_mode_pin=live_mode_pin
     )
     coordinator = SkellyCoordinator(hass, adapter)
-    ok = await adapter.connect()
-    if not ok:
-        raise ConfigEntryNotReady("Failed to connect to Skelly device")
+
+    # Check if Connected switch is on (defaults to True)
+    is_connected = entry.options.get("connected", True)
+
+    if is_connected:
+        # Connect to device only if switch is on
+        ok = await adapter.connect()
+        if not ok:
+            raise ConfigEntryNotReady("Failed to connect to Skelly device")
+
+        # Start notifications before performing the initial refresh so responses
+        # to queries (which arrive via notifications) are delivered to the
+        # client's event queue. If starting notifications fails, we still attempt
+        # the initial refresh but it may time out.
+        try:
+            started = await adapter.start_notifications_with_retry()
+            if not started:
+                _LOGGER.warning(
+                    "Notifications could not be started before initial refresh; "
+                    "initial data fetch may time out"
+                )
+        except Exception:
+            _LOGGER.exception("Unexpected error while starting notifications")
+
+        # Perform an initial refresh so the coordinator has data before entities
+        # are available. If this fails Home Assistant will retry setup later.
+        try:
+            await coordinator.async_config_entry_first_refresh()
+        except Exception as exc:
+            _LOGGER.exception("Initial data refresh failed")
+            # Let Home Assistant retry setup later
+            raise ConfigEntryNotReady("Initial data refresh failed") from exc
+    else:
+        # Switch is off - pause coordinator immediately
+        coordinator.pause_updates()
+        _LOGGER.info(
+            "Connected switch is off - skipping connection and pausing updates"
+        )
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "adapter": adapter,
         "coordinator": coordinator,
     }
 
-    # Start notifications before performing the initial refresh so responses
-    # to queries (which arrive via notifications) are delivered to the
-    # client's event queue. If starting notifications fails, we still attempt
-    # the initial refresh but it may time out.
-    try:
-        started = await adapter.start_notifications_with_retry()
-        if not started:
-            _LOGGER.warning(
-                "Notifications could not be started before initial refresh; "
-                "initial data fetch may time out"
-            )
-    except Exception:
-        _LOGGER.exception("Unexpected error while starting notifications")
-
-    # Perform an initial refresh so the coordinator has data before entities
-    # are available. If this fails Home Assistant will retry setup later.
-    try:
-        await coordinator.async_config_entry_first_refresh()
-    except Exception as exc:
-        _LOGGER.exception("Initial data refresh failed")
-        # Let Home Assistant retry setup later
-        raise ConfigEntryNotReady("Initial data refresh failed") from exc
     _LOGGER.info("Skelly Ultra integration setup complete for entry %s", entry.entry_id)
 
     # forward async_setup_entry calls to other platforms to create entities

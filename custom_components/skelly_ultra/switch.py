@@ -28,6 +28,9 @@ async def async_setup_entry(
 
     async_add_entities(
         [
+            SkellyConnectedSwitch(
+                hass, coordinator, data.get("adapter"), entry, address
+            ),
             SkellyLiveModeSwitch(
                 coordinator, data.get("adapter"), entry.entry_id, address
             ),
@@ -39,6 +42,118 @@ async def async_setup_entry(
             SkellyMovementSwitch(coordinator, entry.entry_id, address, part="all"),
         ]
     )
+
+
+class SkellyConnectedSwitch(SwitchEntity):
+    """Main connection switch for the Skelly integration.
+
+    Controls whether the integration maintains connections to both the BLE
+    and classic Bluetooth devices. When turned off, disconnects both and
+    pauses coordinator polling. State is persisted across HA restarts.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        hass: HomeAssistant,
+        coordinator: SkellyCoordinator,
+        adapter,
+        entry: ConfigEntry,
+        address: str | None,
+    ) -> None:
+        """Initialize the connected switch."""
+        self.hass = hass
+        self.coordinator = coordinator
+        self.adapter = adapter
+        self._entry = entry
+        self._attr_translation_key = "connected"
+        self._attr_unique_id = f"{entry.entry_id}_connected"
+        if address:
+            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+
+        # Get initial state from config entry options, default to True (connected)
+        self._is_on = entry.options.get("connected", True)
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if connection is enabled."""
+        return self._is_on
+
+    async def async_added_to_hass(self) -> None:
+        """When entity is added, apply the initial connection state."""
+        await super().async_added_to_hass()
+
+        # If switch is off on startup, pause the coordinator
+        if not self._is_on:
+            self.coordinator.pause_updates()
+            _LOGGER.info("Connected switch is off - coordinator updates paused")
+
+        self.async_write_ha_state()
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Turn on - connect to devices and resume coordinator polling."""
+        _LOGGER.info("Turning on Connected switch - connecting to devices")
+
+        try:
+            # Connect to BLE device
+            ok = await self.adapter.connect()
+            if not ok:
+                _LOGGER.error("Failed to connect to BLE device")
+                return
+
+            # Start notifications
+            started = await self.adapter.start_notifications_with_retry()
+            if not started:
+                _LOGGER.warning("Failed to start BLE notifications")
+
+            # Resume coordinator updates
+            self.coordinator.resume_updates()
+
+            # Trigger immediate refresh to get current state
+            await self.coordinator.async_request_refresh()
+
+            # Update and persist state
+            self._is_on = True
+            self.hass.config_entries.async_update_entry(
+                self._entry, options={**self._entry.options, "connected": True}
+            )
+            self.async_write_ha_state()
+
+            _LOGGER.info(
+                "Connected switch turned on - devices connected and polling resumed"
+            )
+
+        except Exception:
+            _LOGGER.exception("Failed to turn on Connected switch")
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Turn off - disconnect from devices and pause coordinator polling."""
+        _LOGGER.info("Turning off Connected switch - disconnecting from devices")
+
+        try:
+            # Pause coordinator updates first to stop polling
+            self.coordinator.pause_updates()
+
+            # Disconnect classic BT if connected
+            await self.adapter.disconnect_live_mode()
+
+            # Disconnect BLE device
+            await self.adapter.disconnect()
+
+            # Update and persist state
+            self._is_on = False
+            self.hass.config_entries.async_update_entry(
+                self._entry, options={**self._entry.options, "connected": False}
+            )
+            self.async_write_ha_state()
+
+            _LOGGER.info(
+                "Connected switch turned off - devices disconnected and polling paused"
+            )
+
+        except Exception:
+            _LOGGER.exception("Failed to turn off Connected switch")
 
 
 class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):

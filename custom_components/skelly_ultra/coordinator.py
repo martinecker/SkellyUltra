@@ -42,7 +42,25 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self.adapter = adapter
         self.action_lock = asyncio.Lock()
         self._last_refresh_request = 0.0
+        self._updates_paused = False
         _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    def pause_updates(self) -> None:
+        """Pause coordinator polling.
+
+        Sets a flag that causes _async_update_data to skip updates.
+        The coordinator timer continues running but updates are skipped.
+        """
+        _LOGGER.info("Pausing coordinator updates")
+        self._updates_paused = True
+
+    def resume_updates(self) -> None:
+        """Resume coordinator polling.
+
+        Clears the pause flag to allow updates to proceed normally.
+        """
+        _LOGGER.info("Resuming coordinator updates")
+        self._updates_paused = False
 
     async def async_request_refresh(self) -> None:
         """Request a refresh with debouncing and delay.
@@ -72,6 +90,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
         await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
+        # Skip updates if paused (e.g., when Connected switch is off)
+        if self._updates_paused:
+            _LOGGER.debug("Coordinator updates paused - skipping poll")
+            # Return last known data or empty dict to avoid raising UpdateFailed
+            return self.data if self.data else {}
+
         _LOGGER.debug("Coordinator polling Skelly device for updates")
 
         try:
