@@ -358,6 +358,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         file_path = call.data["file_path"]
         target_filename = call.data["target_filename"]
 
+        # Get the transfer progress sensor for this entry
+        transfer_sensor = None
+        if entry_id in hass.data["skelly_ultra"]:
+            transfer_sensor = hass.data["skelly_ultra"][entry_id].get("transfer_sensor")
+
         # Create file transfer manager
         transfer_manager = FileTransferManager()
 
@@ -367,6 +372,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data[DOMAIN]["file_transfers"][entry_id] = transfer_manager
 
         temp_files = []
+
+        # Define progress callback for sensor updates
+        def progress_callback(sent_chunks: int, total_chunks: int) -> None:
+            """Update progress sensor."""
+            if transfer_sensor:
+                transfer_sensor.update_progress(sent_chunks, total_chunks)
 
         try:
             # Step 1: Download/get file
@@ -419,7 +430,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
             await transfer_manager.send_file(
-                adapter.client, processed_file, target_filename
+                adapter.client, processed_file, target_filename, progress_callback
             )
 
             _LOGGER.info(
@@ -428,14 +439,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 entry_id,
             )
 
+            # Update sensor to show completion
+            if transfer_sensor:
+                transfer_sensor.set_complete()
+
         except FileTransferCancelled:
             _LOGGER.warning("File transfer was cancelled: %s", target_filename)
+            if transfer_sensor:
+                transfer_sensor.set_cancelled()
             raise HomeAssistantError("File transfer was cancelled") from None
         except FileTransferError as exc:
             _LOGGER.error("File transfer failed: %s", exc)
+            if transfer_sensor:
+                transfer_sensor.set_error(str(exc))
             raise HomeAssistantError(f"File transfer failed: {exc}") from exc
         except Exception as exc:
             _LOGGER.exception("Unexpected error during file transfer")
+            if transfer_sensor:
+                transfer_sensor.set_error(str(exc))
             raise HomeAssistantError(f"File transfer failed: {exc}") from exc
         finally:
             # Cleanup temp files
