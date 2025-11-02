@@ -61,6 +61,24 @@
           "description": "The 1-based index of the file to stop (must be at least 1)."
         }
       }
+    },
+    "cancel_file_transfer": {
+      "name": "Cancel file transfer",
+      "description": "Cancel an ongoing file upload to the device."
+    },
+    "send_file": {
+      "name": "Send file",
+      "description": "Upload an audio file to the device. The file will be automatically converted to 8kHz mono MP3 format if needed. Supports local files and HTTP/HTTPS URLs, including Home Assistant media files (/media/...).",
+      "fields": {
+        "file_path": {
+          "name": "File path",
+          "description": "Path to the audio file. Can be a local file path, HTTP/HTTPS URL, or Home Assistant media path (/media/...)."
+        },
+        "target_filename": {
+          "name": "Target filename",
+          "description": "Name to save the file as on the device (without extension). The .mp3 extension will be added automatically."
+        }
+      }
     }
   }
 }

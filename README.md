@@ -402,6 +402,71 @@ data:
   file_index: 1  # File index (1-based, must be ≥ 1)
 ```
 
+### Uploading Audio Files to Device
+
+The integration provides file transfer services to upload audio files to the device's internal storage. Audio files are automatically converted to 8kHz mono MP3 format for compatibility with the device.
+
+#### Send File Service
+
+Upload an audio file to the device. The file will be automatically converted to the required format if needed.
+
+**Supported file sources**:
+- **Local file paths**: Full paths to files accessible from the Home Assistant container
+- **HTTP/HTTPS URLs**: Download and upload files from the web
+- **Home Assistant media files**: Use `/media/...` paths to reference files in your media folder
+
+```yaml
+# Upload a local file
+service: skelly_ultra.send_file
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  file_path: "/config/www/sounds/spooky_laugh.mp3"
+  target_filename: "laugh"  # Extension (.mp3) added automatically
+
+# Upload from URL
+service: skelly_ultra.send_file
+data:
+  file_path: "https://example.com/halloween-sound.wav"
+  target_filename: "halloween_sound"
+
+# Upload from Home Assistant media folder
+service: skelly_ultra.send_file
+data:
+  file_path: "/media/local/my_audio.ogg"
+  target_filename: "my_audio"
+```
+
+**Notes**:
+- The `.mp3` extension is added automatically to `target_filename`
+- Audio is automatically converted to 8kHz mono MP3 format
+- Supported input formats: MP3, WAV, FLAC, OGG, M4A, and many others
+- Upload progress is displayed in Home Assistant logs
+- Large files may take several minutes to upload over BLE
+
+#### Cancel File Transfer Service
+
+Cancel an ongoing file upload if it's taking too long or you need to stop it:
+
+```yaml
+service: skelly_ultra.cancel_file_transfer
+data:
+  device_id: <device_id>  # Optional if you have only one device
+```
+
+Or using an entity ID:
+
+```yaml
+service: skelly_ultra.cancel_file_transfer
+data:
+  entity_id: sensor.skelly_ultra_volume  # Any entity from the device
+```
+
+**Notes**:
+- This service only works while a file transfer is in progress
+- The device will receive a cancellation command and stop accepting chunks
+- Partial uploads are discarded
+- After cancellation, you can start a new upload
+
 #### Automation Example: Play Different Files Based on Time
 
 ```yaml

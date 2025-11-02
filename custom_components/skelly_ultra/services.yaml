@@ -56,3 +56,43 @@ stop_file:
           min: 1
           step: 1
           mode: box
+
+cancel_file_transfer:
+  name: Cancel file transfer
+  description: Cancel an ongoing file upload to the Skelly device. This will stop the current file transfer in progress.
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "sensor.skelly_ultra_volume"
+
+send_file:
+  name: Send file
+  description: Upload an audio file to the Skelly device. The file will be automatically converted to 8kHz mono MP3 format if needed. Supports local paths, HTTP/HTTPS URLs, and Home Assistant media URLs.
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "sensor.skelly_ultra_volume"
+    file_path:
+      name: File path
+      description: Path to the audio file. Can be a local filesystem path, an HTTP/HTTPS URL to download, or a Home Assistant media URL (e.g., /media/sounds/file.mp3)
+      required: true
+      example: "/media/sounds/announcement.mp3"
+      selector:
+        text:
+    target_filename:
+      name: Target filename
+      description: The filename to save as on the device (should end with .mp3)
+      required: true
+      example: "announcement.mp3"
+      selector:
+        text:
