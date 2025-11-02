@@ -1,7 +1,6 @@
 {
   "name": "Skelly Ultra",
   "content_in_root": false,
-  "domains": ["skelly_ultra"],
   "homeassistant": "2025.1.0",
   "type": "integration",
   "render_readme": true
