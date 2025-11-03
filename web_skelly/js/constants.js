@@ -108,10 +108,11 @@ export const COMMANDS = {
   SET_BRIGHTNESS: 'F3',    // Set brightness (0-255)
   SET_RGB: 'F4',           // Set RGB color (with optional loop for cycling)
   SET_SPEED: 'F6',         // Set effect speed (for strobe/pulsing)
+  COLOR_CYCLE: 'F7',       // Cycle all colors
   
   // Appearance
   SET_EYE: 'F9',           // Set eye icon
-  SET_ANIMATION: 'CA',     // Set movement animation
+  SET_MOVEMENT: 'CA',      // Set movement animation
 };
 
 // Response Prefixes

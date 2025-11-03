@@ -6,7 +6,7 @@
  * The full UI controller implementation would be much larger.
  */
 
-import { STORAGE_KEYS, LOG_CLASSES, EYE_IMG_TO_NUM, EYE_NUM_TO_IMG } from './js/constants.js';
+import { STORAGE_KEYS, LOG_CLASSES, EYE_IMG_TO_NUM, EYE_NUM_TO_IMG, COMMANDS } from './js/constants.js';
 import { buildCommand, clamp, escapeHtml, normalizeDeviceName } from './js/protocol.js';
 import { StateManager } from './js/state-manager.js';
 import { BLEManager } from './js/ble-manager.js';
@@ -348,12 +348,12 @@ class SkellyApp {
         return;
       }
       const v = Math.max(0, Math.min(255, parseInt($('#vol')?.value || '0', 10)));
-      await this.ble.send(buildCommand('FA', v.toString(16).padStart(2, '0').toUpperCase(), 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_VOLUME, v.toString(16).padStart(2, '0').toUpperCase(), 8));
       this.logger.log(`Set volume to ${v}`);
     });
 
     // Live Mode button
-    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand('FD', '01'));
+    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.MEDIA_BT, '01'));
   }
 
   /**
@@ -396,7 +396,7 @@ class SkellyApp {
       const brightness = parseInt($('#brightness')?.value || '200', 10);
       const brightnessHex = brightness.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand('F3', ch + brightnessHex + cluster, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_BRIGHTNESS, ch + brightnessHex + cluster, 8));
       this.logger.log(`Set brightness to ${brightness} (channel=${ch})`);
     });
 
@@ -438,7 +438,7 @@ class SkellyApp {
       const gHex = g.toString(16).padStart(2, '0').toUpperCase();
       const bHex = b.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand('F4', ch + rHex + gHex + bHex + cluster, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cluster, 8));
       this.logger.log(`Set color to RGB(${r}, ${g}, ${b}) channel=${ch}`);
     });
 
@@ -462,7 +462,7 @@ class SkellyApp {
       const mode = parseInt($('#lightMode')?.value || '1', 10);
       const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand('F2', ch + modeHex + cluster + '00', 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
       this.logger.log(`Set lighting mode to ${mode} (1=Static, 2=Strobe, 3=Pulsing)`);
     });
 
@@ -484,7 +484,7 @@ class SkellyApp {
       const speed = parseInt($('#speed')?.value || '0', 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand('F6', ch + speedHex + cluster, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_SPEED, ch + speedHex + cluster, 8));
       this.logger.log(`Set speed to ${speed}`);
     });
 
@@ -504,7 +504,7 @@ class SkellyApp {
         return;
       }
       const ch = this.getCurrentChannelHex();
-      await this.ble.send(buildCommand('F7', ch + '00000000', 8));
+      await this.ble.send(buildCommand(COMMANDS.COLOR_CYCLE, ch + '00000000', 8));
       this.logger.log('Color cycle (all colors)');
     });
 
@@ -540,7 +540,7 @@ class SkellyApp {
       // Build payload: eye + 00 + cluster + 00 (no name)
       const payload = eyeHex + '00' + clusterHex + '00';
       
-      await this.ble.send(buildCommand('F9', payload, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_EYE, payload, 8));
       this.logger.log(`Set eye to ${this.selectedEye} (live mode)`);
     });
   }
@@ -564,9 +564,9 @@ class SkellyApp {
     const partMap = { all: '00', head: '01', arm: '02', torso: '03' };
     const hexParts = parts.map((p) => partMap[p] || '00');
 
-    // Send F0 command for each part
+    // Send movement command for each part
     hexParts.forEach(async (partHex) => {
-      await this.ble.send(buildCommand('F0', partHex + '00000000', 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_MOVEMENT, partHex + '00000000', 8));
     });
 
     this.logger.log(`Applied movement: ${parts.join(', ')}`);
@@ -629,7 +629,7 @@ class SkellyApp {
    */
   async handlePlayFile(serial) {
     const serialHex = serial.toString(16).padStart(4, '0').toUpperCase();
-    await this.ble.send(buildCommand('C6', serialHex + '01', 8));
+    await this.ble.send(buildCommand(COMMANDS.PLAY_PAUSE, serialHex + '01', 8));
     this.logger.log(`Playing file #${serial}`);
   }
 
@@ -778,8 +778,8 @@ class SkellyApp {
       console.log('Connected successfully');
       
       // Query live mode status and device params first, then start file sync
-      await this.ble.send(buildCommand('E1', '', 8));
-      setTimeout(() => this.ble.send(buildCommand('E0', '', 8)), 50);
+      await this.ble.send(buildCommand(COMMANDS.QUERY_LIVE, '', 8));
+      setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_PARAMS, '', 8)), 50);
       setTimeout(() => {
         this.fileManager.startFetchFiles(true);
       }, 150);
