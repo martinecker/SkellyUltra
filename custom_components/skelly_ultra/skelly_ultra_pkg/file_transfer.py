@@ -71,8 +71,7 @@ class FileTransferManager:
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 240.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
-    CHUNK_DELAY = 0.05  # seconds between chunks
-    RETRY_CHUNK_DELAY = 0.012  # seconds between retry chunks
+    CHUNK_DELAY = 0.1  # seconds between chunks
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
@@ -188,18 +187,20 @@ class FileTransferManager:
             FileTransferError: On protocol errors
         """
         size = len(file_data)
-        max_pack = (size + self.CHUNK_SIZE - 1) // self.CHUNK_SIZE  # Ceiling division
-        self._state.total_chunks = max_pack
+        chunk_count = (
+            size + self.CHUNK_SIZE - 1
+        ) // self.CHUNK_SIZE  # Ceiling division
+        self._state.total_chunks = chunk_count
 
         logger.info(
             "Starting file transfer: %s (%d bytes, %d chunks)",
             filename,
             size,
-            max_pack,
+            chunk_count,
         )
 
         # Phase 1: Start transfer (C0)
-        await client.start_send_data(size, max_pack, filename)
+        await client.start_send_data(size, chunk_count, filename)
         start_event = await self._wait_for_event(
             client, parser.StartTransferEvent, self.TIMEOUT_START, "BBC0"
         )
@@ -221,7 +222,7 @@ class FileTransferManager:
 
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(
-            client, file_data, start_index, max_pack, progress_callback
+            client, file_data, start_index, chunk_count, progress_callback
         )
 
         # Phase 3: End transfer (C2)
@@ -262,7 +263,7 @@ class FileTransferManager:
         client: SkellyClient,
         file_data: bytes,
         start_index: int,
-        max_pack: int,
+        chunk_count: int,
         progress_callback: Callable[[int, int], None] | None,
     ) -> None:
         """Send data chunks to device.
@@ -271,13 +272,13 @@ class FileTransferManager:
             client: SkellyClient instance
             file_data: Complete file data
             start_index: Chunk index to start from (for resume)
-            max_pack: Total number of chunks
+            chunk_count: Total number of chunks
             progress_callback: Optional progress callback
 
         Raises:
             FileTransferCancelled: If cancelled during send
         """
-        for idx in range(start_index, max_pack):
+        for idx in range(start_index, chunk_count):
             if self._state.cancelled:
                 raise FileTransferCancelled("Transfer cancelled by user")
 
@@ -302,7 +303,7 @@ class FileTransferManager:
             # Small delay to avoid overwhelming the device
             await asyncio.sleep(self.CHUNK_DELAY)
 
-        logger.debug("All %d chunks sent", max_pack)
+        logger.debug("All %d chunks sent", chunk_count)
 
     async def _wait_for_event(
         self,

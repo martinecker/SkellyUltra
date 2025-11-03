@@ -192,11 +192,11 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
 
 
 # File transfer and playback
-def start_send_data(size: int, max_pack: int, filename: str) -> bytes:
+def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
     return build_cmd(
         "C0",
         int_to_hex(size, 4)
-        + int_to_hex(max_pack, 2)
+        + int_to_hex(chunk_count, 2)
         + "5C55"
         + to_utf16le_hex(filename),
     )
@@ -227,4 +227,4 @@ def stop_file(file_index: int) -> bytes:
 
 
 def delete_file(file_index: int, cluster: int) -> bytes:
-        return build_cmd("C7", int_to_hex(file_index, 2) + int_to_hex(cluster, 4))
+    return build_cmd("C7", int_to_hex(file_index, 2) + int_to_hex(cluster, 4))
