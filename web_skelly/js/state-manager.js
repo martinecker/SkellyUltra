@@ -20,6 +20,7 @@ export class StateManager {
       capacity: null,
       filesReported: null,
       order: null, // Music play order
+      pin: null, // Device PIN
     };
 
     // Live status (action, eye icon, lights)

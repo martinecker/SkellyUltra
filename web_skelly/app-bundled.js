@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T13:50:17.109443
+ * Generated: 2025-11-03T14:01:56.056217
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -435,6 +435,7 @@ class StateManager {
       capacity: null,
       filesReported: null,
       order: null, // Music play order
+      pin: null, // Device PIN
     };
 
     // Live status (action, eye icon, lights)
@@ -1763,6 +1764,7 @@ class ProtocolParser {
       channels,
       showMode,
       name: name || this.state.device.name,
+      pin,
     });
 
     this.log(
@@ -3492,6 +3494,10 @@ class SkellyApp {
     
     if ($('#statOrder')) {
       $('#statOrder').textContent = device.order || '—';
+    }
+    
+    if ($('#statPin')) {
+      $('#statPin').textContent = device.pin || '—';
     }
   }
 

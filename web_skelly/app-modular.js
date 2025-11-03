@@ -1023,6 +1023,10 @@ class SkellyApp {
     if ($('#statOrder')) {
       $('#statOrder').textContent = device.order || '—';
     }
+    
+    if ($('#statPin')) {
+      $('#statPin').textContent = device.pin || '—';
+    }
   }
 
   /**

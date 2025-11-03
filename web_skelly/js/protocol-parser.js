@@ -150,6 +150,7 @@ export class ProtocolParser {
       channels,
       showMode,
       name: name || this.state.device.name,
+      pin,
     });
 
     this.log(
