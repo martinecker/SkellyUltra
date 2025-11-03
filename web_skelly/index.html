@@ -32,9 +32,9 @@
       display:grid;
       grid-template-columns: var(--col-left) var(--col-mid) 1fr; /* left | middle | right */
       grid-template-areas:
-        "appearance media   files"
-        "appearance empty   status"
-        "dev        empty   log";
+        "appearance transfer   files"
+        "appearance empty      status"
+        "dev        empty      log";
       gap:10px;
       padding:20px;
 
@@ -42,7 +42,7 @@
       align-items: stretch;
     }
     .area-dev{ grid-area:dev; }
-    .area-media{ grid-area:media; }
+    .area-transfer{ grid-area:transfer; }
     .area-appearance{ grid-area:appearance; }
     .area-empty{ grid-area:empty; }
     .area-status{ grid-area:status; }
@@ -150,7 +150,7 @@
         grid-template-areas:
           "status"
           "dev"
-          "media"
+          "transfer"
           "appearance"
           "log"
           "files"
@@ -216,7 +216,7 @@
         grid-template-columns: 1fr;
         grid-template-areas:
           "dev"
-          "media"
+          "transfer"
           "appearance"
           "files"
           "status"
@@ -475,8 +475,7 @@
       <div class="menuwrap">
         <button class="btn" id="btnAdvanced">⚙️ Advanced ▾</button>
         <div id="advMenu" class="dropdown hidden" role="menu" aria-label="Advanced options">
-          <label><input type="checkbox" id="advRaw"> Show “Raw Command”</label>
-          <label><input type="checkbox" id="advFT"> Show “File Transfer”</label>
+          <label><input type="checkbox" id="advRaw"> Show "Raw Command"</label>
           <label><input type="checkbox" id="advFEDC"> Show FEDC keepalives</label>
           <label><input type="checkbox" id="advEdit"> Enable per-file Edit (experimental)</label>
         </div>
@@ -546,54 +545,39 @@
       
     </section>
 
-    <!-- MIDDLE COL: Media (top) -->
-    <section class="card area-media">
-      <h2>Media</h2>
-
-      <!-- File Transfer info (shown when feature is OFF) -->
-      <div id="ftInfoBlock" class="card" style="background:#0f1216">
-        <h2>File Transfer</h2>
-        <p class="small muted" style="margin-top:6px">
-          To enable the file transfer feature, select it from the Advanced menu in the upper right corner.
-          This feature will enable you to upload MP3 files directly as well as upload files longer than 30 seconds.
-        </p>
+    <!-- MIDDLE COL: File Transfer -->
+    <section class="card area-transfer">
+      <h2>File Transfer</h2>
+      <div class="small muted" style="margin:6px 0 10px">
+        Once the file has been uploaded you will be able to modify its settings (either here or in the official app).
       </div>
-      <!-- File transfer (advanced) -->
-      <div class="spacer"></div>
-      <div id="advFTBlock" class="card hidden" style="background:#0f1216">
-        <h2>File Transfer</h2>
-        <div class="small muted" style="margin:6px 0 10px">
-          Once the file has been uploaded you will be able to modify its settings (either here or in the official app).
-        </div>
-        <label>Choose file</label>
-        <input id="fileInput" type="file" />
-        <label class="small checkline mt-8">
-          <input id="chkConvert" type="checkbox"> Convert to device format (MP3, 8 kHz mono)
-        </label>
-        <div id="convertOpts" class="row hidden" style="align-items:center">
-          <select id="mp3Kbps" aria-label="MP3 bitrate">
-            <option value="16">16 kbps</option>
-            <option value="24">24 kbps</option>
-            <option value="32" selected>32 kbps</option>
-          </select>
-          <span class="small muted">Output replaces selected file before upload.</span>
-        </div>
-
-
-        <label>Device filename (UTF-16LE; “5C55” prefix auto)</label>
-        <input id="fileName" placeholder="test2_Robot.mp3" />
-        <div class="actions">
-          <button class="btn primary" id="btnSendFile">Send to Device</button>
-          <button class="btn danger" id="btnCancelFile" disabled>Cancel</button>
-        </div>
-        <div class="capsule">
-          <div>Progress: <span id="progText">0 / 0</span></div>
-          <div id="progPct">0%</div>
-        </div>
-        <div class="progress"><div id="progBar" class="bar"></div></div>
-        <div class="small muted" id="capLine" style="margin-top:8px">Remaining capacity: —</div>
+      <label>Choose file</label>
+      <input id="fileInput" type="file" />
+      <label class="small checkline mt-8">
+        <input id="chkConvert" type="checkbox" checked> Convert to device format (MP3, 8 kHz mono)
+      </label>
+      <div id="convertOpts" class="row hidden" style="align-items:center">
+        <select id="mp3Kbps" aria-label="MP3 bitrate">
+          <option value="16">16 kbps</option>
+          <option value="24">24 kbps</option>
+          <option value="32" selected>32 kbps</option>
+        </select>
+        <span class="small muted">Output replaces selected file before upload.</span>
       </div>
 
+
+      <label>Device filename (UTF-16LE; "5C55" prefix auto)</label>
+      <input id="fileName" placeholder="test2_Robot.mp3" />
+      <div class="actions">
+        <button class="btn primary" id="btnSendFile">Send to Device</button>
+        <button class="btn danger" id="btnCancelFile" disabled>Cancel</button>
+      </div>
+      <div class="capsule">
+        <div>Progress: <span id="progText">0 / 0</span></div>
+        <div id="progPct">0%</div>
+      </div>
+      <div class="progress"><div id="progBar" class="bar"></div></div>
+      <div class="small muted" id="capLine" style="margin-top:8px">Remaining capacity: —</div>
     </section>
 
     <!-- MIDDLE COL: Text to Speech (bottom) -->

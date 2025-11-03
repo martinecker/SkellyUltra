@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-02T20:41:58.078885
+ * Generated: 2025-11-02T20:52:56.209361
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -43,7 +43,6 @@ const STORAGE_KEYS = {
   LONG_TRACK_ACK: 'skelly_long_track_ack',
   SLOW_UPLOAD_ACK: 'skelly_slow_upload_ack',
   ADV_RAW: 'skelly_adv_raw',
-  ADV_FT: 'skelly_adv_ft',
   ADV_FEDC: 'skelly_adv_fedc',
   ADV_EDIT: 'skelly_adv_edit',
 };
@@ -2729,13 +2728,11 @@ class SkellyApp {
   initializeAdvancedMenu() {
     const advMenu = $('#advMenu');
     const advRaw = $('#advRaw');
-    const advFT = $('#advFT');
     const advFEDC = $('#advFEDC');
     const advEdit = $('#advEdit');
 
     // Load saved state
     advRaw.checked = localStorage.getItem(STORAGE_KEYS.ADV_RAW) === '1';
-    advFT.checked = localStorage.getItem(STORAGE_KEYS.ADV_FT) === '1';
     advFEDC.checked = localStorage.getItem(STORAGE_KEYS.ADV_FEDC) === '1';
     advEdit.checked = localStorage.getItem(STORAGE_KEYS.ADV_EDIT) === '1';
 
@@ -2753,10 +2750,9 @@ class SkellyApp {
     });
 
     // Save state on change
-    [advRaw, advFT, advFEDC, advEdit].forEach((el) => {
+    [advRaw, advFEDC, advEdit].forEach((el) => {
       el?.addEventListener('change', () => {
         localStorage.setItem(STORAGE_KEYS.ADV_RAW, advRaw.checked ? '1' : '0');
-        localStorage.setItem(STORAGE_KEYS.ADV_FT, advFT.checked ? '1' : '0');
         localStorage.setItem(STORAGE_KEYS.ADV_FEDC, advFEDC.checked ? '1' : '0');
         localStorage.setItem(STORAGE_KEYS.ADV_EDIT, advEdit.checked ? '1' : '0');
         this.applyAdvancedVisibility();
@@ -2771,11 +2767,8 @@ class SkellyApp {
    */
   applyAdvancedVisibility() {
     const advRaw = $('#advRaw');
-    const advFT = $('#advFT');
     
     $('#advRawBlock')?.classList.toggle('hidden', !advRaw?.checked);
-    $('#advFTBlock')?.classList.toggle('hidden', !advFT?.checked);
-    $('#ftInfoBlock')?.classList.toggle('hidden', !!advFT?.checked);
   }
 
   /**

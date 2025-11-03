@@ -16,7 +16,6 @@ export const STORAGE_KEYS = {
   LONG_TRACK_ACK: 'skelly_long_track_ack',
   SLOW_UPLOAD_ACK: 'skelly_slow_upload_ack',
   ADV_RAW: 'skelly_adv_raw',
-  ADV_FT: 'skelly_adv_ft',
   ADV_FEDC: 'skelly_adv_fedc',
   ADV_EDIT: 'skelly_adv_edit',
 };
