@@ -480,20 +480,6 @@
           <label><input type="checkbox" id="advEdit"> Enable per-file Edit (experimental)</label>
         </div>
       </div>
-      <form class="donate" action="https://www.paypal.com/donate" method="post" target="_top" aria-label="Donate">
-        <input type="hidden" name="hosted_button_id" value="KHHJNFJMU3G6G" />
-        <button type="submit" class="btn paypal" title="Support development">
-          <span class="pp" aria-hidden="true"></span>
-          <span class="txt">Donate</span>
-        </button>
-
-        <!-- Fallback (kept, but hidden by CSS) -->
-        <input type="image"
-              src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif"
-              name="submit" alt="Donate" />
-        <img alt="" src="https://www.paypal.com/en_US/i/scr/pixel.gif" width="1" height="1" />
-      </form>
-
     </div>
   </header>
 
@@ -728,20 +714,7 @@
         <div style="flex:1 1 120px"><div class="muted">Show Mode</div><div id="statShowMode">—</div></div>
         <div style="flex:1 1 160px"><div class="muted">Channels</div><div id="statChannels">—</div></div>
         <div style="flex:1 1 160px"><div class="muted">Classic BT Name</div><div id="statBtName">—</div></div>
-        <div style="flex:1 1 120px"><div class="muted">Volume</div><div id="statVolume">—</div></div>
         <div style="flex:1 1 220px"><div class="muted">Capacity</div><div id="statCapacity">—</div></div>
-        <div style="flex:1 1 220px" class="row">
-          <div>
-            <div class="muted">Live Eye</div>
-            <div id="statEyeWrap">
-              <img id="statEye" class="eye-thumb" alt="eye" style="display:none" />
-              <span id="statEyeText">—</span>
-            </div>
-          </div>
-          <div>
-            <div class="muted">Live Action</div><div id="statAction">—</div>
-          </div>
-        </div>
       </div>
     </section>
 
@@ -787,10 +760,16 @@
 
   <footer>
     <span class="muted">Tip: Requires Chrome/Edge (desktop or Android) over HTTPS. Web Bluetooth isn’t supported in Firefox on desktop.</span>
-    <span class="muted"> Source code: 
-  <a href="https://github.com/tinkertims/tinkertims.github.io" target="_blank" rel="noopener">
-    github.com/tinkertims/tinkertims.github.io
-  </a></span>
+    <span class="muted">Source code: 
+      <a href="https://github.com/martinecker/SkellyUltra/tree/main/web_skelly" target="_blank" rel="noopener">
+        github.com/martinecker/SkellyUltra/tree/main/web_skelly
+      </a>
+      <div>based on
+        <a href="https://github.com/tinkertims/tinkertims.github.io" target="_blank" rel="noopener">
+          github.com/tinkertims/tinkertims.github.io
+        </a>
+      </div>
+    </span>
   </footer>
 
   <!-- Load the app code -->
