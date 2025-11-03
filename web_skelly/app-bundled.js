@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T12:37:02.974009
+ * Generated: 2025-11-03T13:50:17.109443
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2986,23 +2986,23 @@ class SkellyApp {
     });
 
     // Head Light - Lighting mode
-    const headLightMode = $('#headLightMode');
-    const headSpeedBlock = $('#headSpeedBlock');
+    const headEffectMode = $('#headEffectMode');
+    const headEffectSpeedBlock = $('#headEffectSpeedBlock');
 
-    if (headLightMode && headSpeedBlock) {
-      headLightMode.addEventListener('change', () => {
-        const v = parseInt(headLightMode.value, 10);
-        headSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
+    if (headEffectMode && headEffectSpeedBlock) {
+      headEffectMode.addEventListener('change', () => {
+        const v = parseInt(headEffectMode.value, 10);
+        headEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
       });
     }
 
-    $('#btnSetHeadMode')?.addEventListener('click', async () => {
+    $('#btnSetHeadEffectMode')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
       const ch = '00'; // Head light is channel 0
-      const mode = parseInt($('#headLightMode')?.value || '1', 10);
+      const mode = parseInt($('#headEffectMode')?.value || '1', 10);
       const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
@@ -3010,23 +3010,23 @@ class SkellyApp {
     });
 
     // Torso Light - Lighting mode
-    const torsoLightMode = $('#torsoLightMode');
-    const torsoSpeedBlock = $('#torsoSpeedBlock');
+    const torsoEffectMode = $('#torsoEffectMode');
+    const torsoEffectSpeedBlock = $('#torsoEffectSpeedBlock');
 
-    if (torsoLightMode && torsoSpeedBlock) {
-      torsoLightMode.addEventListener('change', () => {
-        const v = parseInt(torsoLightMode.value, 10);
-        torsoSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
+    if (torsoEffectMode && torsoEffectSpeedBlock) {
+      torsoEffectMode.addEventListener('change', () => {
+        const v = parseInt(torsoEffectMode.value, 10);
+        torsoEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
       });
     }
 
-    $('#btnSetTorsoMode')?.addEventListener('click', async () => {
+    $('#btnSetTorsoEffectMode')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
       const ch = '01'; // Torso light is channel 1
-      const mode = parseInt($('#torsoLightMode')?.value || '1', 10);
+      const mode = parseInt($('#torsoEffectMode')?.value || '1', 10);
       const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
@@ -3034,21 +3034,21 @@ class SkellyApp {
     });
 
     // Head Light - Speed control
-    const headSpeedRange = $('#headSpeedRange');
-    const headSpeedNum = $('#headSpeed');
+    const headEffectSpeedRange = $('#headEffectSpeedRange');
+    const headEffectSpeedNum = $('#headEffectSpeed');
 
-    if (headSpeedRange && headSpeedNum) {
-      headSpeedRange.addEventListener('input', (e) => (headSpeedNum.value = e.target.value));
-      headSpeedNum.addEventListener('input', (e) => (headSpeedRange.value = clamp(e.target.value, 0, 255)));
+    if (headEffectSpeedRange && headEffectSpeedNum) {
+      headEffectSpeedRange.addEventListener('input', (e) => (headEffectSpeedNum.value = e.target.value));
+      headEffectSpeedNum.addEventListener('input', (e) => (headEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
     }
 
-    $('#btnSetHeadSpeed')?.addEventListener('click', async () => {
+    $('#btnSetHeadEffectSpeed')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
       const ch = '00'; // Head light is channel 0
-      const speed = parseInt($('#headSpeed')?.value || '0', 10);
+      const speed = parseInt($('#headEffectSpeed')?.value || '0', 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_SPEED, ch + speedHex + cluster, 8));
@@ -3056,21 +3056,21 @@ class SkellyApp {
     });
 
     // Torso Light - Speed control
-    const torsoSpeedRange = $('#torsoSpeedRange');
-    const torsoSpeedNum = $('#torsoSpeed');
+    const torsoEffectSpeedRange = $('#torsoEffectSpeedRange');
+    const torsoEffectSpeedNum = $('#torsoEffectSpeed');
 
-    if (torsoSpeedRange && torsoSpeedNum) {
-      torsoSpeedRange.addEventListener('input', (e) => (torsoSpeedNum.value = e.target.value));
-      torsoSpeedNum.addEventListener('input', (e) => (torsoSpeedRange.value = clamp(e.target.value, 0, 255)));
+    if (torsoEffectSpeedRange && torsoEffectSpeedNum) {
+      torsoEffectSpeedRange.addEventListener('input', (e) => (torsoEffectSpeedNum.value = e.target.value));
+      torsoEffectSpeedNum.addEventListener('input', (e) => (torsoEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
     }
 
-    $('#btnSetTorsoSpeed')?.addEventListener('click', async () => {
+    $('#btnSetTorsoEffectSpeed')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
       const ch = '01'; // Torso light is channel 1
-      const speed = parseInt($('#torsoSpeed')?.value || '0', 10);
+      const speed = parseInt($('#torsoEffectSpeed')?.value || '0', 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_SPEED, ch + speedHex + cluster, 8));
