@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-02T20:59:21.742625
+ * Generated: 2025-11-02T21:07:19.179821
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -138,9 +138,8 @@ const COMMANDS = {
   COLOR_CYCLE: 'F7',       // Cycle all colors
   
   // Appearance
-  SET_MOVEMENT: 'F0',      // Set movement/animation parts
   SET_EYE: 'F9',           // Set eye icon
-  SET_ANIMATION: 'CA',     // Set movement animation
+  SET_MOVEMENT: 'CA',      // Set movement animation
 };
 
 // Response Prefixes
@@ -2787,6 +2786,18 @@ class SkellyApp {
         await this.ble.send(buildCommand(tag, '', 8));
       });
     });
+
+    // Raw command send button
+    $('#btnSendRaw')?.addEventListener('click', async () => {
+      if (!this.ble.isConnected()) {
+        this.logger.log('Not connected', LOG_CLASSES.WARNING);
+        return;
+      }
+      const tag = $('#tag')?.value || 'E0';
+      const payload = $('#payload')?.value || '';
+      await this.ble.send(buildCommand(tag, payload, 8));
+      this.logger.log(`Sent raw command: ${tag} with payload: ${payload || '(empty)'}`);
+    });
   }
 
   /**
@@ -3237,12 +3248,18 @@ class SkellyApp {
       await this.ble.connect(nameFilter);
       console.log('Connected successfully');
       
-      // Query live mode status and device params first, then start file sync
+      // Query device state in sequence: live mode, params, volume, BT name, capacity, order
       await this.ble.send(buildCommand(COMMANDS.QUERY_LIVE, '', 8));
       setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_PARAMS, '', 8)), 50);
+      setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_VOLUME, '', 8)), 100);
+      setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_BT_NAME, '', 8)), 150);
+      setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_CAPACITY, '', 8)), 200);
+      setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_ORDER, '', 8)), 250);
+      
+      // Start file sync after initial queries
       setTimeout(() => {
         this.fileManager.startFetchFiles(true);
-      }, 150);
+      }, 300);
     } catch (error) {
       console.error('Connection error:', error);
       this.logger.log(`Connection failed: ${error.message}`, LOG_CLASSES.WARNING);

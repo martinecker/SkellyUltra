@@ -635,9 +635,7 @@
       </div>
 
       <div class="spacer"></div>
-      <label>Target</label>
-      <select id="targetSelect" aria-label="Target channel"></select>
-      <!-- Movement -->
+
       <div class="spacer"></div>
       <label>Movement</label>
       <div id="liveMove" class="move-grid">
@@ -655,6 +653,18 @@
         </button>
       </div>
       <button class="btn" id="applyLiveMove">Apply Movement</button>
+
+      <div class="spacer"></div>
+      <div>
+        <label>Eyes</label>
+        <div id="apEyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
+        <div class="actions">
+          <button class="btn" id="apSetEye">Set Eye</button>
+        </div>
+      </div>
+      
+      <label>Target</label>
+      <select id="targetSelect" aria-label="Target channel"></select>
 
       <div class="spacer"></div>
       <div>
@@ -707,14 +717,6 @@
           <span class="small muted">Cycles all colors on <strong>All channels</strong></span>
         </div>
 
-      <div class="spacer"></div>
-      <div>
-        <label>Eyes</label>
-        <div id="apEyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
-        <div class="actions">
-          <button class="btn" id="apSetEye">Set Eye</button>
-        </div>
-      </div>
     </section>
 
     <!-- RIGHT COL: Status, Files, Log -->
