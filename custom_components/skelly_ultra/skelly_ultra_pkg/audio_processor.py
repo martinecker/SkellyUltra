@@ -8,6 +8,7 @@ Handles audio file conversion to the format required by Skelly devices:
 
 from __future__ import annotations
 
+from io import BytesIO
 import logging
 import os
 import tempfile
@@ -135,6 +136,78 @@ class AudioProcessor:
             audio = audio.set_frame_rate(cls.TARGET_SAMPLE_RATE)
 
         return audio
+
+    @classmethod
+    def process_to_wav_bytes(
+        cls,
+        input_path: str | Path,
+        target_sample_rate: int | None = None,
+        target_channels: int | None = None,
+    ) -> bytes:
+        """Process audio file and return WAV data as bytes.
+
+        Args:
+            input_path: Path to input audio file (any format supported by pydub)
+            target_sample_rate: Target sample rate (default: no resampling)
+            target_channels: Target channels (default: no conversion)
+
+        Returns:
+            WAV file data as bytes
+
+        Raises:
+            AudioProcessingError: If processing fails
+            FileNotFoundError: If input file doesn't exist
+        """
+        input_path = Path(input_path)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Input audio file not found: {input_path}")
+
+        logger.info("Processing audio file to WAV: %s", input_path)
+
+        try:
+            # Load audio file (pydub auto-detects format)
+            audio = AudioSegment.from_file(str(input_path))
+            logger.debug(
+                "Loaded audio: %d Hz, %d channels, %.2f seconds",
+                audio.frame_rate,
+                audio.channels,
+                len(audio) / 1000.0,
+            )
+
+            # Convert to target channels if specified
+            if target_channels and audio.channels != target_channels:
+                logger.debug(
+                    "Converting from %d channels to %d channels",
+                    audio.channels,
+                    target_channels,
+                )
+                audio = audio.set_channels(target_channels)
+
+            # Resample if target sample rate specified
+            if target_sample_rate and audio.frame_rate != target_sample_rate:
+                logger.debug(
+                    "Resampling from %d Hz to %d Hz",
+                    audio.frame_rate,
+                    target_sample_rate,
+                )
+                audio = audio.set_frame_rate(target_sample_rate)
+
+            # Export to WAV format in memory
+            buffer = BytesIO()
+            audio.export(buffer, format="wav")
+            wav_data = buffer.getvalue()
+
+        except Exception as exc:
+            logger.exception("Failed to process audio file: %s", input_path)
+            raise AudioProcessingError(f"Audio processing failed: {exc}") from exc
+        else:
+            logger.info(
+                "Audio processed successfully: %.2f seconds, %d bytes",
+                len(audio) / 1000.0,
+                len(wav_data),
+            )
+
+            return wav_data
 
     @classmethod
     def validate_audio(cls, file_path: str | Path) -> dict[str, any]:

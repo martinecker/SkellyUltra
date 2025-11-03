@@ -5,16 +5,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
-from functools import partial
-import io
 import logging
 from pathlib import Path
 import tempfile
 from typing import Any
 from urllib.parse import urlparse
-
-from scipy import signal
-import soundfile as sf
 
 from homeassistant.components import media_source
 from homeassistant.components.media_player import (
@@ -36,10 +31,11 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
 from .skelly_ultra_pkg import parser
+from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
 
 _LOGGER = logging.getLogger(__name__)
 
-# Target audio format for Bluetooth speaker
+# Target audio format for Bluetooth speaker (optional resampling)
 TARGET_RESAMPLING = False
 TARGET_SAMPLE_RATE = 8000  # 8kHz
 TARGET_CHANNELS = 1  # Mono
@@ -299,73 +295,32 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
                 self._current_media_title = media_path.name
 
             _LOGGER.info(
-                "Reading and processing audio file: %s (format: %s)",
+                "Processing audio file: %s (format: %s)",
                 self._current_media_title,
                 media_path.suffix.upper(),
             )
 
-            # Read and process audio file (supports WAV, MP3, FLAC, OGG, etc.)
-            audio_data, sample_rate = await self.hass.async_add_executor_job(
-                sf.read, str(media_path)
-            )
-
-            _LOGGER.debug(
-                "Audio file loaded: %dHz, %s, %d samples",
-                sample_rate,
-                "stereo" if len(audio_data.shape) == 2 else "mono",
-                len(audio_data),
-            )
-
-            # Check if resampling is needed
-            num_channels = audio_data.shape[1] if len(audio_data.shape) == 2 else 1
-            needs_resampling = TARGET_RESAMPLING and (
-                sample_rate != TARGET_SAMPLE_RATE or num_channels != TARGET_CHANNELS
-            )
-
-            if needs_resampling:
+            # Process audio using AudioProcessor (supports WAV, MP3, FLAC, OGG, etc.)
+            # Optionally resample to target format if TARGET_RESAMPLING is enabled
+            if TARGET_RESAMPLING:
                 _LOGGER.debug(
-                    "Resampling audio: %dHz %s -> %dHz mono",
-                    sample_rate,
-                    "stereo" if num_channels == 2 else "mono",
+                    "Processing audio with resampling to %dHz mono",
                     TARGET_SAMPLE_RATE,
                 )
-
-                # Convert to mono if stereo
-                if num_channels == 2:
-                    audio_data = audio_data.mean(axis=1)
-
-                # Resample to target sample rate if needed
-                if sample_rate != TARGET_SAMPLE_RATE:
-                    num_samples = int(
-                        len(audio_data) * TARGET_SAMPLE_RATE / sample_rate
-                    )
-                    audio_data = await self.hass.async_add_executor_job(
-                        signal.resample, audio_data, num_samples
-                    )
-                    sample_rate = TARGET_SAMPLE_RATE
-
-                _LOGGER.info(
-                    "Audio resampled to %dHz mono (%d samples)",
-                    sample_rate,
-                    len(audio_data),
+                file_data = await self.hass.async_add_executor_job(
+                    AudioProcessor.process_to_wav_bytes,
+                    media_path,
+                    TARGET_SAMPLE_RATE,
+                    TARGET_CHANNELS,
                 )
-            elif TARGET_RESAMPLING:
-                _LOGGER.debug(
-                    "Audio already in target format: %dHz mono", TARGET_SAMPLE_RATE
+            else:
+                _LOGGER.debug("Processing audio without resampling")
+                file_data = await self.hass.async_add_executor_job(
+                    AudioProcessor.process_to_wav_bytes,
+                    media_path,
+                    None,  # No sample rate conversion
+                    None,  # No channel conversion
                 )
-
-            # Write the (possibly resampled) audio to a bytes buffer
-            file_buffer = io.BytesIO()
-            await self.hass.async_add_executor_job(
-                partial(
-                    sf.write,
-                    file=file_buffer,
-                    data=audio_data,
-                    samplerate=sample_rate,
-                    format="WAV",
-                )
-            )
-            file_data = file_buffer.getvalue()
 
             # Use the client to upload and play audio via REST server
             # The client will handle the MAC address and target formatting
@@ -391,17 +346,13 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
-        except (OSError, RuntimeError):
-            _LOGGER.exception("Failed to read or process audio file")
+        except AudioProcessingError as err:
+            _LOGGER.error("Failed to process audio file: %s", err)
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
-        except ValueError as err:
-            # soundfile raises ValueError for unsupported formats
-            _LOGGER.error(
-                "Unsupported audio format: %s. Supported formats: WAV, MP3, FLAC, OGG, and more",
-                err,
-            )
+        except (OSError, RuntimeError):
+            _LOGGER.exception("Failed to read or process audio file")
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
