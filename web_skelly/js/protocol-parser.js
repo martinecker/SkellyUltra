@@ -244,7 +244,10 @@ export class ProtocolParser {
       parseInt(data.slice(i * 4, i * 4 + 4), 16)
     );
 
-    this.log('Music Order: ' + JSON.stringify(orders));
+    const ordersAsString = JSON.stringify(orders);
+    
+    this.state.updateDevice({ order: ordersAsString });
+    this.log(`File Order: ordersAsString`);
   }
 
   /**

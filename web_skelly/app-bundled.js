@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-02T21:15:34.427154
+ * Generated: 2025-11-02T21:28:00.223866
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -447,6 +447,7 @@ class StateManager {
       volume: null,
       capacity: null,
       filesReported: null,
+      order: null, // Music play order
     };
 
     // Live status (action, eye icon, lights)
@@ -1845,7 +1846,10 @@ class ProtocolParser {
       parseInt(data.slice(i * 4, i * 4 + 4), 16)
     );
 
-    this.log('Music Order: ' + JSON.stringify(orders));
+    const ordersAsString = JSON.stringify(orders);
+    
+    this.state.updateDevice({ order: ordersAsString });
+    this.log(`File Order: ordersAsString`);
   }
 
   /**
@@ -3370,15 +3374,24 @@ class SkellyApp {
       $('#statChannels').textContent = device.channels.length ? device.channels.join(', ') : '—';
     }
     if ($('#statBtName')) $('#statBtName').textContent = device.btName || '—';
-    if ($('#statVolume')) {
-      const v = device.volume;
-      $('#statVolume').textContent = v == null ? '—' : `${v}%`;
+    
+    // Update volume slider when device volume changes
+    if (device.volume != null) {
+      const volRange = $('#volRange');
+      const volNum = $('#vol');
+      if (volRange) volRange.value = device.volume;
+      if (volNum) volNum.value = device.volume;
     }
+    
     if ($('#statCapacity')) {
       $('#statCapacity').textContent =
         device.capacity != null
           ? `${device.capacity} KB (${device.filesReported ?? '—'} files)`
           : '—';
+    }
+    
+    if ($('#statOrder')) {
+      $('#statOrder').textContent = device.order || '—';
     }
   }
 
@@ -3386,25 +3399,49 @@ class SkellyApp {
    * Update live status UI
    */
   updateLiveUI(live) {
-    if ($('#statAction')) {
-      $('#statAction').textContent = live.action ?? '—';
+    // Update movement icons based on action bitfield
+    if (live.action != null) {
+      const actionBits = parseInt(live.action, 10);
+      const liveMove = $('#liveMove');
+      
+      if (liveMove && !isNaN(actionBits)) {
+        // Clear all selections first
+        liveMove.querySelectorAll('.iconToggle').forEach(btn => btn.classList.remove('selected'));
+        
+        // Map bitfield to icon selections
+        // Bit 0 (0x01) = head, Bit 1 (0x02) = arm, Bit 2 (0x04) = torso
+        // If all bits set or value is 255, select "all"
+        if (actionBits === 255 || actionBits === 0x07) {
+          const allBtn = liveMove.querySelector('[data-part="all"]');
+          if (allBtn) allBtn.classList.add('selected');
+        } else {
+          if (actionBits & 0x01) {
+            const headBtn = liveMove.querySelector('[data-part="head"]');
+            if (headBtn) headBtn.classList.add('selected');
+          }
+          if (actionBits & 0x02) {
+            const armBtn = liveMove.querySelector('[data-part="arm"]');
+            if (armBtn) armBtn.classList.add('selected');
+          }
+          if (actionBits & 0x04) {
+            const torsoBtn = liveMove.querySelector('[data-part="torso"]');
+            if (torsoBtn) torsoBtn.classList.add('selected');
+          }
+        }
+      }
     }
 
-    // Update eye icon
-    const img = $('#statEye');
-    const txt = $('#statEyeText');
-    if (img && txt && live.eye != null) {
-      const imgIdx = EYE_NUM_TO_IMG[live.eye] || live.eye;
-      img.style.display = 'inline-block';
-      img.src = `images/icon_eyes_${imgIdx}_se.png`;
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = `images/icon_eyes_${live.eye}_se.bmp`;
-      };
-      txt.textContent = ` ${live.eye}`;
-    } else if (img && txt) {
-      img.style.display = 'none';
-      txt.textContent = '—';
+    // Update eye icon selection
+    if (live.eye != null) {
+      this.selectedEye = live.eye;
+      const apEyeGrid = $('#apEyeGrid');
+      if (apEyeGrid) {
+        // Clear all selections
+        apEyeGrid.querySelectorAll('.eye-opt').forEach(el => el.classList.remove('selected'));
+        // Select the current eye
+        const eyeOpt = apEyeGrid.querySelector(`[data-eye="${live.eye}"]`);
+        if (eyeOpt) eyeOpt.classList.add('selected');
+      }
     }
   }
 

@@ -19,6 +19,7 @@ export class StateManager {
       volume: null,
       capacity: null,
       filesReported: null,
+      order: null, // Music play order
     };
 
     // Live status (action, eye icon, lights)
