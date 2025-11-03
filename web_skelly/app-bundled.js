@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T12:27:17.265184
+ * Generated: 2025-11-03T12:37:02.974009
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -1177,15 +1177,8 @@ class FileManager {
 
       this.log('File list complete ✔', LOG_CLASSES.WARNING);
 
-      // Trigger follow-up queries if needed
       if (!this.state.files.afterCompleteSent) {
         this.state.updateFilesMetadata({ afterCompleteSent: true });
-        
-        this.ble.send(buildCommand(COMMANDS.QUERY_ORDER, '', 8));
-        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_LIVE, '', 8)), 100);
-        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_VOLUME, '', 8)), 200);
-        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_BT_NAME, '', 8)), 250);
-        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_CAPACITY, '', 8)), 300);
       }
     }
   }
@@ -1867,7 +1860,7 @@ class ProtocolParser {
     const ordersAsString = JSON.stringify(orders);
     
     this.state.updateDevice({ order: ordersAsString });
-    this.log(`File Order: ordersAsString`);
+    this.log(`File Order: ${ordersAsString}`);
   }
 
   /**

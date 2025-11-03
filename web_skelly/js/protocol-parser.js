@@ -247,7 +247,7 @@ export class ProtocolParser {
     const ordersAsString = JSON.stringify(orders);
     
     this.state.updateDevice({ order: ordersAsString });
-    this.log(`File Order: ordersAsString`);
+    this.log(`File Order: ${ordersAsString}`);
   }
 
   /**
