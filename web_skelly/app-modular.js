@@ -1131,6 +1131,63 @@ class SkellyApp {
         if (eyeOpt) eyeOpt.classList.add('selected');
       }
     }
+
+    // Update light settings from live.lights array
+    if (live.lights && Array.isArray(live.lights)) {
+      // Head light (index 0)
+      if (live.lights[0]) {
+        const headLight = live.lights[0];
+        
+        // Brightness
+        if ($('#headBrightness')) $('#headBrightness').value = headLight.brightness;
+        if ($('#headBrightnessRange')) $('#headBrightnessRange').value = headLight.brightness;
+        
+        // Color (RGB)
+        if ($('#headR')) $('#headR').value = headLight.r;
+        if ($('#headG')) $('#headG').value = headLight.g;
+        if ($('#headB')) $('#headB').value = headLight.b;
+        const headHex = `#${headLight.r.toString(16).padStart(2, '0')}${headLight.g.toString(16).padStart(2, '0')}${headLight.b.toString(16).padStart(2, '0')}`;
+        if ($('#headColorPick')) $('#headColorPick').value = headHex;
+        
+        // Effect mode
+        if ($('#headEffectMode')) $('#headEffectMode').value = headLight.effectMode;
+        
+        // Effect speed (show/hide speed block based on mode)
+        const headEffectSpeedBlock = $('#headEffectSpeedBlock');
+        if (headEffectSpeedBlock) {
+          headEffectSpeedBlock.classList.toggle('hidden', headLight.effectMode === 1);
+        }
+        if ($('#headEffectSpeed')) $('#headEffectSpeed').value = headLight.effectSpeed;
+        if ($('#headEffectSpeedRange')) $('#headEffectSpeedRange').value = headLight.effectSpeed;
+      }
+      
+      // Torso light (index 1)
+      if (live.lights[1]) {
+        const torsoLight = live.lights[1];
+        
+        // Brightness
+        if ($('#torsoBrightness')) $('#torsoBrightness').value = torsoLight.brightness;
+        if ($('#torsoBrightnessRange')) $('#torsoBrightnessRange').value = torsoLight.brightness;
+        
+        // Color (RGB)
+        if ($('#torsoR')) $('#torsoR').value = torsoLight.r;
+        if ($('#torsoG')) $('#torsoG').value = torsoLight.g;
+        if ($('#torsoB')) $('#torsoB').value = torsoLight.b;
+        const torsoHex = `#${torsoLight.r.toString(16).padStart(2, '0')}${torsoLight.g.toString(16).padStart(2, '0')}${torsoLight.b.toString(16).padStart(2, '0')}`;
+        if ($('#torsoColorPick')) $('#torsoColorPick').value = torsoHex;
+        
+        // Effect mode
+        if ($('#torsoEffectMode')) $('#torsoEffectMode').value = torsoLight.effectMode;
+        
+        // Effect speed (show/hide speed block based on mode)
+        const torsoEffectSpeedBlock = $('#torsoEffectSpeedBlock');
+        if (torsoEffectSpeedBlock) {
+          torsoEffectSpeedBlock.classList.toggle('hidden', torsoLight.effectMode === 1);
+        }
+        if ($('#torsoEffectSpeed')) $('#torsoEffectSpeed').value = torsoLight.effectSpeed;
+        if ($('#torsoEffectSpeedRange')) $('#torsoEffectSpeedRange').value = torsoLight.effectSpeed;
+      }
+    }
   }
 
   /**
