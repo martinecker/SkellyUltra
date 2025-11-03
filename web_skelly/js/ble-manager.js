@@ -68,27 +68,68 @@ export class BLEManager {
       
       this.log(`Selected: ${this.device.name || '(unnamed)'} ${this.device.id}`, LOG_CLASSES.WARNING);
 
-      // Connect to GATT server
-      this.server = await this.device.gatt.connect();
-      this.service = await this.server.getPrimaryService(BLE_CONFIG.SERVICE_UUID);
+      // Connect to GATT server with retry logic
+      const maxRetries = 3;
+      let lastError = null;
       
-      // Get characteristics
-      this.writeCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.WRITE_UUID);
-      this.notifyCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.NOTIFY_UUID);
-      
-      // Start notifications
-      await this.notifyCharacteristic.startNotifications();
-      this.notifyCharacteristic.addEventListener('characteristicvaluechanged', this.handleNotification);
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // Add small delay before connection attempt (helps with timing issues)
+          if (attempt > 1) {
+            this.log(`Retry ${attempt}/${maxRetries}...`, LOG_CLASSES.WARNING);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
 
-      // Update state
-      this.state.updateDevice({
-        name: this.device.name || '',
-        connected: true,
-      });
+          // Connect to GATT server
+          this.server = await this.device.gatt.connect();
+          
+          // Small delay after connection to let it stabilize
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Verify still connected
+          if (!this.server.connected) {
+            throw new Error('Connection lost immediately after connect');
+          }
+          
+          this.service = await this.server.getPrimaryService(BLE_CONFIG.SERVICE_UUID);
+          
+          // Get characteristics
+          this.writeCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.WRITE_UUID);
+          this.notifyCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.NOTIFY_UUID);
+          
+          // Start notifications
+          await this.notifyCharacteristic.startNotifications();
+          this.notifyCharacteristic.addEventListener('characteristicvaluechanged', this.handleNotification);
 
-      this.log('Connected and notifications started', LOG_CLASSES.WARNING);
+          // Update state
+          this.state.updateDevice({
+            name: this.device.name || '',
+            connected: true,
+          });
+
+          this.log('Connected and notifications started ✓', LOG_CLASSES.WARNING);
+          
+          return true;
+        } catch (error) {
+          lastError = error;
+          
+          // Don't retry if it's a user cancellation or device not found
+          if (error.message.includes('User cancelled') || 
+              error.message.includes('No device selected')) {
+            throw error;
+          }
+          
+          // If not the last attempt, continue to retry
+          if (attempt < maxRetries) {
+            this.log(`Connection attempt ${attempt} failed: ${error.message}`, LOG_CLASSES.WARNING);
+            continue;
+          }
+        }
+      }
       
-      return true;
+      // All retries exhausted
+      throw new Error(`Failed after ${maxRetries} attempts. Last error: ${lastError?.message || 'Unknown error'}`);
+      
     } catch (error) {
       this.log(`Connect error: ${error.message}`, LOG_CLASSES.WARNING);
       throw error;
