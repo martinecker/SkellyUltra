@@ -8,7 +8,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-def strip_module_syntax(code):
+def strip_module_syntax(code, is_first_module=False):
     """Remove ES6 import/export statements"""
     # Remove export statements (export, export const, export class, export function, etc.)
     code = re.sub(r'^export\s+', '', code, flags=re.MULTILINE)
@@ -19,6 +19,16 @@ def strip_module_syntax(code):
     
     # Also remove simple imports like: import './file.js';
     code = re.sub(r'^import\s+[\'"].*?[\'"];?', '', code, flags=re.MULTILINE)
+    
+    # Remove duplicate $ helper function declarations (except in first module that defines it)
+    if not is_first_module:
+        # Remove the $ helper comment and declaration
+        code = re.sub(
+            r'/\*\*\s*\n\s*\*\s*Simple UI Helper\s*\n\s*\*/\s*\nconst \$ = \(selector\) => document\.querySelector\(selector\);',
+            '// $ helper already defined above',
+            code,
+            flags=re.MULTILINE | re.DOTALL
+        )
     
     # Remove empty lines that were left behind
     code = re.sub(r'\n\s*\n\s*\n', '\n\n', code)
@@ -47,11 +57,21 @@ def main():
     
     # Read and process each module
     bundled_code = []
+    found_dollar_helper = False
     for filepath, description in modules:
         print(f'  📦 Processing {filepath}...')
         try:
             code = read_file(filepath)
-            stripped_code = strip_module_syntax(code)
+            
+            # Check if this module has the $ helper
+            has_dollar_helper = 'const $ = (selector) => document.querySelector(selector);' in code
+            
+            # Only keep the first occurrence of $ helper
+            is_first_dollar = has_dollar_helper and not found_dollar_helper
+            if has_dollar_helper:
+                found_dollar_helper = True
+            
+            stripped_code = strip_module_syntax(code, is_first_module=is_first_dollar)
             
             bundled_code.append(f'''
   // {'=' * 60}
