@@ -345,24 +345,30 @@ class SkellyApp {
    * Initialize media controls
    */
   initializeMediaControls() {
-    // Volume control
+    // Volume control - send command immediately on change
     const volRange = $('#volRange');
     const volNum = $('#vol');
 
-    if (volRange && volNum) {
-      volRange.addEventListener('input', (e) => (volNum.value = e.target.value));
-      volNum.addEventListener('input', (e) => (volRange.value = clamp(e.target.value, 0, 100)));
-    }
-
-    $('#btnSetVol')?.addEventListener('click', async () => {
+    const sendVolumeCommand = async (value) => {
       if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
-      const v = Math.max(0, Math.min(255, parseInt($('#vol')?.value || '0', 10)));
+      const v = Math.max(0, Math.min(255, parseInt(value, 10)));
       await this.ble.send(buildCommand(COMMANDS.SET_VOLUME, v.toString(16).padStart(2, '0').toUpperCase(), 8));
       this.logger.log(`Set volume to ${v}`);
-    });
+    };
+
+    if (volRange && volNum) {
+      volRange.addEventListener('input', (e) => {
+        volNum.value = e.target.value;
+        sendVolumeCommand(e.target.value);
+      });
+      volNum.addEventListener('input', (e) => {
+        const clamped = clamp(e.target.value, 0, 100);
+        volRange.value = clamped;
+        sendVolumeCommand(clamped);
+      });
+    }
 
     // Live Mode button
     $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.MEDIA_BT, '01'));
@@ -607,14 +613,70 @@ class SkellyApp {
       this.logger.log(`Set torso light speed to ${speed}`);
     });
 
-    // Movement controls
-    $('#applyLiveMove')?.addEventListener('click', () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      this.applyMovement('liveMove');
-    });
+    // Movement controls - toggle buttons with special "all" logic
+    const liveMoveGrid = $('#liveMove');
+    if (liveMoveGrid) {
+      const allBtn = liveMoveGrid.querySelector('[data-part="all"]');
+      const partBtns = liveMoveGrid.querySelectorAll('[data-part="head"], [data-part="arm"], [data-part="torso"]');
+      
+      const sendMovementCommand = async () => {
+        if (!this.ble.isConnected()) {
+          return;
+        }
+        
+        // Check if "all" is selected
+        if (allBtn?.classList.contains('selected')) {
+          // Send CAFF for all movement
+          await this.ble.send(buildCommand(COMMANDS.SET_MOVEMENT, 'FF00000000', 8));
+          this.logger.log('Applied movement: all');
+        } else {
+          // Build bitfield from head/arm/torso selections
+          let bitfield = 0;
+          partBtns.forEach((btn) => {
+            if (btn.classList.contains('selected')) {
+              const part = btn.getAttribute('data-part');
+              if (part === 'head') bitfield |= 0x01;
+              else if (part === 'arm') bitfield |= 0x02;
+              else if (part === 'torso') bitfield |= 0x04;
+            }
+          });
+          
+          if (bitfield > 0) {
+            const bitfieldHex = bitfield.toString(16).padStart(2, '0').toUpperCase();
+            await this.ble.send(buildCommand(COMMANDS.SET_MOVEMENT, bitfieldHex + '00000000', 8));
+            const parts = [];
+            if (bitfield & 0x01) parts.push('head');
+            if (bitfield & 0x02) parts.push('arm');
+            if (bitfield & 0x04) parts.push('torso');
+            this.logger.log(`Applied movement: ${parts.join(', ')}`);
+          } else {
+            // No movement selected - send CA00 to disable movement
+            await this.ble.send(buildCommand(COMMANDS.SET_MOVEMENT, '0000000000', 8));
+            this.logger.log('Disabled movement');
+          }
+        }
+      };
+      
+      // "All" button handler
+      allBtn?.addEventListener('click', () => {
+        allBtn.classList.toggle('selected');
+        // If "all" is now selected, uncheck the other three
+        if (allBtn.classList.contains('selected')) {
+          partBtns.forEach((btn) => btn.classList.remove('selected'));
+        }
+        sendMovementCommand();
+      });
+      
+      // Head/Arm/Torso button handlers
+      partBtns.forEach((btn) => {
+        btn.addEventListener('click', () => {
+          btn.classList.toggle('selected');
+          // If any part button is clicked, uncheck "all"
+          allBtn?.classList.remove('selected');
+          sendMovementCommand();
+        });
+      });
+    }
 
     // Head Light - Color cycle button
     $('#btnHeadColorCycle')?.addEventListener('click', async () => {
@@ -638,41 +700,33 @@ class SkellyApp {
       this.logger.log('Torso light color cycle (all colors)');
     });
 
-    // Initialize icon toggle buttons for movement
-    document.querySelectorAll('.iconToggle').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        btn.classList.toggle('selected');
-      });
-    });
-
-    // Appearance eye grid selection
+    // Appearance eye grid selection - send command immediately
     const apEyeGrid = $('#apEyeGrid');
     if (apEyeGrid) {
-      apEyeGrid.addEventListener('click', (e) => {
+      apEyeGrid.addEventListener('click', async (e) => {
         const cell = e.target.closest('.eye-opt');
         if (!cell) return;
+        
         this.selectedEye = parseInt(cell.dataset.eye, 10);
         apEyeGrid.querySelectorAll('.eye-opt').forEach((el) => el.classList.remove('selected'));
         cell.classList.add('selected');
+        
+        // Send command immediately if connected
+        if (!this.ble.isConnected()) {
+          this.logger.log('Not connected', LOG_CLASSES.WARNING);
+          return;
+        }
+        
+        const eyeHex = this.selectedEye.toString(16).padStart(2, '0').toUpperCase();
+        const clusterHex = '00000000'; // Always cluster 0 for live mode
+        
+        // Build payload: eye + 00 + cluster + 00 (no name)
+        const payload = eyeHex + '00' + clusterHex + '00';
+        
+        await this.ble.send(buildCommand(COMMANDS.SET_EYE, payload, 8));
+        this.logger.log(`Set eye to ${this.selectedEye} (live mode)`);
       });
     }
-
-    // Set Eye button (F9)
-    $('#apSetEye')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      
-      const eyeHex = this.selectedEye.toString(16).padStart(2, '0').toUpperCase();
-      const clusterHex = '00000000'; // Always cluster 0 for live mode
-      
-      // Build payload: eye + 00 + cluster + 00 (no name)
-      const payload = eyeHex + '00' + clusterHex + '00';
-      
-      await this.ble.send(buildCommand(COMMANDS.SET_EYE, payload, 8));
-      this.logger.log(`Set eye to ${this.selectedEye} (live mode)`);
-    });
   }
 
   /**
