@@ -62,19 +62,6 @@ export const MOVEMENT_BITS = {
   ALL_ON: 255,   // special value for all movements enabled
 };
 
-// Eye Icon Mapping
-// Image index (1..18) → device eye number
-export const EYE_IMG_TO_NUM = {
-  1: 1, 2: 10, 3: 2, 4: 11, 5: 3, 6: 12,
-  7: 4, 8: 13, 9: 5, 10: 14, 11: 6, 12: 15,
-  13: 7, 14: 16, 15: 8, 16: 17, 17: 9, 18: 18,
-};
-
-// Reverse: device eye number → image index (for showing correct icon)
-export const EYE_NUM_TO_IMG = Object.fromEntries(
-  Object.entries(EYE_IMG_TO_NUM).map(([img, num]) => [num, Number(img)])
-);
-
 // BLE Command Tags
 export const COMMANDS = {
   // File Transfer

@@ -3,7 +3,7 @@
  * Handles the per-file edit modal functionality
  */
 
-import { LOG_CLASSES, EYE_IMG_TO_NUM, EYE_NUM_TO_IMG } from './constants.js';
+import { LOG_CLASSES } from './constants.js';
 import { buildCommand, clamp, intToHex, utf16leHex } from './protocol.js';
 
 /**
@@ -283,7 +283,7 @@ export class EditModalManager {
 
     // Create eye options for images 1-18
     for (let imgIdx = 1; imgIdx <= 18; imgIdx++) {
-      const eyeNum = EYE_IMG_TO_NUM[imgIdx] || imgIdx;
+      const eyeNum = imgIdx;
       const div = document.createElement('div');
       div.className = 'eye-opt';
       div.dataset.eye = String(eyeNum);
@@ -292,12 +292,8 @@ export class EditModalManager {
       // Create image element
       const img = document.createElement('img');
       img.className = 'eye-thumb';
-      img.src = `images/icon_eyes_${imgIdx}_se.png`;
+      img.src = `images/eye_icon_${imgIdx}.png`;
       img.alt = `eye ${eyeNum}`;
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = `images/icon_eyes_${imgIdx}_se.bmp`;
-      };
 
       div.appendChild(img);
       this.eyeGrid.appendChild(div);

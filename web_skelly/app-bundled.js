@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-02T21:28:00.223866
+ * Generated: 2025-11-02T21:36:00.627651
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -88,19 +88,6 @@ const MOVEMENT_BITS = {
   TORSO: 0b100,  // bit 2
   ALL_ON: 255,   // special value for all movements enabled
 };
-
-// Eye Icon Mapping
-// Image index (1..18) → device eye number
-const EYE_IMG_TO_NUM = {
-  1: 1, 2: 10, 3: 2, 4: 11, 5: 3, 6: 12,
-  7: 4, 8: 13, 9: 5, 10: 14, 11: 6, 12: 15,
-  13: 7, 14: 16, 15: 8, 16: 17, 17: 9, 18: 18,
-};
-
-// Reverse: device eye number → image index (for showing correct icon)
-const EYE_NUM_TO_IMG = Object.fromEntries(
-  Object.entries(EYE_IMG_TO_NUM).map(([img, num]) => [num, Number(img)])
-);
 
 // BLE Command Tags
 const COMMANDS = {
@@ -2277,7 +2264,7 @@ class EditModalManager {
 
     // Create eye options for images 1-18
     for (let imgIdx = 1; imgIdx <= 18; imgIdx++) {
-      const eyeNum = EYE_IMG_TO_NUM[imgIdx] || imgIdx;
+      const eyeNum = imgIdx;
       const div = document.createElement('div');
       div.className = 'eye-opt';
       div.dataset.eye = String(eyeNum);
@@ -2286,12 +2273,8 @@ class EditModalManager {
       // Create image element
       const img = document.createElement('img');
       img.className = 'eye-thumb';
-      img.src = `images/icon_eyes_${imgIdx}_se.png`;
+      img.src = `images/eye_icon_${imgIdx}.png`;
       img.alt = `eye ${eyeNum}`;
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = `images/icon_eyes_${imgIdx}_se.bmp`;
-      };
 
       div.appendChild(img);
       this.eyeGrid.appendChild(div);
@@ -3302,7 +3285,7 @@ class SkellyApp {
     
     // Create eye options for images 1-18
     for (let imgIdx = 1; imgIdx <= 18; imgIdx++) {
-      const eyeNum = EYE_IMG_TO_NUM[imgIdx] || imgIdx;
+      const eyeNum = imgIdx;
       const div = document.createElement('div');
       div.className = 'eye-opt' + (eyeNum === this.selectedEye ? ' selected' : '');
       div.dataset.eye = String(eyeNum);
@@ -3311,12 +3294,8 @@ class SkellyApp {
       // Create image element
       const img = document.createElement('img');
       img.className = 'eye-thumb';
-      img.src = `images/icon_eyes_${imgIdx}_se.png`;
+      img.src = `images/eye_icon_${imgIdx}.png`;
       img.alt = `eye ${eyeNum}`;
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = `images/icon_eyes_${imgIdx}_se.bmp`;
-      };
       
       div.appendChild(img);
       grid.appendChild(div);
@@ -3463,13 +3442,13 @@ class SkellyApp {
 
     for (const file of files) {
       const tr = document.createElement('tr');
-      const eyeImgIdx = EYE_NUM_TO_IMG[file.eye] || file.eye;
+      const eyeImgIdx = file.eye;
       tr.innerHTML = `
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
         <td>${escapeHtml(file.name || '')}</td>
         <td>${file.attr}</td>
-        <td><img class="eye-thumb" src="images/icon_eyes_${eyeImgIdx}_se.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
+        <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
         <td>
           <button class="btn sm" data-action="play" data-serial="${file.serial}">▶ Play</button>

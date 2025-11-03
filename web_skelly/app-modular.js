@@ -839,7 +839,7 @@ class SkellyApp {
     
     // Create eye options for images 1-18
     for (let imgIdx = 1; imgIdx <= 18; imgIdx++) {
-      const eyeNum = EYE_IMG_TO_NUM[imgIdx] || imgIdx;
+      const eyeNum = imgIdx;
       const div = document.createElement('div');
       div.className = 'eye-opt' + (eyeNum === this.selectedEye ? ' selected' : '');
       div.dataset.eye = String(eyeNum);
@@ -848,12 +848,8 @@ class SkellyApp {
       // Create image element
       const img = document.createElement('img');
       img.className = 'eye-thumb';
-      img.src = `images/icon_eyes_${imgIdx}_se.png`;
+      img.src = `images/eye_icon_${imgIdx}.png`;
       img.alt = `eye ${eyeNum}`;
-      img.onerror = () => {
-        img.onerror = null;
-        img.src = `images/icon_eyes_${imgIdx}_se.bmp`;
-      };
       
       div.appendChild(img);
       grid.appendChild(div);
@@ -1000,13 +996,13 @@ class SkellyApp {
 
     for (const file of files) {
       const tr = document.createElement('tr');
-      const eyeImgIdx = EYE_NUM_TO_IMG[file.eye] || file.eye;
+      const eyeImgIdx = file.eye;
       tr.innerHTML = `
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
         <td>${escapeHtml(file.name || '')}</td>
         <td>${file.attr}</td>
-        <td><img class="eye-thumb" src="images/icon_eyes_${eyeImgIdx}_se.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
+        <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
         <td>
           <button class="btn sm" data-action="play" data-serial="${file.serial}">▶ Play</button>
