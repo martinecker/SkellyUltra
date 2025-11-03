@@ -32,9 +32,9 @@
       display:grid;
       grid-template-columns: var(--col-left) var(--col-mid) 1fr; /* left | middle | right */
       grid-template-areas:
-        "appearance transfer   files"
-        "appearance empty      status"
-        "dev        empty      log";
+        "dev         appearance transfer"
+        "status      appearance files"
+        "status      appearance log";
       gap:10px;
       padding:20px;
 
@@ -44,7 +44,6 @@
     .area-dev{ grid-area:dev; }
     .area-transfer{ grid-area:transfer; }
     .area-appearance{ grid-area:appearance; }
-    .area-empty{ grid-area:empty; }
     .area-status{ grid-area:status; }
     .area-log{ grid-area:log; }
     .area-files{ grid-area:files; }
@@ -165,13 +164,12 @@
       .grid{
         grid-template-columns: 1fr;
         grid-template-areas:
-          "status"
           "dev"
-          "transfer"
+          "status"
           "appearance"
-          "log"
+          "transfer"
           "files"
-          "empty";
+          "log";
       }
     }
 
@@ -233,10 +231,10 @@
         grid-template-columns: 1fr;
         grid-template-areas:
           "dev"
-          "transfer"
-          "appearance"
-          "files"
           "status"
+          "appearance"
+          "transfer"
+          "files"
           "log";
       }
       #apEyeGrid{ grid-template-columns: repeat(6, 36px); }
