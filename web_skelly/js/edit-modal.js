@@ -58,31 +58,31 @@ export class EditModalManager {
    * Initialize lighting type and speed controls
    */
   initializeLightingControls() {
-    const edLightMode = $('#edLightMode');
-    const edSpeedBlock = $('#edSpeedBlock');
-    const edSpeedRange = $('#edSpeedRange');
-    const edSpeedNum = $('#edSpeed');
+    const edEffectMode = $('#edEffectMode');
+    const edEffectSpeedBlock = $('#edEffectSpeedBlock');
+    const edEffectSpeedRange = $('#edEffectSpeedRange');
+    const edEffectSpeedNum = $('#edEffectSpeed');
 
     // Toggle speed UI for Static vs Strobe/Pulsing
-    edLightMode?.addEventListener('change', () => {
-      const v = parseInt(edLightMode.value, 10);
-      edSpeedBlock?.classList.toggle('hidden', v === 1); // hide when Static
+    edEffectMode?.addEventListener('change', () => {
+      const v = parseInt(edEffectMode.value, 10);
+      edEffectSpeedBlock?.classList.toggle('hidden', v === 1); // hide when Static
     });
 
     // Sync speed inputs
-    if (edSpeedRange && edSpeedNum) {
-      edSpeedRange.addEventListener('input', (e) => (edSpeedNum.value = e.target.value));
-      edSpeedNum.addEventListener('input', (e) => (edSpeedRange.value = clamp(e.target.value, 0, 255)));
+    if (edEffectSpeedRange && edEffectSpeedNum) {
+      edEffectSpeedRange.addEventListener('input', (e) => (edEffectSpeedNum.value = e.target.value));
+      edEffectSpeedNum.addEventListener('input', (e) => (edEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
     }
 
-    // Apply lighting MODE for this specific file (F2)
-    $('#edApplyMode')?.addEventListener('click', async () => {
+    // Apply effect mode for this specific file (F2)
+    $('#edApplyEffectMode')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
 
-      const mode = parseInt($('#edLightMode')?.value || '1', 10);
+      const mode = parseInt($('#edEffectMode')?.value || '1', 10);
       const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
       const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
       const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
@@ -99,17 +99,17 @@ export class EditModalManager {
       }
 
       await this.ble.send(buildCommand('F2', payload, 8));
-      this.log(`Set Mode (F2) for file "${name || '(no name)'}" mode=${mode} cluster=${cluster}`);
+      this.log(`Set Effect Mode (F2) for file "${name || '(no name)'}" mode=${mode} cluster=${cluster}`);
     });
 
     // Apply SPEED for this specific file (F6)
-    $('#edApplySpeed')?.addEventListener('click', async () => {
+    $('#edApplyEffectSpeed')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
 
-      const speed = clamp($('#edSpeed')?.value || 0, 0, 255);
+      const speed = clamp($('#edEffectSpeed')?.value || 0, 0, 255);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
       const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
@@ -125,7 +125,7 @@ export class EditModalManager {
       }
 
       await this.ble.send(buildCommand('F6', payload, 8));
-      this.log(`Set Speed (F6) for file "${name || '(no name)'}" speed=${speed} cluster=${cluster}`);
+      this.log(`Set Effect Speed (F6) for file "${name || '(no name)'}" speed=${speed} cluster=${cluster}`);
     });
   }
 
@@ -437,10 +437,10 @@ export class EditModalManager {
     if ($('#edCluster')) $('#edCluster').value = file.cluster;
     if ($('#edAction')) $('#edAction').value = 255;
     if ($('#edName')) $('#edName').value = file.name || '';
-    if ($('#edLightMode')) $('#edLightMode').value = '1';
-    if ($('#edSpeed')) $('#edSpeed').value = 0;
-    if ($('#edSpeedRange')) $('#edSpeedRange').value = 0;
-    $('#edSpeedBlock')?.classList.add('hidden'); // Static by default
+    if ($('#edEffectMode')) $('#edEffectMode').value = '1';
+    if ($('#edEffectSpeed')) $('#edEffectSpeed').value = 0;
+    if ($('#edEffectSpeedRange')) $('#edEffectSpeedRange').value = 0;
+    $('#edEffectSpeedBlock')?.classList.add('hidden'); // Static by default
 
     // Reset color to red
     if ($('#edR')) $('#edR').value = 255;

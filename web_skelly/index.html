@@ -411,21 +411,21 @@
       <div class="spacer"></div>
       <label>Effect Mode</label>
       <div class="row">
-        <select id="edLightMode" aria-label="Effect mode">
+        <select id="edEffectMode" aria-label="Effect mode">
           <option value="1">Static</option>
           <option value="2">Strobe</option>
           <option value="3">Pulsing</option>
         </select>
-        <button class="btn" id="edApplyMode">Apply Mode (F2)</button>
+        <button class="btn" id="edApplyEffectMode">Apply Mode (F2)</button>
       </div>
 
       <div class="spacer"></div>
-      <div id="edSpeedBlock">
+      <div id="edEffectSpeedBlock">
         <label>Speed (0–255)</label>
         <div class="row">
-          <input id="edSpeedRange" type="range" min="0" max="255" value="0" />
-          <input id="edSpeed" type="number" min="0" max="255" value="0" />
-          <button class="btn" id="edApplySpeed">Set Speed (F6)</button>
+          <input id="edEffectSpeedRange" type="range" min="0" max="255" value="0" />
+          <input id="edEffectSpeed" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="edApplyEffectSpeed">Set Speed (F6)</button>
         </div>
       </div>
 
@@ -660,7 +660,7 @@
 
       <!-- Head Light Controls -->
       <div class="light-group">
-        <h3>Head Light (Channel 0)</h3>
+        <h3>Head Light</h3>
         
         <label>Brightness (0–255)</label>
         <div class="row">
@@ -707,7 +707,7 @@
 
       <!-- Torso Light Controls -->
       <div class="light-group">
-        <h3>Torso Light (Channel 1)</h3>
+        <h3>Torso Light</h3>
         
         <label>Brightness (0–255)</label>
         <div class="row">

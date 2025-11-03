@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T14:19:32.190928
+ * Generated: 2025-11-03T14:28:10.330551
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -1785,13 +1785,13 @@ class ProtocolParser {
       if (ch.length < 14) continue;
 
       const light = {
-        mode: parseInt(ch.slice(0, 2), 16),
+        effectMode: parseInt(ch.slice(0, 2), 16),
         brightness: parseInt(ch.slice(2, 4), 16),
         r: parseInt(ch.slice(4, 6), 16),
         g: parseInt(ch.slice(6, 8), 16),
         b: parseInt(ch.slice(8, 10), 16),
-        effectGroup: parseInt(ch.slice(10, 12), 16),
-        speed: parseInt(ch.slice(12, 14), 16),
+        colorCycle: parseInt(ch.slice(10, 12), 16),
+        effectSpeed: parseInt(ch.slice(12, 14), 16),
       };
       lights.push(light);
     }
@@ -2065,31 +2065,31 @@ class EditModalManager {
    * Initialize lighting type and speed controls
    */
   initializeLightingControls() {
-    const edLightMode = $('#edLightMode');
-    const edSpeedBlock = $('#edSpeedBlock');
-    const edSpeedRange = $('#edSpeedRange');
-    const edSpeedNum = $('#edSpeed');
+    const edEffectMode = $('#edEffectMode');
+    const edEffectSpeedBlock = $('#edEffectSpeedBlock');
+    const edEffectSpeedRange = $('#edEffectSpeedRange');
+    const edEffectSpeedNum = $('#edEffectSpeed');
 
     // Toggle speed UI for Static vs Strobe/Pulsing
-    edLightMode?.addEventListener('change', () => {
-      const v = parseInt(edLightMode.value, 10);
-      edSpeedBlock?.classList.toggle('hidden', v === 1); // hide when Static
+    edEffectMode?.addEventListener('change', () => {
+      const v = parseInt(edEffectMode.value, 10);
+      edEffectSpeedBlock?.classList.toggle('hidden', v === 1); // hide when Static
     });
 
     // Sync speed inputs
-    if (edSpeedRange && edSpeedNum) {
-      edSpeedRange.addEventListener('input', (e) => (edSpeedNum.value = e.target.value));
-      edSpeedNum.addEventListener('input', (e) => (edSpeedRange.value = clamp(e.target.value, 0, 255)));
+    if (edEffectSpeedRange && edEffectSpeedNum) {
+      edEffectSpeedRange.addEventListener('input', (e) => (edEffectSpeedNum.value = e.target.value));
+      edEffectSpeedNum.addEventListener('input', (e) => (edEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
     }
 
     // Apply lighting MODE for this specific file (F2)
-    $('#edApplyMode')?.addEventListener('click', async () => {
+    $('#edApplyEffectMode')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
 
-      const mode = parseInt($('#edLightMode')?.value || '1', 10);
+      const mode = parseInt($('#edEffectMode')?.value || '1', 10);
       const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
       const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
       const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
@@ -2110,13 +2110,13 @@ class EditModalManager {
     });
 
     // Apply SPEED for this specific file (F6)
-    $('#edApplySpeed')?.addEventListener('click', async () => {
+    $('#edApplyEffectSpeed')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
 
-      const speed = clamp($('#edSpeed')?.value || 0, 0, 255);
+      const speed = clamp($('#edEffectSpeed')?.value || 0, 0, 255);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
       const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
@@ -2444,10 +2444,10 @@ class EditModalManager {
     if ($('#edCluster')) $('#edCluster').value = file.cluster;
     if ($('#edAction')) $('#edAction').value = 255;
     if ($('#edName')) $('#edName').value = file.name || '';
-    if ($('#edLightMode')) $('#edLightMode').value = '1';
-    if ($('#edSpeed')) $('#edSpeed').value = 0;
-    if ($('#edSpeedRange')) $('#edSpeedRange').value = 0;
-    $('#edSpeedBlock')?.classList.add('hidden'); // Static by default
+    if ($('#edEffectMode')) $('#edEffectMode').value = '1';
+    if ($('#edEffectSpeed')) $('#edEffectSpeed').value = 0;
+    if ($('#edEffectSpeedRange')) $('#edEffectSpeedRange').value = 0;
+    $('#edEffectSpeedBlock')?.classList.add('hidden'); // Static by default
 
     // Reset color to red
     if ($('#edR')) $('#edR').value = 255;

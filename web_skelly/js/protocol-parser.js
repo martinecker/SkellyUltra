@@ -171,13 +171,13 @@ export class ProtocolParser {
       if (ch.length < 14) continue;
 
       const light = {
-        mode: parseInt(ch.slice(0, 2), 16),
+        effectMode: parseInt(ch.slice(0, 2), 16),
         brightness: parseInt(ch.slice(2, 4), 16),
         r: parseInt(ch.slice(4, 6), 16),
         g: parseInt(ch.slice(6, 8), 16),
         b: parseInt(ch.slice(8, 10), 16),
-        effectGroup: parseInt(ch.slice(10, 12), 16),
-        speed: parseInt(ch.slice(12, 14), 16),
+        colorCycle: parseInt(ch.slice(10, 12), 16),
+        effectSpeed: parseInt(ch.slice(12, 14), 16),
       };
       lights.push(light);
     }
