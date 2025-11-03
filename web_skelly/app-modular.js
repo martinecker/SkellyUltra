@@ -539,25 +539,15 @@ class SkellyApp {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
-      const cluster = Math.max(0, parseInt($('#apCluster')?.value || '0', 10));
-      const name = ($('#apName')?.value || '').trim();
       
       const eyeHex = this.selectedEye.toString(16).padStart(2, '0').toUpperCase();
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
+      const clusterHex = '00000000'; // Always cluster 0 for live mode
       
-      let payload = eyeHex + '00' + clusterHex;
-      
-      if (name) {
-        // UTF-16LE encode the name
-        const nameHex = this.utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
+      // Build payload: eye + 00 + cluster + 00 (no name)
+      const payload = eyeHex + '00' + clusterHex + '00';
       
       await this.ble.send(buildCommand('F9', payload, 8));
-      this.logger.log(`Set eye to ${this.selectedEye}${name ? ` for "${name}"` : ''}`);
+      this.logger.log(`Set eye to ${this.selectedEye} (live mode)`);
     });
   }
 
@@ -792,8 +782,13 @@ class SkellyApp {
       console.log('Calling ble.connect with filter:', nameFilter);
       await this.ble.connect(nameFilter);
       console.log('Connected successfully');
-      // Start sync
-      this.fileManager.startFetchFiles(true);
+      
+      // Query live mode status and device params first, then start file sync
+      await this.ble.send(buildCommand('E1', '', 8));
+      setTimeout(() => this.ble.send(buildCommand('E0', '', 8)), 50);
+      setTimeout(() => {
+        this.fileManager.startFetchFiles(true);
+      }, 150);
     } catch (error) {
       console.error('Connection error:', error);
       this.logger.log(`Connection failed: ${error.message}`, LOG_CLASSES.WARNING);

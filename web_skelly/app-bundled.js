@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-02T20:27:13.644229
+ * Generated: 2025-11-02T20:41:58.078885
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -848,27 +848,68 @@ class BLEManager {
       
       this.log(`Selected: ${this.device.name || '(unnamed)'} ${this.device.id}`, LOG_CLASSES.WARNING);
 
-      // Connect to GATT server
-      this.server = await this.device.gatt.connect();
-      this.service = await this.server.getPrimaryService(BLE_CONFIG.SERVICE_UUID);
+      // Connect to GATT server with retry logic
+      const maxRetries = 3;
+      let lastError = null;
       
-      // Get characteristics
-      this.writeCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.WRITE_UUID);
-      this.notifyCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.NOTIFY_UUID);
-      
-      // Start notifications
-      await this.notifyCharacteristic.startNotifications();
-      this.notifyCharacteristic.addEventListener('characteristicvaluechanged', this.handleNotification);
+      for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+          // Add small delay before connection attempt (helps with timing issues)
+          if (attempt > 1) {
+            this.log(`Retry ${attempt}/${maxRetries}...`, LOG_CLASSES.WARNING);
+            await new Promise(resolve => setTimeout(resolve, 500));
+          }
 
-      // Update state
-      this.state.updateDevice({
-        name: this.device.name || '',
-        connected: true,
-      });
+          // Connect to GATT server
+          this.server = await this.device.gatt.connect();
+          
+          // Small delay after connection to let it stabilize
+          await new Promise(resolve => setTimeout(resolve, 100));
+          
+          // Verify still connected
+          if (!this.server.connected) {
+            throw new Error('Connection lost immediately after connect');
+          }
+          
+          this.service = await this.server.getPrimaryService(BLE_CONFIG.SERVICE_UUID);
+          
+          // Get characteristics
+          this.writeCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.WRITE_UUID);
+          this.notifyCharacteristic = await this.service.getCharacteristic(BLE_CONFIG.NOTIFY_UUID);
+          
+          // Start notifications
+          await this.notifyCharacteristic.startNotifications();
+          this.notifyCharacteristic.addEventListener('characteristicvaluechanged', this.handleNotification);
 
-      this.log('Connected and notifications started', LOG_CLASSES.WARNING);
+          // Update state
+          this.state.updateDevice({
+            name: this.device.name || '',
+            connected: true,
+          });
+
+          this.log('Connected and notifications started ✓', LOG_CLASSES.WARNING);
+          
+          return true;
+        } catch (error) {
+          lastError = error;
+          
+          // Don't retry if it's a user cancellation or device not found
+          if (error.message.includes('User cancelled') || 
+              error.message.includes('No device selected')) {
+            throw error;
+          }
+          
+          // If not the last attempt, continue to retry
+          if (attempt < maxRetries) {
+            this.log(`Connection attempt ${attempt} failed: ${error.message}`, LOG_CLASSES.WARNING);
+            continue;
+          }
+        }
+      }
       
-      return true;
+      // All retries exhausted
+      throw new Error(`Failed after ${maxRetries} attempts. Last error: ${lastError?.message || 'Unknown error'}`);
+      
     } catch (error) {
       this.log(`Connect error: ${error.message}`, LOG_CLASSES.WARNING);
       throw error;
@@ -1124,6 +1165,7 @@ class FileManager {
         this.ble.send(buildCommand(COMMANDS.QUERY_ORDER, '', 8));
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_LIVE, '', 8)), 100);
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_VOLUME, '', 8)), 200);
+        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_BT_NAME, '', 8)), 250);
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_CAPACITY, '', 8)), 300);
       }
     }
@@ -2956,25 +2998,15 @@ class SkellyApp {
         this.logger.log('Not connected', LOG_CLASSES.WARNING);
         return;
       }
-      const cluster = Math.max(0, parseInt($('#apCluster')?.value || '0', 10));
-      const name = ($('#apName')?.value || '').trim();
       
       const eyeHex = this.selectedEye.toString(16).padStart(2, '0').toUpperCase();
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
+      const clusterHex = '00000000'; // Always cluster 0 for live mode
       
-      let payload = eyeHex + '00' + clusterHex;
-      
-      if (name) {
-        // UTF-16LE encode the name
-        const nameHex = this.utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
+      // Build payload: eye + 00 + cluster + 00 (no name)
+      const payload = eyeHex + '00' + clusterHex + '00';
       
       await this.ble.send(buildCommand('F9', payload, 8));
-      this.logger.log(`Set eye to ${this.selectedEye}${name ? ` for "${name}"` : ''}`);
+      this.logger.log(`Set eye to ${this.selectedEye} (live mode)`);
     });
   }
 
@@ -3209,8 +3241,13 @@ class SkellyApp {
       console.log('Calling ble.connect with filter:', nameFilter);
       await this.ble.connect(nameFilter);
       console.log('Connected successfully');
-      // Start sync
-      this.fileManager.startFetchFiles(true);
+      
+      // Query live mode status and device params first, then start file sync
+      await this.ble.send(buildCommand('E1', '', 8));
+      setTimeout(() => this.ble.send(buildCommand('E0', '', 8)), 50);
+      setTimeout(() => {
+        this.fileManager.startFetchFiles(true);
+      }, 150);
     } catch (error) {
       console.error('Connection error:', error);
       this.logger.log(`Connection failed: ${error.message}`, LOG_CLASSES.WARNING);

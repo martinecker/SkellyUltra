@@ -90,6 +90,7 @@ export class FileManager {
         this.ble.send(buildCommand(COMMANDS.QUERY_ORDER, '', 8));
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_LIVE, '', 8)), 100);
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_VOLUME, '', 8)), 200);
+        setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_BT_NAME, '', 8)), 250);
         setTimeout(() => this.ble.send(buildCommand(COMMANDS.QUERY_CAPACITY, '', 8)), 300);
       }
     }
