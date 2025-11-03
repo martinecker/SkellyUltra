@@ -393,63 +393,91 @@ class SkellyApp {
     this.selectedEye = 1; // Default eye selection
     this.buildAppearanceEyeGrid();
 
-    // Head Light - Brightness control
+    // Track color cycle state for each light
+    this.headColorCycleEnabled = false;
+    this.torsoColorCycleEnabled = false;
+
+    // Head Light - Brightness control (immediate)
     const headBriRange = $('#headBrightnessRange');
     const headBriNum = $('#headBrightness');
     
-    if (headBriRange && headBriNum) {
-      headBriRange.addEventListener('input', (e) => (headBriNum.value = e.target.value));
-      headBriNum.addEventListener('input', (e) => (headBriRange.value = clamp(e.target.value, 0, 255)));
-    }
-
-    $('#btnSetHeadBrightness')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+    const sendHeadBrightness = async (value) => {
+      if (!this.ble.isConnected()) return;
       const ch = '00'; // Head light is channel 0
-      const brightness = parseInt($('#headBrightness')?.value || '200', 10);
+      const brightness = parseInt(value, 10);
       const brightnessHex = brightness.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_BRIGHTNESS, ch + brightnessHex + cluster, 8));
       this.logger.log(`Set head light brightness to ${brightness}`);
-    });
+    };
+    
+    if (headBriRange && headBriNum) {
+      headBriRange.addEventListener('input', (e) => {
+        headBriNum.value = e.target.value;
+        sendHeadBrightness(e.target.value);
+      });
+      headBriNum.addEventListener('input', (e) => {
+        const clamped = clamp(e.target.value, 0, 255);
+        headBriRange.value = clamped;
+        sendHeadBrightness(clamped);
+      });
+    }
 
-    // Torso Light - Brightness control
+    // Torso Light - Brightness control (immediate)
     const torsoBriRange = $('#torsoBrightnessRange');
     const torsoBriNum = $('#torsoBrightness');
     
-    if (torsoBriRange && torsoBriNum) {
-      torsoBriRange.addEventListener('input', (e) => (torsoBriNum.value = e.target.value));
-      torsoBriNum.addEventListener('input', (e) => (torsoBriRange.value = clamp(e.target.value, 0, 255)));
-    }
-
-    $('#btnSetTorsoBrightness')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+    const sendTorsoBrightness = async (value) => {
+      if (!this.ble.isConnected()) return;
       const ch = '01'; // Torso light is channel 1
-      const brightness = parseInt($('#torsoBrightness')?.value || '200', 10);
+      const brightness = parseInt(value, 10);
       const brightnessHex = brightness.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_BRIGHTNESS, ch + brightnessHex + cluster, 8));
       this.logger.log(`Set torso light brightness to ${brightness}`);
-    });
+    };
+    
+    if (torsoBriRange && torsoBriNum) {
+      torsoBriRange.addEventListener('input', (e) => {
+        torsoBriNum.value = e.target.value;
+        sendTorsoBrightness(e.target.value);
+      });
+      torsoBriNum.addEventListener('input', (e) => {
+        const clamped = clamp(e.target.value, 0, 255);
+        torsoBriRange.value = clamped;
+        sendTorsoBrightness(clamped);
+      });
+    }
 
-    // Head Light - Color/RGB control
+    // Head Light - Color/RGB control (immediate)
     const headColorPick = $('#headColorPick');
     const headRInput = $('#headR');
     const headGInput = $('#headG');
     const headBInput = $('#headB');
 
-    // Sync color picker with RGB inputs
+    const sendHeadColor = async () => {
+      if (!this.ble.isConnected()) return;
+      const ch = '00'; // Head light is channel 0
+      const r = parseInt(headRInput?.value || '255', 10);
+      const g = parseInt(headGInput?.value || '0', 10);
+      const b = parseInt(headBInput?.value || '0', 10);
+      const cycle = this.headColorCycleEnabled ? '01' : '00';
+      const rHex = r.toString(16).padStart(2, '0').toUpperCase();
+      const gHex = g.toString(16).padStart(2, '0').toUpperCase();
+      const bHex = b.toString(16).padStart(2, '0').toUpperCase();
+      const cluster = '00000000';
+      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster, 8));
+      this.logger.log(`Set head light color to RGB(${r}, ${g}, ${b}) with cycle ${this.headColorCycleEnabled ? 'ON' : 'OFF'}`);
+    };
+
+    // Sync color picker with RGB inputs and send immediately
     if (headColorPick && headRInput && headGInput && headBInput) {
       headColorPick.addEventListener('input', (e) => {
         const hex = e.target.value;
         headRInput.value = parseInt(hex.substring(1, 3), 16);
         headGInput.value = parseInt(hex.substring(3, 5), 16);
         headBInput.value = parseInt(hex.substring(5, 7), 16);
+        sendHeadColor();
       });
 
       [headRInput, headGInput, headBInput].forEach((inp) => {
@@ -458,40 +486,40 @@ class SkellyApp {
           const g = clamp(headGInput.value, 0, 255);
           const b = clamp(headBInput.value, 0, 255);
           headColorPick.value = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+          sendHeadColor();
         });
       });
     }
 
-    $('#btnSetHeadRGB')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '00'; // Head light is channel 0
-      const r = parseInt($('#headR')?.value || '255', 10);
-      const g = parseInt($('#headG')?.value || '0', 10);
-      const b = parseInt($('#headB')?.value || '0', 10);
-      const rHex = r.toString(16).padStart(2, '0').toUpperCase();
-      const gHex = g.toString(16).padStart(2, '0').toUpperCase();
-      const bHex = b.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cluster, 8));
-      this.logger.log(`Set head light color to RGB(${r}, ${g}, ${b})`);
-    });
-
-    // Torso Light - Color/RGB control
+    // Torso Light - Color/RGB control (immediate)
     const torsoColorPick = $('#torsoColorPick');
     const torsoRInput = $('#torsoR');
     const torsoGInput = $('#torsoG');
     const torsoBInput = $('#torsoB');
 
-    // Sync color picker with RGB inputs
+    const sendTorsoColor = async () => {
+      if (!this.ble.isConnected()) return;
+      const ch = '01'; // Torso light is channel 1
+      const r = parseInt(torsoRInput?.value || '255', 10);
+      const g = parseInt(torsoGInput?.value || '0', 10);
+      const b = parseInt(torsoBInput?.value || '0', 10);
+      const cycle = this.torsoColorCycleEnabled ? '01' : '00';
+      const rHex = r.toString(16).padStart(2, '0').toUpperCase();
+      const gHex = g.toString(16).padStart(2, '0').toUpperCase();
+      const bHex = b.toString(16).padStart(2, '0').toUpperCase();
+      const cluster = '00000000';
+      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster, 8));
+      this.logger.log(`Set torso light color to RGB(${r}, ${g}, ${b}) with cycle ${this.torsoColorCycleEnabled ? 'ON' : 'OFF'}`);
+    };
+
+    // Sync color picker with RGB inputs and send immediately
     if (torsoColorPick && torsoRInput && torsoGInput && torsoBInput) {
       torsoColorPick.addEventListener('input', (e) => {
         const hex = e.target.value;
         torsoRInput.value = parseInt(hex.substring(1, 3), 16);
         torsoGInput.value = parseInt(hex.substring(3, 5), 16);
         torsoBInput.value = parseInt(hex.substring(5, 7), 16);
+        sendTorsoColor();
       });
 
       [torsoRInput, torsoGInput, torsoBInput].forEach((inp) => {
@@ -500,118 +528,98 @@ class SkellyApp {
           const g = clamp(torsoGInput.value, 0, 255);
           const b = clamp(torsoBInput.value, 0, 255);
           torsoColorPick.value = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+          sendTorsoColor();
         });
       });
     }
 
-    $('#btnSetTorsoRGB')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '01'; // Torso light is channel 1
-      const r = parseInt($('#torsoR')?.value || '255', 10);
-      const g = parseInt($('#torsoG')?.value || '0', 10);
-      const b = parseInt($('#torsoB')?.value || '0', 10);
-      const rHex = r.toString(16).padStart(2, '0').toUpperCase();
-      const gHex = g.toString(16).padStart(2, '0').toUpperCase();
-      const bHex = b.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cluster, 8));
-      this.logger.log(`Set torso light color to RGB(${r}, ${g}, ${b})`);
-    });
-
-    // Head Light - Lighting mode
+    // Head Light - Effect mode (immediate)
     const headEffectMode = $('#headEffectMode');
     const headEffectSpeedBlock = $('#headEffectSpeedBlock');
 
     if (headEffectMode && headEffectSpeedBlock) {
-      headEffectMode.addEventListener('change', () => {
+      headEffectMode.addEventListener('change', async () => {
         const v = parseInt(headEffectMode.value, 10);
         headEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
+        
+        if (!this.ble.isConnected()) return;
+        const ch = '00'; // Head light is channel 0
+        const modeHex = v.toString(16).padStart(2, '0').toUpperCase();
+        const cluster = '00000000';
+        await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
+        this.logger.log(`Set head light mode to ${v} (1=Static, 2=Strobe, 3=Pulsing)`);
       });
     }
 
-    $('#btnSetHeadEffectMode')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '00'; // Head light is channel 0
-      const mode = parseInt($('#headEffectMode')?.value || '1', 10);
-      const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
-      this.logger.log(`Set head light mode to ${mode} (1=Static, 2=Strobe, 3=Pulsing)`);
-    });
-
-    // Torso Light - Lighting mode
+    // Torso Light - Effect mode (immediate)
     const torsoEffectMode = $('#torsoEffectMode');
     const torsoEffectSpeedBlock = $('#torsoEffectSpeedBlock');
 
     if (torsoEffectMode && torsoEffectSpeedBlock) {
-      torsoEffectMode.addEventListener('change', () => {
+      torsoEffectMode.addEventListener('change', async () => {
         const v = parseInt(torsoEffectMode.value, 10);
         torsoEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
+        
+        if (!this.ble.isConnected()) return;
+        const ch = '01'; // Torso light is channel 1
+        const modeHex = v.toString(16).padStart(2, '0').toUpperCase();
+        const cluster = '00000000';
+        await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
+        this.logger.log(`Set torso light mode to ${v} (1=Static, 2=Strobe, 3=Pulsing)`);
       });
     }
 
-    $('#btnSetTorsoEffectMode')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '01'; // Torso light is channel 1
-      const mode = parseInt($('#torsoEffectMode')?.value || '1', 10);
-      const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
-      this.logger.log(`Set torso light mode to ${mode} (1=Static, 2=Strobe, 3=Pulsing)`);
-    });
-
-    // Head Light - Speed control
+    // Head Light - Effect speed control (immediate)
     const headEffectSpeedRange = $('#headEffectSpeedRange');
     const headEffectSpeedNum = $('#headEffectSpeed');
 
-    if (headEffectSpeedRange && headEffectSpeedNum) {
-      headEffectSpeedRange.addEventListener('input', (e) => (headEffectSpeedNum.value = e.target.value));
-      headEffectSpeedNum.addEventListener('input', (e) => (headEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
-    }
-
-    $('#btnSetHeadEffectSpeed')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+    const sendHeadSpeed = async (value) => {
+      if (!this.ble.isConnected()) return;
       const ch = '00'; // Head light is channel 0
-      const speed = parseInt($('#headEffectSpeed')?.value || '0', 10);
+      const speed = parseInt(value, 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_SPEED, ch + speedHex + cluster, 8));
       this.logger.log(`Set head light speed to ${speed}`);
-    });
+    };
 
-    // Torso Light - Speed control
+    if (headEffectSpeedRange && headEffectSpeedNum) {
+      headEffectSpeedRange.addEventListener('input', (e) => {
+        headEffectSpeedNum.value = e.target.value;
+        sendHeadSpeed(e.target.value);
+      });
+      headEffectSpeedNum.addEventListener('input', (e) => {
+        const clamped = clamp(e.target.value, 0, 255);
+        headEffectSpeedRange.value = clamped;
+        sendHeadSpeed(clamped);
+      });
+    }
+
+    // Torso Light - Effect speed control (immediate)
     const torsoEffectSpeedRange = $('#torsoEffectSpeedRange');
     const torsoEffectSpeedNum = $('#torsoEffectSpeed');
 
-    if (torsoEffectSpeedRange && torsoEffectSpeedNum) {
-      torsoEffectSpeedRange.addEventListener('input', (e) => (torsoEffectSpeedNum.value = e.target.value));
-      torsoEffectSpeedNum.addEventListener('input', (e) => (torsoEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
-    }
-
-    $('#btnSetTorsoEffectSpeed')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+    const sendTorsoSpeed = async (value) => {
+      if (!this.ble.isConnected()) return;
       const ch = '01'; // Torso light is channel 1
-      const speed = parseInt($('#torsoEffectSpeed')?.value || '0', 10);
+      const speed = parseInt(value, 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
       await this.ble.send(buildCommand(COMMANDS.SET_SPEED, ch + speedHex + cluster, 8));
       this.logger.log(`Set torso light speed to ${speed}`);
-    });
+    };
+
+    if (torsoEffectSpeedRange && torsoEffectSpeedNum) {
+      torsoEffectSpeedRange.addEventListener('input', (e) => {
+        torsoEffectSpeedNum.value = e.target.value;
+        sendTorsoSpeed(e.target.value);
+      });
+      torsoEffectSpeedNum.addEventListener('input', (e) => {
+        const clamped = clamp(e.target.value, 0, 255);
+        torsoEffectSpeedRange.value = clamped;
+        sendTorsoSpeed(clamped);
+      });
+    }
 
     // Movement controls - toggle buttons with special "all" logic
     const liveMoveGrid = $('#liveMove');
@@ -678,27 +686,33 @@ class SkellyApp {
       });
     }
 
-    // Head Light - Color cycle button
-    $('#btnHeadColorCycle')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '00'; // Head light is channel 0
-      await this.ble.send(buildCommand(COMMANDS.COLOR_CYCLE, ch + '00000000', 8));
-      this.logger.log('Head light color cycle (all colors)');
-    });
+    // Head Light - Color cycle button (toggles cycle state)
+    const btnHeadColorCycle = $('#btnHeadColorCycle');
+    if (btnHeadColorCycle) {
+      btnHeadColorCycle.addEventListener('click', async () => {
+        if (!this.ble.isConnected()) {
+          this.logger.log('Not connected', LOG_CLASSES.WARNING);
+          return;
+        }
+        this.headColorCycleEnabled = !this.headColorCycleEnabled;
+        btnHeadColorCycle.classList.toggle('selected', this.headColorCycleEnabled);
+        await sendHeadColor();
+      });
+    }
 
-    // Torso Light - Color cycle button
-    $('#btnTorsoColorCycle')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.logger.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-      const ch = '01'; // Torso light is channel 1
-      await this.ble.send(buildCommand(COMMANDS.COLOR_CYCLE, ch + '00000000', 8));
-      this.logger.log('Torso light color cycle (all colors)');
-    });
+    // Torso Light - Color cycle button (toggles cycle state)
+    const btnTorsoColorCycle = $('#btnTorsoColorCycle');
+    if (btnTorsoColorCycle) {
+      btnTorsoColorCycle.addEventListener('click', async () => {
+        if (!this.ble.isConnected()) {
+          this.logger.log('Not connected', LOG_CLASSES.WARNING);
+          return;
+        }
+        this.torsoColorCycleEnabled = !this.torsoColorCycleEnabled;
+        btnTorsoColorCycle.classList.toggle('selected', this.torsoColorCycleEnabled);
+        await sendTorsoColor();
+      });
+    }
 
     // Appearance eye grid selection - send command immediately
     const apEyeGrid = $('#apEyeGrid');
