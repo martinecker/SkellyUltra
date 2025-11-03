@@ -114,6 +114,23 @@
       box-shadow:0 0 0 2px rgba(59,130,246,.08);
     }
 
+    /* Light group boxes */
+    .light-group {
+      border: 1px solid #28303a;
+      border-radius: 12px;
+      padding: 14px;
+      margin-top: 16px;
+      background: rgba(15, 19, 24, 0.5);
+    }
+    .light-group h3 {
+      margin: 0 0 12px 0;
+      font-size: 13px;
+      color: #22d3ee;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      font-weight: 600;
+    }
+
     /* Segmented control for color scope */
     .seg{display:inline-flex; gap:0}
     .seg-btn{
@@ -394,9 +411,9 @@
 
 
       <div class="spacer"></div>
-      <label>Lighting Type</label>
+      <label>Effect Mode</label>
       <div class="row">
-        <select id="edLightMode" aria-label="Lighting type">
+        <select id="edLightMode" aria-label="Effect mode">
           <option value="1">Static</option>
           <option value="2">Strobe</option>
           <option value="3">Pulsing</option>
@@ -648,60 +665,100 @@
           <button class="btn" id="apSetEye">Set Eye</button>
         </div>
       </div>
-      
-      <label>Target</label>
-      <select id="targetSelect" aria-label="Target channel"></select>
 
-      <div class="spacer"></div>
-      <div>
-        <label>Lighting Type</label>
+      <!-- Head Light Controls -->
+      <div class="light-group">
+        <h3>Head Light (Channel 0)</h3>
+        
+        <label>Brightness (0–255)</label>
         <div class="row">
-          <select id="lightMode" aria-label="Lighting type">
+          <input id="headBrightnessRange" type="range" min="0" max="255" value="200" />
+          <input id="headBrightness" type="number" min="0" max="255" value="200" />
+          <button class="btn" id="btnSetHeadBrightness">Set</button>
+        </div>
+
+        <label>Color</label>
+        <div class="row">
+          <input id="headColorPick" type="color" value="#ff0000" />
+          <input id="headR" type="number" min="0" max="255" value="255" />
+          <input id="headG" type="number" min="0" max="255" value="0" />
+          <input id="headB" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="btnSetHeadRGB">Set</button>
+        </div>
+
+        <label style="display:flex; align-items:center; gap:8px; margin:10px 0;">
+          <button class="iconToggle" id="btnHeadColorCycle" title="Cycle all colors">
+            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:32px;height:32px" />
+          </button>
+          <span class="small muted">Cycle Colors</span>
+        </label>
+
+        <label>Effect Mode</label>
+        <div class="row">
+          <select id="headLightMode" aria-label="Head effect mode">
             <option value="1">Static</option>
             <option value="2">Strobe</option>
             <option value="3">Pulsing</option>
           </select>
-          <button class="btn" id="btnSetMode">Apply Mode</button>
+          <button class="btn" id="btnSetHeadMode">Set</button>
+        </div>
+
+        <div id="headSpeedBlock" class="hidden">
+          <label>Effect Speed (0–255)</label>
+          <div class="row">
+            <input id="headSpeedRange" type="range" min="0" max="255" value="0" />
+            <input id="headSpeed" type="number" min="0" max="255" value="0" />
+            <button class="btn" id="btnSetHeadSpeed">Set</button>
+          </div>
         </div>
       </div>
 
-      <div class="spacer"></div>
-      <div id="speedBlock" class="hidden">
-        <label>Speed (0–255)</label>
-        <div class="row">
-          <input id="speedRange" type="range" min="0" max="255" value="0" />
-          <input id="speed" type="number" min="0" max="255" value="0" />
-          <button class="btn" id="btnSetSpeed">Set Speed</button>
-        </div>
-      </div>
-
-      <div class="spacer"></div>
-      <div>
+      <!-- Torso Light Controls -->
+      <div class="light-group">
+        <h3>Torso Light (Channel 1)</h3>
+        
         <label>Brightness (0–255)</label>
         <div class="row">
-          <input id="brightnessRange" type="range" min="0" max="255" value="200" />
-          <input id="brightness" type="number" min="0" max="255" value="200" />
-          <button class="btn" id="btnSetBrightness">Set Brightness</button>
+          <input id="torsoBrightnessRange" type="range" min="0" max="255" value="200" />
+          <input id="torsoBrightness" type="number" min="0" max="255" value="200" />
+          <button class="btn" id="btnSetTorsoBrightness">Set</button>
         </div>
-      </div>
 
-      <div class="spacer"></div>
-      <div>
         <label>Color</label>
         <div class="row">
-          <input id="colorPick" type="color" value="#ff0000" />
-          <input id="r" type="number" min="0" max="255" value="255" />
-          <input id="g" type="number" min="0" max="255" value="0" />
-          <input id="b" type="number" min="0" max="255" value="0" />
-          <button class="btn" id="btnSetRGB">Set Color</button>
+          <input id="torsoColorPick" type="color" value="#ff0000" />
+          <input id="torsoR" type="number" min="0" max="255" value="255" />
+          <input id="torsoG" type="number" min="0" max="255" value="0" />
+          <input id="torsoB" type="number" min="0" max="255" value="0" />
+          <button class="btn" id="btnSetTorsoRGB">Set</button>
         </div>
-        <!-- Cycle All Colors (LIVE) -->
-        <div class="actions" id="colorCycleLive">
-          <button class="iconToggle" id="btnColorCycleLive" title="Cycle all colors (All channels)">
-            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" />
+
+        <label style="display:flex; align-items:center; gap:8px; margin:10px 0;">
+          <button class="iconToggle" id="btnTorsoColorCycle" title="Cycle all colors">
+            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:32px;height:32px" />
           </button>
-          <span class="small muted">Cycles all colors on <strong>All channels</strong></span>
+          <span class="small muted">Cycle Colors</span>
+        </label>
+
+        <label>Effect Mode</label>
+        <div class="row">
+          <select id="torsoLightMode" aria-label="Torso effect mode">
+            <option value="1">Static</option>
+            <option value="2">Strobe</option>
+            <option value="3">Pulsing</option>
+          </select>
+          <button class="btn" id="btnSetTorsoMode">Set</button>
         </div>
+
+        <div id="torsoSpeedBlock" class="hidden">
+          <label>Effect Speed (0–255)</label>
+          <div class="row">
+            <input id="torsoSpeedRange" type="range" min="0" max="255" value="0" />
+            <input id="torsoSpeed" type="number" min="0" max="255" value="0" />
+            <button class="btn" id="btnSetTorsoSpeed">Set</button>
+          </div>
+        </div>
+      </div>
 
     </section>
 

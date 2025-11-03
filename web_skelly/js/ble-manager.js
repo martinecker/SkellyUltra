@@ -21,6 +21,9 @@ export class BLEManager {
     this.writeCharacteristic = null;
     this.notifyCharacteristic = null;
     
+    // Connection state
+    this.isConnecting = false;
+    
     // Notification handlers
     this.notificationHandlers = [];
     
@@ -52,6 +55,9 @@ export class BLEManager {
    */
   async connect(nameFilter = '') {
     try {
+      // Set connecting flag to prevent disconnect handler from clearing device during retries
+      this.isConnecting = true;
+      
       // Request device
       const options = nameFilter.trim()
         ? {
@@ -109,6 +115,9 @@ export class BLEManager {
 
           this.log('Connected and notifications started ✓', LOG_CLASSES.WARNING);
           
+          // Clear connecting flag on success
+          this.isConnecting = false;
+          
           return true;
         } catch (error) {
           lastError = error;
@@ -132,6 +141,21 @@ export class BLEManager {
       
     } catch (error) {
       this.log(`Connect error: ${error.message}`, LOG_CLASSES.WARNING);
+      
+      // Clear connecting flag on error
+      this.isConnecting = false;
+      
+      // Clean up on connection failure
+      if (this.device) {
+        this.device.removeEventListener('gattserverdisconnected', this.handleDisconnect);
+        this.device = null;
+      }
+      this.server = null;
+      this.service = null;
+      this.writeCharacteristic = null;
+      this.notifyCharacteristic = null;
+      this.state.setConnected(false);
+      
       throw error;
     }
   }
@@ -165,6 +189,13 @@ export class BLEManager {
    * Handle disconnect event
    */
   handleDisconnect() {
+    // If we're in the middle of connecting, don't clear the device reference
+    // as the retry logic needs it. Only log the disconnect.
+    if (this.isConnecting) {
+      this.log('Disconnected during connection attempt (will retry)', LOG_CLASSES.WARNING);
+      return;
+    }
+    
     this.log('Disconnected', LOG_CLASSES.WARNING);
     
     // Clear BLE objects
