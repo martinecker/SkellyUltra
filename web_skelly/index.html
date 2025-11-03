@@ -27,14 +27,14 @@
     .btn.cmd:hover::after { content: ' (' attr(data-code) ')'; color: var(--muted); }
 
 
-    /* ======= NEW 3-COLUMN LAYOUT ======= */
+    /* ======= 3-COLUMN LAYOUT ======= */
     .grid{
       display:grid;
-      grid-template-columns: var(--col-left) var(--col-mid) 1fr; /* left | wider middle | right */
+      grid-template-columns: var(--col-left) var(--col-mid) 1fr; /* left | middle | right */
       grid-template-areas:
-        "dev        media   log"
-        "appearance empty   files"
-        "appearance empty   status";
+        "appearance media   files"
+        "appearance empty   status"
+        "dev        empty   log";
       gap:10px;
       padding:20px;
 
@@ -136,8 +136,8 @@
 
     /* Disconnected state: dim + disable most cards except Device and Log */
     body.disconnected .grid .card { opacity:.6; pointer-events:none; }
-    body.disconnected .area-dev,
-    body.disconnected .area-log { opacity:1; pointer-events:auto; }
+    body.disconnected .area-dev.card,
+    body.disconnected .area-log.card { opacity:1; pointer-events:auto !important; }
     body.disconnected #status { color: var(--err); }
 
     /* Sliders */
@@ -467,7 +467,7 @@
   </div>
 
   <header>
-    <h1>🦴 Skelly BLE Controller</h1>
+    <h1>🦴 Ultra Skelly Web Controller</h1>
     <div class="topbar-right">
       <span id="status" class="pill">● <span>Disconnected</span></span>
       <button class="btn primary" id="btnConnect">Connect</button>
@@ -549,13 +549,8 @@
     <!-- MIDDLE COL: Media (top) -->
     <section class="card area-media">
       <h2>Media</h2>
-      <div class="actions">
-        <button class="btn" id="btnPlay">Play</button>
-        <button class="btn" id="btnPause">Pause</button>
-        <button class="btn" id="btnBT">Enable Classic BT (Live Mode)</button>
-      </div>
 
-      <!-- Volume (moved here) -->
+      <!-- Volume -->
       <div class="spacer"></div>
       <div>
         <label>Volume (0–100%)</label>
@@ -613,47 +608,52 @@
     </section>
 
     <!-- MIDDLE COL: Text to Speech (bottom) -->
-    <section class="card area-empty">
+    <section class="card area-empty" hidden>
       <h2>Misc Speech Addons</h2>
       <div class="subcard upcoming" aria-disabled="true">
-          <div class="subcard-head"><strong>Upcoming:</strong> Text To Speech
+        <div class="subcard-head"><strong>Upcoming:</strong> Text To Speech
         </div>
         <form id="ttsForm" onsubmit="return false;">
-        <label for="ttsText">Text</label>
-        <textarea id="ttsText" rows="5" placeholder="Type what Skelly should say..."></textarea>
-
-        <div class="actions">
-          <button class="btn primary" id="btnSendTTS">Send</button>
-        </div>
-
-        <div class="small muted">TODO: Add effects...</div>
-      </form>
-        </div>
-      
+          <label for="ttsText">Text</label>
+          <textarea id="ttsText" rows="5" placeholder="Type what Skelly should say..."></textarea>
+    
+          <div class="actions">
+            <button class="btn primary" id="btnSendTTS">Send</button>
+          </div>
+    
+          <div class="small muted">TODO: Add effects...</div>
+        </form>
+      </div>
+    
       <div class="spacer"></div>
-        <div class="subcard upcoming" aria-disabled="true">
-          <div class="subcard-head">
-            <strong>Upcoming:</strong> Record custom audio / forward device audio
-          </div>
-          <p class="small muted">
-            Capture mic audio or forward system audio directly to Skelly (work in progress).
-          </p>
-          <div class="row">
-            <button class="btn" disabled>Record from Microphone</button>
-            <button class="btn" disabled>Forward Device Audio</button>
-          </div>
+      <div class="subcard upcoming" aria-disabled="true">
+        <div class="subcard-head">
+          <strong>Upcoming:</strong> Record custom audio / forward device audio
         </div>
-
+        <p class="small muted">
+          Capture mic audio or forward system audio directly to Skelly (work in progress).
+        </p>
+        <div class="row">
+          <button class="btn" disabled>Record from Microphone</button>
+          <button class="btn" disabled>Forward Device Audio</button>
+        </div>
+      </div>
+    
     </section>
 
 
-    <!-- LEFT COL: Appearance (under Device) -->
+    <!-- LEFT COL: Live Mode -->
     <section class="card area-appearance">
-      <h2>Appearance (Live)</h2>
+      <h2>Live Mode</h2>
 
+      <div class="actions">
+        <button class="btn" id="btnBT">Enable Live Mode</button>
+      </div>
+
+      <div class="spacer"></div>
       <label>Target</label>
       <select id="targetSelect" aria-label="Target channel"></select>
-      <!-- Movement (Live) -->
+      <!-- Movement -->
       <div class="spacer"></div>
       <label>Movement</label>
       <div id="liveMove" class="move-grid">
@@ -737,45 +737,8 @@
       </div>
     </section>
 
-    <!-- RIGHT COL: Status, Log, Files -->
+    <!-- RIGHT COL: Status, Files, Log -->
     
-    <section class="card area-log">
-      <h2>Log</h2>
-      <div class="actions">
-        <button class="btn xs" id="btnClearLog">Clear</button>
-        <label class="small checkline">
-          <input type="checkbox" id="chkAutoscroll" checked /> Autoscroll
-        </label>
-      </div>
-      <div id="log" class="log" aria-live="polite"></div>
-      <div class="small muted">Notifications parsed for FEDC/BBE1/E5/E6/E0/CC/C0/C1/C2/C3/C4/C5/C6/C7/C8/D2/D1/D0.</div>
-    </section>
-
-    <section class="card area-files">
-      <h2>Files on Device</h2>
-      <div class="actions">
-        <button class="btn" id="btnRefreshFiles">Refresh List</button>
-        <span class="small muted" id="filesSummary">—</span>
-        <input id="filesFilter" placeholder="Filter by name…" style="max-width:200px" />
-      </div>
-      <div class="spacer"></div>
-      <div class="tablewrap">
-        <table id="filesTable">
-          <thead>
-            <tr>
-              <th>#</th>
-              <th>Cluster</th>
-              <th>Name</th>
-              <th>Attr</th>
-              <th>Eye</th>
-              <th>DB</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
     <section class="card area-status">
       <h2>Current Status</h2>
       <div class="row small" style="gap:12px; flex-wrap:wrap">
@@ -800,6 +763,44 @@
       </div>
     </section>
 
+    <section class="card area-files">
+      <h2>Files on Device</h2>
+      <div class="actions">
+        <button class="btn" id="btnRefreshFiles">Refresh List</button>
+        <span class="small muted" id="filesSummary">—</span>
+        <input id="filesFilter" placeholder="Filter by name…" style="max-width:200px" />
+      </div>
+      <div class="spacer"></div>
+      <div class="tablewrap">
+        <table id="filesTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Cluster</th>
+              <th>Name</th>
+              <th>Movement</th>
+              <th>Eye</th>
+              <th>DB Slot</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="card area-log">
+      <h2>Log</h2>
+      <div class="actions">
+        <button class="btn xs" id="btnClearLog">Clear</button>
+        <label class="small checkline">
+          <input type="checkbox" id="chkAutoscroll" checked /> Autoscroll
+        </label>
+      </div>
+      <div id="log" class="log" aria-live="polite"></div>
+      <div class="small muted">Notifications parsed for FEDC/BBE1/E5/E6/E0/CC/C0/C1/C2/C3/C4/C5/C6/C7/C8/D2/D1/D0.</div>
+    </section>
+
   </div>
 
   <footer>
@@ -811,6 +812,26 @@
   </footer>
 
   <!-- Load the app code -->
-  <script src="app.js"></script>
+  <!-- 
+    IMPORTANT: Choose ONE script option below:
+    
+    Option 1 (MODULAR - Best for development with web server):
+      - Use with: VS Code Live Server, http-server, localhost, or any web server
+      - Benefits: Clean modular code, easier to maintain and debug
+      - Does NOT work with file:// protocol (ES6 modules require web server)
+      - Files: app-modular.js + js/*.js modules
+      
+    Option 2 (BUNDLED - Modular code, works everywhere):
+      - Use with: file:// protocol (just open index.html) OR web server
+      - Benefits: Works without server, keeps modular code organization
+      - Build: Run build-bundle.bat to regenerate from modules
+      - File: app-bundled.js (auto-generated, do not edit directly)
+  -->
+  
+  <!-- Option 1: Modular version (requires web server) -->
+  <!-- <script type="module" src="app-modular.js"></script> -->
+  
+  <!-- Option 2: Bundled version (modular code, works with file://) -->
+  <script src="app-bundled.js"></script>
 </body>
 </html>
