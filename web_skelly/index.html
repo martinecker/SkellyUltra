@@ -524,17 +524,35 @@
         <label>Raw Command (hex after AA+TAG+payload[≤8B]+CRC8 auto)</label>
         <div class="row">
           <select id="tag">
-            <option value="E0">E0</option><option value="E1">E1</option><option value="E5">E5</option>
-            <option value="E6">E6</option><option value="EE">EE</option>
-            <option value="D0">D0</option><option value="D1">D1</option><option value="D2">D2</option>
-            <option value="FA">FA (Set Volume)</option><option value="FC">FC (Play/Pause)</option>
-            <option value="FD">FD</option><option value="FE">FE</option><option value="F2">F2</option>
-            <option value="F3">F3</option><option value="F4">F4</option><option value="F5">F5</option>
-            <option value="F6">F6</option><option value="F9">F9</option>
-            <option value="C0">C0</option><option value="C1">C1</option><option value="C2">C2</option>
-            <option value="C3">C3</option><option value="C4">C4</option><option value="C6">C6</option>
-            <option value="C7">C7</option><option value="C8">C8</option><option value="C9">C9</option>
-            <option value="CA">CA</option><option value="CB">CB</option><option value="CC">CC</option>
+            <option value="E0">E0 (Query Device Params)</option>
+            <option value="E1">E1 (Query Live Status)</option>
+            <option value="E5">E5 (Query Volume)</option>
+            <option value="E6">E6 (Query Classic BT Name)</option>
+            <option value="EE">EE</option>
+            <option value="D0">D0 (Query File List)</option>
+            <option value="D1">D1 (Query File Order)</option>
+            <option value="D2">D2 (Query Storage Capacity)</option>
+            <option value="FA">FA (Set Volume)</option>
+            <option value="FC">FC (Play/Pause)</option>
+            <option value="FD">FD (Enable Live Audio)</option>
+            <option value="FE">FE</option>
+            <option value="F2">F2 (Set Light Effect Mode)</option>
+            <option value="F3">F3 (Set Light Brightness)</option>
+            <option value="F4">F4 (Set Light RGB+Color Cycle)</option>
+            <option value="F5">F5</option>
+            <option value="F6">F6 (Set Light Effect Speed)</option>
+            <option value="F9">F9 (Set Eye Icon)</option>
+            <option value="C0">C0 (Start Data Transfer)</option>
+            <option value="C1">C1 (Send Data Chunk)</option>
+            <option value="C2">C2 (End Data Transfer)</option>
+            <option value="C3">C3 (Rename/Commit File Transfer)</option>
+            <option value="C4">C4 (Cancel Data Transfer)</option>
+            <option value="C6">C6 (Play/Pause File)</option>
+            <option value="C7">C7 (Delete File)</option>
+            <option value="C8">C8</option>
+            <option value="C9">C9</option>
+            <option value="CA">CA (Set Movement Action)</option>
+            <option value="CB">CB</option>
           </select>
           <input id="payload" placeholder="payload hex (optional)" />
         </div>

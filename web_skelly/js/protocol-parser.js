@@ -82,9 +82,9 @@ export class ProtocolParser {
       return;
     }
 
-    // MAC address (BBCC)
-    if (hex.startsWith(RESPONSES.MAC)) {
-      this.parseMac(hex);
+    // Enable Classic BT response (BBFD)
+    if (hex.startsWith(RESPONSES.ENABLE_CLASSIC_BT)) {
+      this.parseEnableClassicBT(hex);
       return;
     }
 
@@ -318,11 +318,11 @@ export class ProtocolParser {
   }
 
   /**
-   * Parse MAC address (BBCC)
+   * Parse Enable Classic BT response (BBFD)
    */
-  parseMac(hex) {
-    const mac = hex.slice(4, 16);
-    this.log(`Parsed Wi-Fi MAC: ${mac}`);
+  parseEnableClassicBT(hex) {
+    const status = hex.slice(4, 6);
+    this.log(`Parsed Enable Classic BT: ${status}`);
   }
 
   /**

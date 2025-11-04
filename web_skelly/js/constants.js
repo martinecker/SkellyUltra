@@ -82,7 +82,6 @@ export const COMMANDS = {
   QUERY_FILES: 'D0',       // Query file list
   QUERY_ORDER: 'D1',       // Query play order
   QUERY_CAPACITY: 'D2',    // Query storage capacity
-  QUERY_MAC: 'CC',         // Query MAC address
   
   // Media Controls
   SET_VOLUME: 'FA',        // Set volume (0-255)
@@ -91,9 +90,9 @@ export const COMMANDS = {
   MEDIA_BT: 'FD',          // Bluetooth audio (payload: 01)
   
   // Lighting
-  SET_MODE: 'F2',          // Set lighting mode (1=static, 2=strobe, 3=pulsing)
+  SET_MODE: 'F2',          // Set effect mode (1=static, 2=strobe, 3=pulsing)
   SET_BRIGHTNESS: 'F3',    // Set brightness (0-255)
-  SET_RGB: 'F4',           // Set RGB color (with optional loop for cycling)
+  SET_RGB: 'F4',           // Set RGB color (with optional loop for color cycling)
   SET_SPEED: 'F6',         // Set effect speed (for strobe/pulsing)
   
   // Appearance
@@ -103,26 +102,26 @@ export const COMMANDS = {
 
 // Response Prefixes
 export const RESPONSES = {
-  DEVICE_PARAMS: 'BBE0',   // Device parameters response
-  LIVE_STATUS: 'BBE1',     // Live status response
-  CAPACITY: 'BBD2',        // Capacity response
-  ORDER: 'BBD1',           // Play order response
-  FILE_INFO: 'BBD0',       // File info response
-  VOLUME: 'BBE5',          // Volume response
-  BT_NAME: 'BBE6',         // BT name response
-  MAC: 'BBCC',             // MAC address response
-  
-  TRANSFER_START: 'BBC0',  // Transfer start ACK
-  CHUNK_DROPPED: 'BBC1',   // Chunk dropped (resend request)
-  TRANSFER_END: 'BBC2',    // Transfer end ACK
-  RENAME_ACK: 'BBC3',      // Rename ACK
-  CANCEL_ACK: 'BBC4',      // Cancel ACK
-  RESUME_ACK: 'BBC5',      // Resume ACK
-  PLAY_ACK: 'BBC6',        // Play/pause ACK
-  DELETE_ACK: 'BBC7',      // Delete ACK
-  FORMAT_ACK: 'BBC8',      // Format ACK
-  
-  KEEPALIVE: 'FEDC',       // Keepalive packet
+  DEVICE_PARAMS: 'BBE0',     // Device parameters response
+  LIVE_STATUS: 'BBE1',       // Live status response
+  CAPACITY: 'BBD2',          // Capacity response
+  ORDER: 'BBD1',             // Play order response
+  FILE_INFO: 'BBD0',         // File info response
+  VOLUME: 'BBE5',            // Volume response
+  BT_NAME: 'BBE6',           // BT name response
+  ENABLE_CLASSIC_BT: 'BBFD', // Enable classic BT response
+
+  TRANSFER_START: 'BBC0',    // Transfer start ACK
+  CHUNK_DROPPED: 'BBC1',     // Chunk dropped (resend request)
+  TRANSFER_END: 'BBC2',      // Transfer end ACK
+  RENAME_ACK: 'BBC3',        // Rename ACK
+  CANCEL_ACK: 'BBC4',        // Cancel ACK
+  RESUME_ACK: 'BBC5',        // Resume ACK
+  PLAY_ACK: 'BBC6',          // Play/pause ACK
+  DELETE_ACK: 'BBC7',        // Delete ACK
+  FORMAT_ACK: 'BBC8',        // Format ACK
+
+  KEEPALIVE: 'FEDC',         // Keepalive packet
 };
 
 // Lighting Modes
