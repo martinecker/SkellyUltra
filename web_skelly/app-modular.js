@@ -195,22 +195,11 @@ class SkellyApp {
       });
     }
 
-    // Warning modal
     this.initializeWarningModal();
-
-    // Advanced menu
     this.initializeAdvancedMenu();
-
-    // Query buttons
     this.initializeQueryButtons();
-
-    // Media controls
     this.initializeMediaControls();
-
-    // File controls
     this.initializeFileControls();
-
-    // Appearance (Live) controls
     this.initializeAppearanceControls();
 
     // Check for Web Bluetooth support
@@ -386,10 +375,9 @@ class SkellyApp {
   }
 
   /**
-   * Initialize appearance (live) controls
+   * Initialize live controls
    */
   initializeAppearanceControls() {
-    // Build appearance eye grid
     this.selectedEye = 1; // Default eye selection
     this.buildAppearanceEyeGrid();
 
@@ -455,8 +443,18 @@ class SkellyApp {
     const headGInput = $('#headG');
     const headBInput = $('#headB');
 
-    const sendHeadColor = async () => {
+    const sendHeadColor = async (disableCycle = false) => {
       if (!this.ble.isConnected()) return;
+      
+      // If user is setting a new color (not from cycle button), disable cycle
+      if (disableCycle && this.headColorCycleEnabled) {
+        this.headColorCycleEnabled = false;
+        const btnHeadColorCycle = $('#btnHeadColorCycle');
+        if (btnHeadColorCycle) {
+          btnHeadColorCycle.classList.remove('selected');
+        }
+      }
+      
       const ch = '00'; // Head light is channel 0
       const r = parseInt(headRInput?.value || '255', 10);
       const g = parseInt(headGInput?.value || '0', 10);
@@ -466,7 +464,7 @@ class SkellyApp {
       const gHex = g.toString(16).padStart(2, '0').toUpperCase();
       const bHex = b.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster + '00', 9));
       this.logger.log(`Set head light color to RGB(${r}, ${g}, ${b}) with cycle ${this.headColorCycleEnabled ? 'ON' : 'OFF'}`);
     };
 
@@ -477,7 +475,7 @@ class SkellyApp {
         headRInput.value = parseInt(hex.substring(1, 3), 16);
         headGInput.value = parseInt(hex.substring(3, 5), 16);
         headBInput.value = parseInt(hex.substring(5, 7), 16);
-        sendHeadColor();
+        sendHeadColor(true); // Disable cycle when user picks a color
       });
 
       [headRInput, headGInput, headBInput].forEach((inp) => {
@@ -486,7 +484,7 @@ class SkellyApp {
           const g = clamp(headGInput.value, 0, 255);
           const b = clamp(headBInput.value, 0, 255);
           headColorPick.value = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-          sendHeadColor();
+          sendHeadColor(true); // Disable cycle when user changes RGB values
         });
       });
     }
@@ -497,8 +495,18 @@ class SkellyApp {
     const torsoGInput = $('#torsoG');
     const torsoBInput = $('#torsoB');
 
-    const sendTorsoColor = async () => {
+    const sendTorsoColor = async (disableCycle = false) => {
       if (!this.ble.isConnected()) return;
+      
+      // If user is setting a new color (not from cycle button), disable cycle
+      if (disableCycle && this.torsoColorCycleEnabled) {
+        this.torsoColorCycleEnabled = false;
+        const btnTorsoColorCycle = $('#btnTorsoColorCycle');
+        if (btnTorsoColorCycle) {
+          btnTorsoColorCycle.classList.remove('selected');
+        }
+      }
+      
       const ch = '01'; // Torso light is channel 1
       const r = parseInt(torsoRInput?.value || '255', 10);
       const g = parseInt(torsoGInput?.value || '0', 10);
@@ -508,7 +516,7 @@ class SkellyApp {
       const gHex = g.toString(16).padStart(2, '0').toUpperCase();
       const bHex = b.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
-      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster, 8));
+      await this.ble.send(buildCommand(COMMANDS.SET_RGB, ch + rHex + gHex + bHex + cycle + cluster + '00', 9));
       this.logger.log(`Set torso light color to RGB(${r}, ${g}, ${b}) with cycle ${this.torsoColorCycleEnabled ? 'ON' : 'OFF'}`);
     };
 
@@ -519,7 +527,7 @@ class SkellyApp {
         torsoRInput.value = parseInt(hex.substring(1, 3), 16);
         torsoGInput.value = parseInt(hex.substring(3, 5), 16);
         torsoBInput.value = parseInt(hex.substring(5, 7), 16);
-        sendTorsoColor();
+        sendTorsoColor(true); // Disable cycle when user picks a color
       });
 
       [torsoRInput, torsoGInput, torsoBInput].forEach((inp) => {
@@ -528,7 +536,7 @@ class SkellyApp {
           const g = clamp(torsoGInput.value, 0, 255);
           const b = clamp(torsoBInput.value, 0, 255);
           torsoColorPick.value = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-          sendTorsoColor();
+          sendTorsoColor(true); // Disable cycle when user changes RGB values
         });
       });
     }
@@ -546,7 +554,7 @@ class SkellyApp {
         const ch = '00'; // Head light is channel 0
         const modeHex = v.toString(16).padStart(2, '0').toUpperCase();
         const cluster = '00000000';
-        await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
+        await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 9));
         this.logger.log(`Set head light mode to ${v} (1=Static, 2=Strobe, 3=Pulsing)`);
       });
     }
@@ -714,7 +722,7 @@ class SkellyApp {
       });
     }
 
-    // Appearance eye grid selection - send command immediately
+    // Live eye grid selection - send command immediately
     const apEyeGrid = $('#apEyeGrid');
     if (apEyeGrid) {
       apEyeGrid.addEventListener('click', async (e) => {
@@ -1163,6 +1171,17 @@ class SkellyApp {
         const headHex = `#${headLight.r.toString(16).padStart(2, '0')}${headLight.g.toString(16).padStart(2, '0')}${headLight.b.toString(16).padStart(2, '0')}`;
         if ($('#headColorPick')) $('#headColorPick').value = headHex;
         
+        // Color cycle state
+        this.headColorCycleEnabled = (headLight.colorCycle === 1);
+        const headCycleBtn = $('#btnHeadColorCycle');
+        if (headCycleBtn) {
+          if (this.headColorCycleEnabled) {
+            headCycleBtn.classList.add('selected');
+          } else {
+            headCycleBtn.classList.remove('selected');
+          }
+        }
+        
         // Effect mode
         if ($('#headEffectMode')) $('#headEffectMode').value = headLight.effectMode;
         
@@ -1189,6 +1208,17 @@ class SkellyApp {
         if ($('#torsoB')) $('#torsoB').value = torsoLight.b;
         const torsoHex = `#${torsoLight.r.toString(16).padStart(2, '0')}${torsoLight.g.toString(16).padStart(2, '0')}${torsoLight.b.toString(16).padStart(2, '0')}`;
         if ($('#torsoColorPick')) $('#torsoColorPick').value = torsoHex;
+        
+        // Color cycle state
+        this.torsoColorCycleEnabled = (torsoLight.colorCycle === 1);
+        const torsoCycleBtn = $('#btnTorsoColorCycle');
+        if (torsoCycleBtn) {
+          if (this.torsoColorCycleEnabled) {
+            torsoCycleBtn.classList.add('selected');
+          } else {
+            torsoCycleBtn.classList.remove('selected');
+          }
+        }
         
         // Effect mode
         if ($('#torsoEffectMode')) $('#torsoEffectMode').value = torsoLight.effectMode;
