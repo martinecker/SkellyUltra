@@ -13,18 +13,13 @@ export const BLE_CONFIG = {
 // LocalStorage Keys
 export const STORAGE_KEYS = {
   RISK_ACK: 'skelly_ack_v2',
-  LONG_TRACK_ACK: 'skelly_long_track_ack',
-  SLOW_UPLOAD_ACK: 'skelly_slow_upload_ack',
   ADV_RAW: 'skelly_adv_raw',
   ADV_FEDC: 'skelly_adv_fedc',
-  ADV_EDIT: 'skelly_adv_edit',
 };
 
 // Protocol Padding Defaults (bytes)
 export const PADDING = {
   DEFAULT: 8,
-  QUERY: 8,
-  MEDIA: 8,
 };
 
 // File Transfer Configuration

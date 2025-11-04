@@ -261,12 +261,10 @@ class SkellyApp {
     const advMenu = $('#advMenu');
     const advRaw = $('#advRaw');
     const advFEDC = $('#advFEDC');
-    const advEdit = $('#advEdit');
 
     // Load saved state
     advRaw.checked = localStorage.getItem(STORAGE_KEYS.ADV_RAW) === '1';
     advFEDC.checked = localStorage.getItem(STORAGE_KEYS.ADV_FEDC) === '1';
-    advEdit.checked = localStorage.getItem(STORAGE_KEYS.ADV_EDIT) === '1';
 
     // Toggle menu
     $('#btnAdvanced')?.addEventListener('click', (e) => {
@@ -282,11 +280,10 @@ class SkellyApp {
     });
 
     // Save state on change
-    [advRaw, advFEDC, advEdit].forEach((el) => {
+    [advRaw, advFEDC].forEach((el) => {
       el?.addEventListener('change', () => {
         localStorage.setItem(STORAGE_KEYS.ADV_RAW, advRaw.checked ? '1' : '0');
         localStorage.setItem(STORAGE_KEYS.ADV_FEDC, advFEDC.checked ? '1' : '0');
-        localStorage.setItem(STORAGE_KEYS.ADV_EDIT, advEdit.checked ? '1' : '0');
         this.applyAdvancedVisibility();
       });
     });
@@ -844,7 +841,7 @@ class SkellyApp {
       if (btn.dataset.action === 'play') {
         this.handlePlayFile(serial);
       } else if (btn.dataset.action === 'edit') {
-        if (btn.disabled || !$('#advEdit')?.checked) return;
+        if (btn.disabled) return;
         this.handleEditFile(item);
       }
     });
@@ -1268,7 +1265,7 @@ class SkellyApp {
       .filter((file) => !query || (file.name || '').toLowerCase().includes(query))
       .sort((a, b) => a.serial - b.serial);
 
-    const canEdit = $('#advEdit')?.checked;
+    const canEdit = true; // Edit feature is now always enabled
 
     for (const file of files) {
       const tr = document.createElement('tr');
