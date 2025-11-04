@@ -259,7 +259,27 @@ export class ProtocolParser {
     const cluster = parseInt(hex.slice(8, 16), 16);
     const total = parseInt(hex.slice(16, 20), 16);
     const length = parseInt(hex.slice(20, 24), 16);
-    const attr = parseInt(hex.slice(24, 26), 16);
+    const action = parseInt(hex.slice(24, 26), 16);
+    
+    // Parse light data (6 channels, 7 bytes each = 84 hex chars)
+    const lightData = hex.slice(26, 110);
+    const lights = [];
+    for (let i = 0; i < 6; i++) {
+      const ch = lightData.slice(i * 14, (i + 1) * 14);
+      if (ch.length < 14) continue;
+
+      const light = {
+        effectMode: parseInt(ch.slice(0, 2), 16),
+        brightness: parseInt(ch.slice(2, 4), 16),
+        r: parseInt(ch.slice(4, 6), 16),
+        g: parseInt(ch.slice(6, 8), 16),
+        b: parseInt(ch.slice(8, 10), 16),
+        colorCycle: parseInt(ch.slice(10, 12), 16),
+        effectSpeed: parseInt(ch.slice(12, 14), 16),
+      };
+      lights.push(light);
+    }
+    
     const eyeIcon = parseInt(hex.slice(110, 112), 16);
     const dbPos = parseInt(hex.slice(112, 114), 16);
 
@@ -286,7 +306,8 @@ export class ProtocolParser {
       cluster,
       total,
       length,
-      attr,
+      action,
+      lights,
       eye: eyeIcon,
       db: dbPos,
       name,

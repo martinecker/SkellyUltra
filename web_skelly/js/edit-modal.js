@@ -435,21 +435,99 @@ export class EditModalManager {
     // Populate form fields
     if ($('#edSerial')) $('#edSerial').value = file.serial;
     if ($('#edCluster')) $('#edCluster').value = file.cluster;
-    if ($('#edAction')) $('#edAction').value = 255;
+    if ($('#edAction')) $('#edAction').value = file.action || 255;
     if ($('#edName')) $('#edName').value = file.name || '';
-    if ($('#edEffectMode')) $('#edEffectMode').value = '1';
-    if ($('#edEffectSpeed')) $('#edEffectSpeed').value = 0;
-    if ($('#edEffectSpeedRange')) $('#edEffectSpeedRange').value = 0;
-    $('#edEffectSpeedBlock')?.classList.add('hidden'); // Static by default
 
-    // Reset color to red
-    if ($('#edR')) $('#edR').value = 255;
-    if ($('#edG')) $('#edG').value = 0;
-    if ($('#edB')) $('#edB').value = 0;
-    if ($('#edColorPick')) $('#edColorPick').value = '#ff0000';
+    // Populate lighting data from file if available
+    const headLight = file.lights?.[0];
+    const torsoLight = file.lights?.[1];
 
-    // Clear movement selections
+    if (headLight) {
+      // Effect mode (use head light's mode)
+      if ($('#edEffectMode')) $('#edEffectMode').value = headLight.effectMode || 1;
+      
+      // Effect speed
+      if ($('#edEffectSpeed')) $('#edEffectSpeed').value = headLight.effectSpeed || 0;
+      if ($('#edEffectSpeedRange')) $('#edEffectSpeedRange').value = headLight.effectSpeed || 0;
+      $('#edEffectSpeedBlock')?.classList.toggle('hidden', headLight.effectMode === 1);
+
+      // Head color
+      if ($('#edHeadR')) $('#edHeadR').value = headLight.r;
+      if ($('#edHeadG')) $('#edHeadG').value = headLight.g;
+      if ($('#edHeadB')) $('#edHeadB').value = headLight.b;
+      const headHex = `#${headLight.r.toString(16).padStart(2, '0')}${headLight.g.toString(16).padStart(2, '0')}${headLight.b.toString(16).padStart(2, '0')}`;
+      if ($('#edHeadColorPick')) $('#edHeadColorPick').value = headHex;
+      
+      // Head color cycle
+      const edHeadColorCycle = $('#edHeadColorCycle');
+      if (edHeadColorCycle) {
+        if (headLight.colorCycle === 1) {
+          edHeadColorCycle.classList.add('selected');
+        } else {
+          edHeadColorCycle.classList.remove('selected');
+        }
+      }
+    } else {
+      // Defaults
+      if ($('#edEffectMode')) $('#edEffectMode').value = '1';
+      if ($('#edEffectSpeed')) $('#edEffectSpeed').value = 0;
+      if ($('#edEffectSpeedRange')) $('#edEffectSpeedRange').value = 0;
+      $('#edEffectSpeedBlock')?.classList.add('hidden');
+      
+      if ($('#edHeadR')) $('#edHeadR').value = 255;
+      if ($('#edHeadG')) $('#edHeadG').value = 0;
+      if ($('#edHeadB')) $('#edHeadB').value = 0;
+      if ($('#edHeadColorPick')) $('#edHeadColorPick').value = '#ff0000';
+      $('#edHeadColorCycle')?.classList.remove('selected');
+    }
+
+    if (torsoLight) {
+      // Torso color
+      if ($('#edTorsoR')) $('#edTorsoR').value = torsoLight.r;
+      if ($('#edTorsoG')) $('#edTorsoG').value = torsoLight.g;
+      if ($('#edTorsoB')) $('#edTorsoB').value = torsoLight.b;
+      const torsoHex = `#${torsoLight.r.toString(16).padStart(2, '0')}${torsoLight.g.toString(16).padStart(2, '0')}${torsoLight.b.toString(16).padStart(2, '0')}`;
+      if ($('#edTorsoColorPick')) $('#edTorsoColorPick').value = torsoHex;
+      
+      // Torso color cycle
+      const edTorsoColorCycle = $('#edTorsoColorCycle');
+      if (edTorsoColorCycle) {
+        if (torsoLight.colorCycle === 1) {
+          edTorsoColorCycle.classList.add('selected');
+        } else {
+          edTorsoColorCycle.classList.remove('selected');
+        }
+      }
+    } else {
+      // Defaults
+      if ($('#edTorsoR')) $('#edTorsoR').value = 0;
+      if ($('#edTorsoG')) $('#edTorsoG').value = 0;
+      if ($('#edTorsoB')) $('#edTorsoB').value = 255;
+      if ($('#edTorsoColorPick')) $('#edTorsoColorPick').value = '#0000ff';
+      $('#edTorsoColorCycle')?.classList.remove('selected');
+    }
+
+    // Populate movement from action field (bitfield: 0x01=head, 0x02=arm, 0x04=torso, 0xFF=all)
+    const actionBits = file.action || 0;
     $('#edMove')?.querySelectorAll('.iconToggle').forEach((btn) => btn.classList.remove('selected'));
+    
+    if (actionBits === 255 || actionBits === 0x07) {
+      const allBtn = $('#edMove')?.querySelector('[data-part="all"]');
+      if (allBtn) allBtn.classList.add('selected');
+    } else {
+      if (actionBits & 0x01) {
+        const headBtn = $('#edMove')?.querySelector('[data-part="head"]');
+        if (headBtn) headBtn.classList.add('selected');
+      }
+      if (actionBits & 0x02) {
+        const armBtn = $('#edMove')?.querySelector('[data-part="arm"]');
+        if (armBtn) armBtn.classList.add('selected');
+      }
+      if (actionBits & 0x04) {
+        const torsoBtn = $('#edMove')?.querySelector('[data-part="torso"]');
+        if (torsoBtn) torsoBtn.classList.add('selected');
+      }
+    }
 
     // Update eye grid selection
     if (this.eyeGrid) {

@@ -430,22 +430,29 @@
       </div>
 
     <div class="spacer"></div>
-    <label>Color (this file only)</label>
+    <label>Head Light Color (this file only)</label>
     <div class="row">
-      <input id="edColorPick" type="color" value="#ff0000" />
-      <input id="edR" type="number" min="0" max="255" value="255" />
-      <input id="edG" type="number" min="0" max="255" value="0" />
-      <input id="edB" type="number" min="0" max="255" value="0" />
-      <button class="btn" id="edApplyRGB">Set Color (F4)</button>
+      <input id="edHeadColorPick" type="color" value="#ff0000" />
+      <input id="edHeadR" type="number" min="0" max="255" value="255" />
+      <input id="edHeadG" type="number" min="0" max="255" value="0" />
+      <input id="edHeadB" type="number" min="0" max="255" value="0" />
+      <button class="iconToggle" id="edHeadColorCycle" title="Cycle all colors">
+        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
+      </button>
+      <button class="btn" id="edApplyHeadRGB">Set Head Color (F4)</button>
     </div>
 
     <div class="spacer"></div>
-    <label>Color presets</label>
-    <div class="actions">
-      <button class="iconToggle" id="edColorCycle" title="Cycle all colors (this file only)">
-        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" />
+    <label>Torso Light Color (this file only)</label>
+    <div class="row">
+      <input id="edTorsoColorPick" type="color" value="#0000ff" />
+      <input id="edTorsoR" type="number" min="0" max="255" value="0" />
+      <input id="edTorsoG" type="number" min="0" max="255" value="0" />
+      <input id="edTorsoB" type="number" min="0" max="255" value="255" />
+      <button class="iconToggle" id="edTorsoColorCycle" title="Cycle all colors">
+        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
       </button>
-      <span class="small muted">Cycles all colors for <strong>this file only</strong></span>
+      <button class="btn" id="edApplyTorsoRGB">Set Torso Color (F4)</button>
     </div>
 
 

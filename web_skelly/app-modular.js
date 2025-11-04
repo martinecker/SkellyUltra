@@ -1276,7 +1276,7 @@ class SkellyApp {
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
         <td>${escapeHtml(file.name || '')}</td>
-        <td>${file.attr}</td>
+        <td>${file.action}</td>
         <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
         <td>
