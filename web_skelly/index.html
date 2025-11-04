@@ -406,23 +406,6 @@
         </button>
       </div>
 
-      <div class="spacer"></div>
-      <label>Effect Mode</label>
-      <select id="edEffectMode" aria-label="Effect mode">
-        <option value="1">Static</option>
-        <option value="2">Strobe</option>
-        <option value="3">Pulsing</option>
-      </select>
-
-      <div class="spacer"></div>
-      <div id="edEffectSpeedBlock">
-        <label>Speed (0–255)</label>
-        <div class="row">
-          <input id="edEffectSpeedRange" type="range" min="0" max="255" value="0" />
-          <input id="edEffectSpeed" type="number" min="0" max="255" value="0" />
-        </div>
-      </div>
-
     <div class="spacer"></div>
     <label>Head Light Color</label>
     <div class="row">
@@ -435,6 +418,23 @@
       </button>
     </div>
 
+      <div class="spacer"></div>
+      <label>Head Light Effect Mode</label>
+      <select id="edHeadEffectMode" aria-label="Head effect mode">
+        <option value="1">Static</option>
+        <option value="2">Strobe</option>
+        <option value="3">Pulsing</option>
+      </select>
+
+      <div class="spacer"></div>
+      <div id="edHeadEffectSpeedBlock">
+        <label>Head Light Effect Speed (0–255)</label>
+        <div class="row">
+          <input id="edHeadEffectSpeedRange" type="range" min="0" max="255" value="0" />
+          <input id="edHeadEffectSpeed" type="number" min="0" max="255" value="0" />
+        </div>
+      </div>
+
     <div class="spacer"></div>
     <label>Torso Light Color</label>
     <div class="row">
@@ -445,6 +445,23 @@
       <button class="iconToggle" id="edTorsoColorCycle" title="Cycle all colors">
         <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
       </button>
+    </div>
+
+    <div class="spacer"></div>
+    <label>Torso Light Effect Mode</label>
+    <select id="edTorsoEffectMode" aria-label="Torso effect mode">
+      <option value="1">Static</option>
+      <option value="2">Strobe</option>
+      <option value="3">Pulsing</option>
+    </select>
+
+    <div class="spacer"></div>
+    <div id="edTorsoEffectSpeedBlock">
+      <label>Torso Light Effect Speed (0–255)</label>
+      <div class="row">
+        <input id="edTorsoEffectSpeedRange" type="range" min="0" max="255" value="0" />
+        <input id="edTorsoEffectSpeed" type="number" min="0" max="255" value="0" />
+      </div>
     </div>
 
       <div class="spacer"></div>
