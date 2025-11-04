@@ -200,7 +200,7 @@ class SkellyApp {
     this.initializeQueryButtons();
     this.initializeMediaControls();
     this.initializeFileControls();
-    this.initializeAppearanceControls();
+    this.initializeLiveControls();
 
     // Check for Web Bluetooth support
     if (!('bluetooth' in navigator)) {
@@ -377,9 +377,9 @@ class SkellyApp {
   /**
    * Initialize live controls
    */
-  initializeAppearanceControls() {
+  initializeLiveControls() {
     this.selectedEye = 1; // Default eye selection
-    this.buildAppearanceEyeGrid();
+    this.buildLiveEyeGrid();
 
     // Track color cycle state for each light
     this.headColorCycleEnabled = false;
@@ -1009,9 +1009,9 @@ class SkellyApp {
   }
 
   /**
-   * Build appearance eye grid
+   * Build live eye grid
    */
-  buildAppearanceEyeGrid() {
+  buildLiveEyeGrid() {
     const grid = $('#apEyeGrid');
     if (!grid) return;
     

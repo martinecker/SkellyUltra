@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T16:04:28.783540
+ * Generated: 2025-11-03T16:08:40.535740
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2672,7 +2672,7 @@ class SkellyApp {
     this.initializeQueryButtons();
     this.initializeMediaControls();
     this.initializeFileControls();
-    this.initializeAppearanceControls();
+    this.initializeLiveControls();
 
     // Check for Web Bluetooth support
     if (!('bluetooth' in navigator)) {
@@ -2849,9 +2849,9 @@ class SkellyApp {
   /**
    * Initialize live controls
    */
-  initializeAppearanceControls() {
+  initializeLiveControls() {
     this.selectedEye = 1; // Default eye selection
-    this.buildAppearanceEyeGrid();
+    this.buildLiveEyeGrid();
 
     // Track color cycle state for each light
     this.headColorCycleEnabled = false;
@@ -3481,9 +3481,9 @@ class SkellyApp {
   }
 
   /**
-   * Build appearance eye grid
+   * Build live eye grid
    */
-  buildAppearanceEyeGrid() {
+  buildLiveEyeGrid() {
     const grid = $('#apEyeGrid');
     if (!grid) return;
     
