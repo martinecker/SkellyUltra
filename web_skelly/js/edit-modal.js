@@ -20,7 +20,7 @@ export class EditModalManager {
     this.state = stateManager;
     this.fileManager = fileManager;
     this.audioConverter = audioConverter;
-    this.log = logger;
+    this.mainLogger = logger;
 
     // Current edit state
     this.currentFile = {
@@ -40,6 +40,7 @@ export class EditModalManager {
     // Get modal elements
     this.modal = $('#editModal');
     this.eyeGrid = $('#eyeGrid');
+    this.logElement = $('#edLog');
 
     if (!this.modal) {
       console.warn('Edit modal not found in DOM');
@@ -53,6 +54,26 @@ export class EditModalManager {
     this.initializeEyeGrid();
     this.initializeFileControls();
     this.initializeActionButtons();
+  }
+
+  /**
+   * Log to both main log and edit modal log
+   */
+  log(message, className = 'normal') {
+    // Log to main page
+    this.mainLogger(message, className);
+    
+    // Also log to edit modal if open
+    if (this.logElement) {
+      const div = document.createElement('div');
+      div.className = `line ${className}`;
+      const time = new Date().toLocaleTimeString();
+      div.textContent = `[${time}] ${message}`;
+      this.logElement.appendChild(div);
+      
+      // Auto-scroll to bottom
+      this.logElement.scrollTop = this.logElement.scrollHeight;
+    }
   }
 
   /**
@@ -590,6 +611,11 @@ export class EditModalManager {
         const eyeNum = parseInt(el.dataset.eye, 10);
         el.classList.toggle('selected', eyeNum === this.currentFile.eye);
       });
+    }
+
+    // Clear the log when opening
+    if (this.logElement) {
+      this.logElement.innerHTML = '';
     }
 
     // Show modal
