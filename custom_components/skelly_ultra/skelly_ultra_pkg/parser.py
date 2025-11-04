@@ -4,7 +4,7 @@ Pure parsing functions that convert BLE notification bytes into typed events.
 """
 
 from dataclasses import dataclass
-from typing import List, Optional, Any, Union
+from typing import Any
 import logging
 
 
@@ -21,7 +21,7 @@ class LightInfo:
 class LiveModeEvent:
     action: int
     eye_icon: int
-    lights: List[LightInfo]
+    lights: list[LightInfo]
 
 
 @dataclass
@@ -36,18 +36,13 @@ class LiveNameEvent:
 
 @dataclass
 class DeviceParamsEvent:
-    channels: List[
+    channels: list[
         int
     ]  # list of active channels, will have 6 entries, for Skelly Ultra channel 0 and 1 are used and so will be 1 in the array, all otehrs 0
     pin_code: str
     wifi_password: str
     show_mode: int  # 1 == show/demo mode is active, 0 == regular mode
     name: str  # BT classic name of the device, same as what LiveNameEvent returns
-
-
-@dataclass
-class WifiMacEvent:
-    mac: str
 
 
 @dataclass
@@ -98,7 +93,7 @@ class CapacityEvent:
 
 @dataclass
 class FileOrderEvent:
-    file_indices: List[int]
+    file_indices: list[int]
 
 
 @dataclass
@@ -111,7 +106,7 @@ class FileInfoEvent:
     eye_icon: int
     db_pos: int
     name: str
-    lights: List[LightInfo]
+    lights: list[LightInfo]
 
 
 @dataclass
@@ -135,30 +130,28 @@ def get_ascii(hexpart: str) -> str:
 
 def parse_notification(
     sender: Any, data: bytes
-) -> Optional[
-    Union[
-        LiveModeEvent,
-        VolumeEvent,
-        LiveNameEvent,
-        DeviceParamsEvent,
-        WifiMacEvent,
-        StartTransferEvent,
-        ChunkDroppedEvent,
-        TransferEndEvent,
-        ResumeWriteEvent,
-        PlaybackEvent,
-        DeleteFileEvent,
-        FormatEvent,
-        CapacityEvent,
-        FileOrderEvent,
-        FileInfoEvent,
-    ]
-]:
+) -> (
+    LiveModeEvent
+    | VolumeEvent
+    | LiveNameEvent
+    | DeviceParamsEvent
+    | StartTransferEvent
+    | ChunkDroppedEvent
+    | TransferEndEvent
+    | ResumeWriteEvent
+    | PlaybackEvent
+    | DeleteFileEvent
+    | FormatEvent
+    | CapacityEvent
+    | FileOrderEvent
+    | FileInfoEvent
+    | None
+):
     hexstr = data.hex().upper()
 
     if hexstr.startswith("BBE1"):
         action = int(hexstr[4:6], 16)
-        lights: List[LightInfo] = []
+        lights: list[LightInfo] = []
         light_data = hexstr[6:90]
         for i in range(6):
             chunk = light_data[i * 14 : (i + 1) * 14]
@@ -215,10 +208,6 @@ def parse_notification(
     if hexstr.startswith("BBFD"):
         status = int(hexstr[4:6])
         return EnableClassicBTEvent(status=status)
-
-    if hexstr.startswith("BBCC"):
-        mac = hexstr[4:16]
-        return WifiMacEvent(mac=mac)
 
     if hexstr.startswith("BBC0"):
         failed = int(hexstr[4:6], 16)
@@ -286,7 +275,7 @@ def parse_notification(
         length = int(hexstr[20:24], 16)
         action = int(hexstr[24:26], 16)
         light_data = hexstr[26:110]
-        lights: List[LightInfo] = []
+        lights: list[LightInfo] = []
         for i in range(6):
             chunk = light_data[i * 14 : (i + 1) * 14]
             if len(chunk) == 14:
