@@ -95,8 +95,8 @@
 
     /* Menus & modals */
     .hidden { display:none !important; }
-    .modal { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:9999; }
-    .modal-panel { width:min(720px, 92vw); background:#1b0d0d; border:2px solid #7f1d1d; color:#fecaca; border-radius:16px; padding:22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); }
+    .modal { position:fixed; inset:0; background:rgba(0,0,0,.75); display:flex; align-items:center; justify-content:center; z-index:9999; padding: 20px; }
+    .modal-panel { width:min(720px, 92vw); max-height:calc(100vh - 40px); background:#1b0d0d; border:2px solid #7f1d1d; color:#fecaca; border-radius:16px; padding:22px; box-shadow: 0 20px 60px rgba(0,0,0,.5); overflow-y:auto; }
     .modal-panel h3 { margin:0 0 8px; font-size:22px; color:#fecaca; }
     .modal-panel p { margin:8px 0; line-height:1.5; }
     .modal-actions { display:flex; gap:10px; margin-top:16px; justify-content:flex-end; }
@@ -369,16 +369,16 @@
     <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
       <h3 id="editTitle">Edit File</h3>
       
-      <label>File name</label>
-      <input id="edName" placeholder="example.mp3" readonly>
-      
-      <div class="spacer"></div>
       <div class="row">
-        <div>
+        <div style="flex:2">
+          <label>File name</label>
+          <input id="edName" placeholder="example.mp3" readonly>
+        </div>
+        <div style="flex:1">
           <label>Serial #</label>
           <input id="edSerial" disabled>
         </div>
-        <div>
+        <div style="flex:1">
           <label>Cluster</label>
           <input id="edCluster" type="number" min="0" step="1" readonly>
         </div>
@@ -407,60 +407,86 @@
       </div>
 
     <div class="spacer"></div>
-    <label>Head Light Color</label>
+    <label>Lights</label>
     <div class="row">
-      <input id="edHeadColorPick" type="color" value="#ff0000" />
-      <input id="edHeadR" type="number" min="0" max="255" value="255" />
-      <input id="edHeadG" type="number" min="0" max="255" value="0" />
-      <input id="edHeadB" type="number" min="0" max="255" value="0" />
-      <button class="iconToggle" id="edHeadColorCycle" title="Cycle all colors">
-        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
-      </button>
-    </div>
-
-      <div class="spacer"></div>
-      <label>Head Light Effect Mode</label>
-      <select id="edHeadEffectMode" aria-label="Head effect mode">
-        <option value="1">Static</option>
-        <option value="2">Strobe</option>
-        <option value="3">Pulsing</option>
-      </select>
-
-      <div class="spacer"></div>
-      <div id="edHeadEffectSpeedBlock">
-        <label>Head Light Effect Speed (0–255)</label>
+      <!-- Head Light Group -->
+      <div class="light-group" style="flex:1; margin-top:0">
+        <h3>Head Light</h3>
+        
+        <label>Brightness (0–255)</label>
         <div class="row">
-          <input id="edHeadEffectSpeedRange" type="range" min="0" max="255" value="0" />
-          <input id="edHeadEffectSpeed" type="number" min="0" max="255" value="0" />
+          <input id="edHeadBrightnessRange" type="range" min="0" max="255" value="200" />
+          <input id="edHeadBrightness" type="number" min="0" max="255" value="200" />
+        </div>
+
+        <div class="spacer"></div>
+        <label>Color</label>
+        <div class="row">
+          <input id="edHeadColorPick" type="color" value="#ff0000" />
+          <input id="edHeadR" type="number" min="0" max="255" value="255" />
+          <input id="edHeadG" type="number" min="0" max="255" value="0" />
+          <input id="edHeadB" type="number" min="0" max="255" value="0" />
+          <button class="iconToggle" id="edHeadColorCycle" title="Cycle all colors">
+            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
+          </button>
+        </div>
+
+        <div class="spacer"></div>
+        <label>Effect Mode</label>
+        <select id="edHeadEffectMode" aria-label="Head effect mode">
+          <option value="1">Static</option>
+          <option value="2">Strobe</option>
+          <option value="3">Pulsing</option>
+        </select>
+
+        <div class="spacer"></div>
+        <div id="edHeadEffectSpeedBlock">
+          <label>Effect Speed (0–255)</label>
+          <div class="row">
+            <input id="edHeadEffectSpeedRange" type="range" min="0" max="255" value="0" />
+            <input id="edHeadEffectSpeed" type="number" min="0" max="255" value="0" />
+          </div>
         </div>
       </div>
 
-    <div class="spacer"></div>
-    <label>Torso Light Color</label>
-    <div class="row">
-      <input id="edTorsoColorPick" type="color" value="#0000ff" />
-      <input id="edTorsoR" type="number" min="0" max="255" value="0" />
-      <input id="edTorsoG" type="number" min="0" max="255" value="0" />
-      <input id="edTorsoB" type="number" min="0" max="255" value="255" />
-      <button class="iconToggle" id="edTorsoColorCycle" title="Cycle all colors">
-        <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
-      </button>
-    </div>
+      <!-- Torso Light Group -->
+      <div class="light-group" style="flex:1; margin-top:0">
+        <h3>Torso Light</h3>
+        
+        <label>Brightness (0–255)</label>
+        <div class="row">
+          <input id="edTorsoBrightnessRange" type="range" min="0" max="255" value="200" />
+          <input id="edTorsoBrightness" type="number" min="0" max="255" value="200" />
+        </div>
 
-    <div class="spacer"></div>
-    <label>Torso Light Effect Mode</label>
-    <select id="edTorsoEffectMode" aria-label="Torso effect mode">
-      <option value="1">Static</option>
-      <option value="2">Strobe</option>
-      <option value="3">Pulsing</option>
-    </select>
+        <div class="spacer"></div>
+        <label>Color</label>
+        <div class="row">
+          <input id="edTorsoColorPick" type="color" value="#0000ff" />
+          <input id="edTorsoR" type="number" min="0" max="255" value="0" />
+          <input id="edTorsoG" type="number" min="0" max="255" value="0" />
+          <input id="edTorsoB" type="number" min="0" max="255" value="255" />
+          <button class="iconToggle" id="edTorsoColorCycle" title="Cycle all colors">
+            <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
+          </button>
+        </div>
 
-    <div class="spacer"></div>
-    <div id="edTorsoEffectSpeedBlock">
-      <label>Torso Light Effect Speed (0–255)</label>
-      <div class="row">
-        <input id="edTorsoEffectSpeedRange" type="range" min="0" max="255" value="0" />
-        <input id="edTorsoEffectSpeed" type="number" min="0" max="255" value="0" />
+        <div class="spacer"></div>
+        <label>Effect Mode</label>
+        <select id="edTorsoEffectMode" aria-label="Torso effect mode">
+          <option value="1">Static</option>
+          <option value="2">Strobe</option>
+          <option value="3">Pulsing</option>
+        </select>
+
+        <div class="spacer"></div>
+        <div id="edTorsoEffectSpeedBlock">
+          <label>Effect Speed (0–255)</label>
+          <div class="row">
+            <input id="edTorsoEffectSpeedRange" type="range" min="0" max="255" value="0" />
+            <input id="edTorsoEffectSpeed" type="number" min="0" max="255" value="0" />
+          </div>
+        </div>
       </div>
     </div>
 
