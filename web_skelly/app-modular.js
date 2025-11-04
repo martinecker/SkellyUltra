@@ -6,7 +6,7 @@
  * The full UI controller implementation would be much larger.
  */
 
-import { STORAGE_KEYS, LOG_CLASSES, COMMANDS } from './js/constants.js';
+import { STORAGE_KEYS, LOG_CLASSES, COMMANDS, MOVEMENT_BITS } from './js/constants.js';
 import { buildCommand, clamp, escapeHtml, normalizeDeviceName } from './js/protocol.js';
 import { StateManager } from './js/state-manager.js';
 import { BLEManager } from './js/ble-manager.js';
@@ -1272,11 +1272,31 @@ class SkellyApp {
     for (const file of files) {
       const tr = document.createElement('tr');
       const eyeImgIdx = file.eye;
+      
+      // Generate movement icons based on action bitfield
+      let movementIcons = '';
+      const actionBits = file.action || 0;
+      if (actionBits === MOVEMENT_BITS.ALL_ON || actionBits === (MOVEMENT_BITS.HEAD | MOVEMENT_BITS.ARM | MOVEMENT_BITS.TORSO)) {
+        // All movements
+        movementIcons = '<img class="eye-thumb" src="images/icon_action1_se.png" alt="All" title="All movements" />';
+      } else {
+        // Individual movements
+        if (actionBits & MOVEMENT_BITS.HEAD) {
+          movementIcons += '<img class="eye-thumb" src="images/icon_action2_se.png" alt="Head" title="Head movement" />';
+        }
+        if (actionBits & MOVEMENT_BITS.ARM) {
+          movementIcons += '<img class="eye-thumb" src="images/icon_action3_se.png" alt="Arm" title="Arm movement" />';
+        }
+        if (actionBits & MOVEMENT_BITS.TORSO) {
+          movementIcons += '<img class="eye-thumb" src="images/icon_action4_se.png" alt="Torso" title="Torso movement" />';
+        }
+      }
+      
       tr.innerHTML = `
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
         <td>${escapeHtml(file.name || '')}</td>
-        <td>${file.action}</td>
+        <td>${movementIcons}</td>
         <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
         <td>
