@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-04T13:19:32.952223
+ * Generated: 2025-11-04T13:23:37.370957
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2067,6 +2067,9 @@ class EditModalManager {
     this.modal = $('#editModal');
     this.eyeGrid = $('#eyeGrid');
     this.logElement = $('#edLog');
+    this.progText = $('#edProgText');
+    this.progPct = $('#edProgPct');
+    this.progBar = $('#edProgBar');
 
     if (!this.modal) {
       console.warn('Edit modal not found in DOM');
@@ -2080,6 +2083,16 @@ class EditModalManager {
     this.initializeEyeGrid();
     this.initializeFileControls();
     this.initializeActionButtons();
+  }
+
+  /**
+   * Update edit modal progress bar
+   */
+  setProgress(current, total) {
+    const pct = total ? Math.round((current / total) * 100) : 0;
+    if (this.progText) this.progText.textContent = `${current} / ${total}`;
+    if (this.progPct) this.progPct.textContent = `${pct}%`;
+    if (this.progBar) this.progBar.style.width = `${pct}%`;
   }
 
   /**
@@ -2477,8 +2490,6 @@ class EditModalManager {
     if (!confirm(`Replace "${fileName}" with the selected file? This cannot be undone.`)) {
       return;
     }
-
-    const edUploadProg = $('#edUploadProg');
     
     try {
       let bytes;
@@ -2488,7 +2499,6 @@ class EditModalManager {
       if (shouldConvert) {
         const kbps = parseInt($('#edMp3Kbps')?.value || '32', 10);
         this.log(`Converting to MP3 8 kHz mono (${kbps} kbps)…`);
-        if (edUploadProg) edUploadProg.textContent = 'Converting...';
         
         const result = await this.audioConverter.convertToDeviceMp3(file, kbps);
         bytes = result.u8;
@@ -2500,14 +2510,23 @@ class EditModalManager {
         bytes = new Uint8Array(arrayBuffer);
       }
 
-      // Upload via FileManager - MUST use exact same filename as before
-      if (edUploadProg) edUploadProg.textContent = 'Uploading...';
-      this.log(`Uploading ${fileName} (${(bytes.length / 1024).toFixed(1)} KB)...`);
+      // Temporarily override FileManager's progress callback to use edit modal's progress bar
+      const originalProgressCallback = this.fileManager.onProgress;
+      this.fileManager.onProgress = (current, total) => this.setProgress(current, total);
       
-      await this.fileManager.uploadFile(bytes, fileName);
-      
-      this.log(`File "${fileName}" uploaded successfully ✓`, LOG_CLASSES.SUCCESS);
-      if (edUploadProg) edUploadProg.textContent = 'Upload complete';
+      try {
+        // Upload via FileManager - MUST use exact same filename as before
+        this.log(`Uploading ${fileName} (${(bytes.length / 1024).toFixed(1)} KB)...`);
+        this.setProgress(0, 0); // Reset progress bar
+        
+        await this.fileManager.uploadFile(bytes, fileName);
+        
+        this.log(`File "${fileName}" uploaded successfully ✓`, LOG_CLASSES.SUCCESS);
+        
+      } finally {
+        // Restore original progress callback
+        this.fileManager.onProgress = originalProgressCallback;
+      }
       
       // Clear the file input
       if (edUploadFile) edUploadFile.value = '';
@@ -2519,7 +2538,6 @@ class EditModalManager {
       
     } catch (error) {
       this.log(`Upload failed: ${error.message}`, LOG_CLASSES.WARNING);
-      if (edUploadProg) edUploadProg.textContent = `Error: ${error.message}`;
     }
   }
 
@@ -2643,6 +2661,9 @@ class EditModalManager {
     if (this.logElement) {
       this.logElement.innerHTML = '';
     }
+
+    // Reset progress bar
+    this.setProgress(0, 0);
 
     // Show modal
     this.modal?.classList.remove('hidden');
