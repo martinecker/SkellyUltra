@@ -378,16 +378,11 @@
           <input id="edCluster" type="number" min="0" step="1">
         </div>
       </div>
-      <div class="row">
-        <div>
-          <label>Action (0–255)</label>
-          <input id="edAction" type="number" min="0" max="255" value="255">
-        </div>
-        <div>
-          <label style="margin-top:12px">Eye Icon</label>
-          <div id="eyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
-        </div>
-      </div>
+      
+      <div class="spacer"></div>
+      <label>Eye Icon</label>
+      <div id="eyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
+      
       <!-- Movement (Per-file) -->
       <div class="spacer"></div>
       <label>Movement</label>
@@ -405,19 +400,14 @@
           <img src="images/icon_action4_se.png" alt="Torso" />
         </button>
       </div>
-      <button class="btn" id="applyEdMove">Apply Movement</button>
-
 
       <div class="spacer"></div>
       <label>Effect Mode</label>
-      <div class="row">
-        <select id="edEffectMode" aria-label="Effect mode">
-          <option value="1">Static</option>
-          <option value="2">Strobe</option>
-          <option value="3">Pulsing</option>
-        </select>
-        <button class="btn" id="edApplyEffectMode">Apply Mode (F2)</button>
-      </div>
+      <select id="edEffectMode" aria-label="Effect mode">
+        <option value="1">Static</option>
+        <option value="2">Strobe</option>
+        <option value="3">Pulsing</option>
+      </select>
 
       <div class="spacer"></div>
       <div id="edEffectSpeedBlock">
@@ -425,12 +415,11 @@
         <div class="row">
           <input id="edEffectSpeedRange" type="range" min="0" max="255" value="0" />
           <input id="edEffectSpeed" type="number" min="0" max="255" value="0" />
-          <button class="btn" id="edApplyEffectSpeed">Set Speed (F6)</button>
         </div>
       </div>
 
     <div class="spacer"></div>
-    <label>Head Light Color (this file only)</label>
+    <label>Head Light Color</label>
     <div class="row">
       <input id="edHeadColorPick" type="color" value="#ff0000" />
       <input id="edHeadR" type="number" min="0" max="255" value="255" />
@@ -439,11 +428,10 @@
       <button class="iconToggle" id="edHeadColorCycle" title="Cycle all colors">
         <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
       </button>
-      <button class="btn" id="edApplyHeadRGB">Set Head Color (F4)</button>
     </div>
 
     <div class="spacer"></div>
-    <label>Torso Light Color (this file only)</label>
+    <label>Torso Light Color</label>
     <div class="row">
       <input id="edTorsoColorPick" type="color" value="#0000ff" />
       <input id="edTorsoR" type="number" min="0" max="255" value="0" />
@@ -452,7 +440,6 @@
       <button class="iconToggle" id="edTorsoColorCycle" title="Cycle all colors">
         <img src="images/icon_light_cycle_no.png" alt="Cycle colors" style="width:24px;height:24px" />
       </button>
-      <button class="btn" id="edApplyTorsoRGB">Set Torso Color (F4)</button>
     </div>
 
 
@@ -479,10 +466,12 @@
         <button class="btn primary" id="edUploadBtn">Upload & Replace</button>
         <span class="small muted" id="edUploadProg">No upload</span>
       </div>
+      
+      <div class="spacer"></div>
+      
       <div class="modal-actions">
         <button id="edDelete" class="btn danger">Delete (C7)</button>
-        <button id="edApplyEye" class="btn">Set Eye (F9)</button>
-        <button id="edApplyAnim" class="btn primary">Set Animation (CA)</button>
+        <button id="edApplyAll" class="btn primary">Apply All Settings</button>
         <button id="edClose" class="btn">Close</button>
       </div>
     </div>

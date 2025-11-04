@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T17:50:32.626977
+ * Generated: 2025-11-03T18:12:34.465414
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -122,7 +122,6 @@ const COMMANDS = {
   SET_BRIGHTNESS: 'F3',    // Set brightness (0-255)
   SET_RGB: 'F4',           // Set RGB color (with optional loop for cycling)
   SET_SPEED: 'F6',         // Set effect speed (for strobe/pulsing)
-  COLOR_CYCLE: 'F7',       // Cycle all colors
   
   // Appearance
   SET_EYE: 'F9',           // Set eye icon
@@ -2102,94 +2101,38 @@ class EditModalManager {
       edEffectSpeedRange.addEventListener('input', (e) => (edEffectSpeedNum.value = e.target.value));
       edEffectSpeedNum.addEventListener('input', (e) => (edEffectSpeedRange.value = clamp(e.target.value, 0, 255)));
     }
-
-    // Apply effect mode for this specific file (F2)
-    $('#edApplyEffectMode')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-
-      const mode = parseInt($('#edEffectMode')?.value || '1', 10);
-      const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
-      const name = ($('#edName')?.value || '').trim();
-
-      // Per-file: channel FF (all) + cluster + filename
-      let payload = 'FF' + modeHex + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
-
-      await this.ble.send(buildCommand('F2', payload, 8));
-      this.log(`Set Effect Mode (F2) for file "${name || '(no name)'}" mode=${mode} cluster=${cluster}`);
-    });
-
-    // Apply SPEED for this specific file (F6)
-    $('#edApplyEffectSpeed')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-
-      const speed = clamp($('#edEffectSpeed')?.value || 0, 0, 255);
-      const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
-      const name = ($('#edName')?.value || '').trim();
-
-      let payload = 'FF' + speedHex + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
-
-      await this.ble.send(buildCommand('F6', payload, 8));
-      this.log(`Set Effect Speed (F6) for file "${name || '(no name)'}" speed=${speed} cluster=${cluster}`);
-    });
   }
 
   /**
    * Initialize movement controls
    */
   initializeMovementControls() {
-    // Movement button handler is already initialized globally by iconToggle in app-modular.js
-    // Apply button
-    $('#applyEdMove')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
+    const edMoveGrid = $('#edMove');
+    if (!edMoveGrid) return;
+
+    const allBtn = edMoveGrid.querySelector('[data-part="all"]');
+    const partBtns = edMoveGrid.querySelectorAll('[data-part="head"], [data-part="arm"], [data-part="torso"]');
+    
+    // "All" button handler
+    allBtn?.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      allBtn.classList.toggle('selected');
+      // If "all" is now selected, uncheck the other three
+      if (allBtn.classList.contains('selected')) {
+        partBtns.forEach((btn) => btn.classList.remove('selected'));
       }
-
-      const grid = $('#edMove');
-      if (!grid) return;
-
-      const toggles = grid.querySelectorAll('.iconToggle.selected');
-      const parts = Array.from(toggles).map((btn) => btn.getAttribute('data-part'));
-
-      if (parts.length === 0) {
-        this.log('No movement selected', LOG_CLASSES.WARNING);
-        return;
-      }
-
-      // Map parts to hex
-      const partMap = { all: '00', head: '01', arm: '02', torso: '03' };
-      const hexParts = parts.map((p) => partMap[p] || '00');
-
-      // Send F0 command for each part
-      for (const partHex of hexParts) {
-        await this.ble.send(buildCommand('F0', partHex + '00000000', 8));
-      }
-
-      this.log(`Applied movement: ${parts.join(', ')}`);
+    });
+    
+    // Head/Arm/Torso button handlers
+    partBtns.forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        btn.classList.toggle('selected');
+        // If any part button is clicked, uncheck "all"
+        allBtn?.classList.remove('selected');
+      });
     });
   }
 
@@ -2197,88 +2140,75 @@ class EditModalManager {
    * Initialize color/RGB controls
    */
   initializeColorControls() {
-    const edColorPick = $('#edColorPick');
-    const edR = $('#edR');
-    const edG = $('#edG');
-    const edB = $('#edB');
+    // Head color sync
+    const edHeadColorPick = $('#edHeadColorPick');
+    const edHeadR = $('#edHeadR');
+    const edHeadG = $('#edHeadG');
+    const edHeadB = $('#edHeadB');
 
-    // Sync RGB inputs to color picker
-    [edR, edG, edB].forEach((inp) => {
+    // Sync Head RGB inputs to color picker
+    [edHeadR, edHeadG, edHeadB].forEach((inp) => {
       inp?.addEventListener('input', () => {
-        const r = clamp(edR.value, 0, 255);
-        const g = clamp(edG.value, 0, 255);
-        const b = clamp(edB.value, 0, 255);
+        const r = clamp(edHeadR.value, 0, 255);
+        const g = clamp(edHeadG.value, 0, 255);
+        const b = clamp(edHeadB.value, 0, 255);
         const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-        if (edColorPick && edColorPick.value !== hex) {
-          edColorPick.value = hex;
+        if (edHeadColorPick && edHeadColorPick.value !== hex) {
+          edHeadColorPick.value = hex;
         }
       });
     });
 
-    // Sync color picker to RGB inputs
-    edColorPick?.addEventListener('input', () => {
-      const v = edColorPick.value.replace('#', '');
+    // Sync Head color picker to RGB inputs
+    edHeadColorPick?.addEventListener('input', () => {
+      const v = edHeadColorPick.value.replace('#', '');
       if (v.length === 6) {
-        edR.value = parseInt(v.slice(0, 2), 16);
-        edG.value = parseInt(v.slice(2, 4), 16);
-        edB.value = parseInt(v.slice(4, 6), 16);
+        edHeadR.value = parseInt(v.slice(0, 2), 16);
+        edHeadG.value = parseInt(v.slice(2, 4), 16);
+        edHeadB.value = parseInt(v.slice(4, 6), 16);
       }
     });
 
-    // Apply per-file color (F4)
-    $('#edApplyRGB')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
-
-      const r = clamp(edR?.value || 255, 0, 255);
-      const g = clamp(edG?.value || 0, 0, 255);
-      const b = clamp(edB?.value || 0, 0, 255);
-      const rHex = r.toString(16).padStart(2, '0').toUpperCase();
-      const gHex = g.toString(16).padStart(2, '0').toUpperCase();
-      const bHex = b.toString(16).padStart(2, '0').toUpperCase();
-      const loop = '00'; // not cycling
-      const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
-      const name = ($('#edName')?.value || '').trim();
-
-      let payload = 'FF' + rHex + gHex + bHex + loop + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
-
-      await this.ble.send(buildCommand('F4', payload, 8));
-      this.log(`Set Color (F4) for file "${name || '(no name)'}" rgb=${r},${g},${b} cluster=${cluster}`);
+    // Head color cycle button (toggle visual state only)
+    $('#edHeadColorCycle')?.addEventListener('click', (e) => {
+      e.currentTarget.classList.toggle('selected');
     });
 
-    // Color cycle button
-    $('#edColorCycle')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+    // Torso color sync
+    const edTorsoColorPick = $('#edTorsoColorPick');
+    const edTorsoR = $('#edTorsoR');
+    const edTorsoG = $('#edTorsoG');
+    const edTorsoB = $('#edTorsoB');
 
-      const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
-      const name = ($('#edName')?.value || '').trim();
-
-      let payload = 'FF' + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
-
-      await this.ble.send(buildCommand('F7', payload, 8));
-      this.log(`Color cycle (F7) for file "${name || '(no name)'}"`);
+    // Sync Torso RGB inputs to color picker
+    [edTorsoR, edTorsoG, edTorsoB].forEach((inp) => {
+      inp?.addEventListener('input', () => {
+        const r = clamp(edTorsoR.value, 0, 255);
+        const g = clamp(edTorsoG.value, 0, 255);
+        const b = clamp(edTorsoB.value, 0, 255);
+        const hex = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+        if (edTorsoColorPick && edTorsoColorPick.value !== hex) {
+          edTorsoColorPick.value = hex;
+        }
+      });
     });
+
+    // Sync Torso color picker to RGB inputs
+    edTorsoColorPick?.addEventListener('input', () => {
+      const v = edTorsoColorPick.value.replace('#', '');
+      if (v.length === 6) {
+        edTorsoR.value = parseInt(v.slice(0, 2), 16);
+        edTorsoG.value = parseInt(v.slice(2, 4), 16);
+        edTorsoB.value = parseInt(v.slice(4, 6), 16);
+      }
+    });
+
+    // Torso color cycle button (toggle visual state only)
+    $('#edTorsoColorCycle')?.addEventListener('click', (e) => {
+      e.currentTarget.classList.toggle('selected');
+    });
+
+    // Note: Individual apply buttons removed - use "Apply All Settings" button instead
   }
 
   /**
@@ -2382,8 +2312,8 @@ class EditModalManager {
       this.close();
     });
 
-    // Set Eye button (F9)
-    $('#edApplyEye')?.addEventListener('click', async () => {
+    // Apply All button - sends all settings to device
+    $('#edApplyAll')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {
         this.log('Not connected', LOG_CLASSES.WARNING);
         return;
@@ -2392,45 +2322,93 @@ class EditModalManager {
       const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
       const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
       const name = ($('#edName')?.value || '').trim();
+      
+      // Helper to build payload with filename
+      const buildPayload = (dataHex) => {
+        let payload = dataHex + clusterHex;
+        if (name) {
+          const nameHex = utf16leHex(name);
+          const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
+          payload += nameLen + '5C55' + nameHex;
+        } else {
+          payload += '00';
+        }
+        return payload;
+      };
+
+      this.log('Applying all settings to device...', LOG_CLASSES.INFO);
+
+      // 1. Set Animation (CA) - Movement
+      const grid = $('#edMove');
+      if (grid) {
+        const toggles = grid.querySelectorAll('.iconToggle.selected');
+        const parts = Array.from(toggles).map((btn) => btn.getAttribute('data-part'));
+        
+        let actionBits = 0;
+        if (parts.includes('all')) {
+          actionBits = 255;
+        } else {
+          if (parts.includes('head')) actionBits |= 0x01;
+          if (parts.includes('arm')) actionBits |= 0x02;
+          if (parts.includes('torso')) actionBits |= 0x04;
+        }
+        
+        const actionHex = actionBits.toString(16).padStart(2, '0').toUpperCase();
+        const payload = buildPayload(actionHex + '00');
+        await this.ble.send(buildCommand('CA', payload, 8));
+        this.log(`✓ Set Movement (CA) action=${actionBits}`);
+      }
+
+      // 2. Set Eye (F9)
       const eyeHex = this.currentFile.eye.toString(16).padStart(2, '0').toUpperCase();
+      const eyePayload = buildPayload(eyeHex + '00');
+      await this.ble.send(buildCommand('F9', eyePayload, 8));
+      this.log(`✓ Set Eye (F9) icon=${this.currentFile.eye}`);
 
-      let payload = eyeHex + '00' + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
+      // 3. Set Effect Mode (F2)
+      const mode = parseInt($('#edEffectMode')?.value || '1', 10);
+      const modeHex = mode.toString(16).padStart(2, '0').toUpperCase();
+      const modePayload = buildPayload('FF' + modeHex);
+      await this.ble.send(buildCommand('F2', modePayload, 8));
+      this.log(`✓ Set Effect Mode (F2) mode=${mode}`);
+
+      // 4. Set Effect Speed (F6) - if not Static mode
+      if (mode !== 1) {
+        const speed = clamp($('#edEffectSpeed')?.value || 0, 0, 255);
+        const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
+        const speedPayload = buildPayload('FF' + speedHex);
+        await this.ble.send(buildCommand('F6', speedPayload, 8));
+        this.log(`✓ Set Effect Speed (F6) speed=${speed}`);
       }
 
-      await this.ble.send(buildCommand('F9', payload, 8));
-      this.log(`Set Eye (F9) icon=${this.currentFile.eye} cluster=${cluster}${name ? ` name="${name}"` : ''}`);
-    });
+      // 5. Set Head Light Color (F4)
+      const headR = clamp($('#edHeadR')?.value || 255, 0, 255);
+      const headG = clamp($('#edHeadG')?.value || 0, 0, 255);
+      const headB = clamp($('#edHeadB')?.value || 0, 0, 255);
+      const headColorCycle = $('#edHeadColorCycle')?.classList.contains('selected') ? '01' : '00';
+      const headRHex = headR.toString(16).padStart(2, '0').toUpperCase();
+      const headGHex = headG.toString(16).padStart(2, '0').toUpperCase();
+      const headBHex = headB.toString(16).padStart(2, '0').toUpperCase();
+      const headPayload = buildPayload('00' + headRHex + headGHex + headBHex + headColorCycle);
+      await this.ble.send(buildCommand('F4', headPayload, 8));
+      this.log(`✓ Set Head Color (F4) rgb=${headR},${headG},${headB} cycle=${headColorCycle}`);
 
-    // Set Animation button (CA)
-    $('#edApplyAnim')?.addEventListener('click', async () => {
-      if (!this.ble.isConnected()) {
-        this.log('Not connected', LOG_CLASSES.WARNING);
-        return;
-      }
+      // 6. Set Torso Light Color (F4)
+      const torsoR = clamp($('#edTorsoR')?.value || 0, 0, 255);
+      const torsoG = clamp($('#edTorsoG')?.value || 0, 0, 255);
+      const torsoB = clamp($('#edTorsoB')?.value || 255, 0, 255);
+      const torsoColorCycle = $('#edTorsoColorCycle')?.classList.contains('selected') ? '01' : '00';
+      const torsoRHex = torsoR.toString(16).padStart(2, '0').toUpperCase();
+      const torsoGHex = torsoG.toString(16).padStart(2, '0').toUpperCase();
+      const torsoBHex = torsoB.toString(16).padStart(2, '0').toUpperCase();
+      const torsoPayload = buildPayload('01' + torsoRHex + torsoGHex + torsoBHex + torsoColorCycle);
+      await this.ble.send(buildCommand('F4', torsoPayload, 8));
+      this.log(`✓ Set Torso Color (F4) rgb=${torsoR},${torsoG},${torsoB} cycle=${torsoColorCycle}`);
 
-      const action = Math.max(0, Math.min(255, parseInt($('#edAction')?.value || '255', 10)));
-      const actionHex = action.toString(16).padStart(2, '0').toUpperCase();
-      const cluster = Math.max(0, parseInt($('#edCluster')?.value || '0', 10));
-      const clusterHex = cluster.toString(16).padStart(8, '0').toUpperCase();
-      const name = ($('#edName')?.value || '').trim();
-
-      let payload = actionHex + '00' + clusterHex;
-      if (name) {
-        const nameHex = utf16leHex(name);
-        const nameLen = ((nameHex.length / 2) + 2).toString(16).padStart(2, '0').toUpperCase();
-        payload += nameLen + '5C55' + nameHex;
-      } else {
-        payload += '00';
-      }
-
-      await this.ble.send(buildCommand('CA', payload, 8));
-      this.log(`Set Animation (CA) for "${name}" action=${action} cluster=${cluster}`);
+      this.log(`All settings applied successfully for file "${name || '(no name)'}"`, LOG_CLASSES.SUCCESS);
+      
+      // Close the dialog after applying settings
+      this.close();
     });
   }
 
@@ -2463,7 +2441,6 @@ class EditModalManager {
     // Populate form fields
     if ($('#edSerial')) $('#edSerial').value = file.serial;
     if ($('#edCluster')) $('#edCluster').value = file.cluster;
-    if ($('#edAction')) $('#edAction').value = file.action || 255;
     if ($('#edName')) $('#edName').value = file.name || '';
 
     // Populate lighting data from file if available
