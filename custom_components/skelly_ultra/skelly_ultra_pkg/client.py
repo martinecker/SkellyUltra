@@ -188,6 +188,23 @@ class SkellyClient:
             self._rest_session = aiohttp.ClientSession()
         return self._rest_session
 
+    def get_mtu_size(self) -> int | None:
+        """Get the BLE MTU size if available.
+
+        Returns:
+            MTU size in bytes, or None if not available.
+
+        Notes:
+            Available in Bleak 0.19.0+. Returns None if client is not
+            connected or MTU information is unavailable.
+        """
+        try:
+            if self._client and hasattr(self._client, "mtu_size"):
+                return self._client.mtu_size
+        except (AttributeError, TypeError):
+            pass
+        return None
+
     async def disconnect_live_mode(self) -> None:
         """Disconnect the separate classic (live-mode) client via REST server."""
         if not self._live_mode_client_address:

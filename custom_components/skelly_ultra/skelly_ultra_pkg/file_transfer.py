@@ -6,9 +6,9 @@ Handles async file uploads to the device using the BLE file transfer protocol.
 from __future__ import annotations
 
 import asyncio
-import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,6 +41,7 @@ class TransferState:
     total_chunks: int = 0
     sent_chunks: int = 0
     filename: str = ""
+    chunk_size: int = 0  # Actual chunk size used for this transfer
 
     @property
     def progress_percent(self) -> int:
@@ -67,7 +68,9 @@ class FileTransferManager:
     """
 
     # Protocol constants
-    CHUNK_SIZE = 500  # bytes per chunk (BLE MTU compatible)
+    MAX_CHUNK_SIZE = 500  # Maximum bytes per chunk
+    DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
+    ATT_OVERHEAD = 3  # ATT protocol overhead bytes
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 240.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
@@ -79,6 +82,39 @@ class FileTransferManager:
         self._lock = asyncio.Lock()
         self._chunk_cache: dict[int, bytes] = {}
 
+    def _get_chunk_size(self, client: SkellyClient) -> int:
+        """Determine safe chunk size based on BLE MTU.
+
+        Args:
+            client: SkellyClient with active BLE connection
+
+        Returns:
+            Safe chunk size in bytes
+
+        Notes:
+            - Queries MTU from BleakClient if available (Bleak 0.19.0+)
+            - Reserves ATT_OVERHEAD (3 bytes) for ATT protocol overhead
+            - Caps at MAX_CHUNK_SIZE (500 bytes) for tested maximum
+            - Falls back to DEFAULT_CHUNK_SIZE (250 bytes) if MTU unavailable
+        """
+        # Try to get MTU from the client
+        mtu = client.get_mtu_size()
+        if mtu is not None:
+            # Calculate safe chunk size (MTU minus ATT overhead)
+            safe_size = mtu - self.ATT_OVERHEAD
+            # Cap at tested maximum
+            chunk_size = min(safe_size, self.MAX_CHUNK_SIZE)
+            logger.info(
+                "Using MTU-based chunk size: %d bytes (MTU=%d)", chunk_size, mtu
+            )
+            return chunk_size
+
+        # MTU not available, use conservative default
+        logger.info(
+            "Using default chunk size: %d bytes (MTU unknown)", self.DEFAULT_CHUNK_SIZE
+        )
+        return self.DEFAULT_CHUNK_SIZE
+
     @property
     def state(self) -> TransferState:
         """Get current transfer state (read-only copy)."""
@@ -88,6 +124,7 @@ class FileTransferManager:
             total_chunks=self._state.total_chunks,
             sent_chunks=self._state.sent_chunks,
             filename=self._state.filename,
+            chunk_size=self._state.chunk_size,
         )
 
     async def send_file(
@@ -186,17 +223,22 @@ class FileTransferManager:
             FileTransferTimeout: If device doesn't respond
             FileTransferError: On protocol errors
         """
+        # Determine optimal chunk size based on BLE MTU
+        chunk_size = self._get_chunk_size(client)
+        self._state.chunk_size = chunk_size
+
         size = len(file_data)
         chunk_count = (
-            size + self.CHUNK_SIZE - 1
-        ) // self.CHUNK_SIZE  # Ceiling division
+            size + chunk_size - 1
+        ) // chunk_size  # Ceiling division
         self._state.total_chunks = chunk_count
 
         logger.info(
-            "Starting file transfer: %s (%d bytes, %d chunks)",
+            "Starting file transfer: %s (%d bytes, %d chunks of %d bytes)",
             filename,
             size,
             chunk_count,
+            chunk_size,
         )
 
         # Phase 1: Start transfer (C0)
@@ -211,7 +253,7 @@ class FileTransferManager:
             )
 
         # Check if device wants to resume from previous transfer
-        start_index = start_event.written // self.CHUNK_SIZE
+        start_index = start_event.written // chunk_size
         if start_index > 0:
             logger.info(
                 "Resuming transfer from chunk %d (device had %d bytes)",
@@ -222,7 +264,7 @@ class FileTransferManager:
 
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(
-            client, file_data, start_index, chunk_count, progress_callback
+            client, file_data, start_index, chunk_count, chunk_size, progress_callback
         )
 
         # Phase 3: End transfer (C2)
@@ -264,6 +306,7 @@ class FileTransferManager:
         file_data: bytes,
         start_index: int,
         chunk_count: int,
+        chunk_size: int,
         progress_callback: Callable[[int, int], None] | None,
     ) -> None:
         """Send data chunks to device.
@@ -273,6 +316,7 @@ class FileTransferManager:
             file_data: Complete file data
             start_index: Chunk index to start from (for resume)
             chunk_count: Total number of chunks
+            chunk_size: Size of each chunk in bytes
             progress_callback: Optional progress callback
 
         Raises:
@@ -283,8 +327,8 @@ class FileTransferManager:
                 raise FileTransferCancelled("Transfer cancelled by user")
 
             # Calculate chunk data
-            offset = idx * self.CHUNK_SIZE
-            chunk_data = file_data[offset : offset + self.CHUNK_SIZE]
+            offset = idx * chunk_size
+            chunk_data = file_data[offset : offset + chunk_size]
 
             # Cache chunk for potential retry
             self._chunk_cache[idx] = chunk_data
