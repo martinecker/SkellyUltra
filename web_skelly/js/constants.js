@@ -68,7 +68,7 @@ export const COMMANDS = {
   START_TRANSFER: 'C0',    // Initialize file transfer
   CHUNK_DATA: 'C1',        // Send data chunk
   END_TRANSFER: 'C2',      // End file transfer
-  RENAME: 'C3',            // Rename/commit file
+  CONFIRM_TRANSFER: 'C3',  // Confirm file transfer
   CANCEL: 'C4',            // Cancel transfer
   RESUME: 'C5',            // Resume transfer
   PLAY_PAUSE: 'C6',        // Play/pause file
@@ -87,7 +87,7 @@ export const COMMANDS = {
   SET_VOLUME: 'FA',        // Set volume (0-255)
   MEDIA_PLAY: 'FC',        // Play media (payload: 01)
   MEDIA_PAUSE: 'FC',       // Pause media (payload: 00)
-  MEDIA_BT: 'FD',          // Bluetooth audio (payload: 01)
+  ENABLE_CLASSIC_BT: 'FD', // Enable classic Bluetooth audio, aka live mode (payload: 01)
   
   // Lighting
   SET_MODE: 'F2',          // Set effect mode (1=static, 2=strobe, 3=pulsing)
@@ -114,7 +114,7 @@ export const RESPONSES = {
   TRANSFER_START: 'BBC0',    // Transfer start ACK
   CHUNK_DROPPED: 'BBC1',     // Chunk dropped (resend request)
   TRANSFER_END: 'BBC2',      // Transfer end ACK
-  RENAME_ACK: 'BBC3',        // Rename ACK
+  CONFIRM_TRANSFER_ACK: 'BBC3', // Confirm transfer ACK
   CANCEL_ACK: 'BBC4',        // Cancel ACK
   RESUME_ACK: 'BBC5',        // Resume ACK
   PLAY_ACK: 'BBC6',          // Play/pause ACK

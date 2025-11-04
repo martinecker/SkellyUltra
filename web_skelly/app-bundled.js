@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-04T07:35:06.798059
+ * Generated: 2025-11-04T10:29:47.058971
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -95,7 +95,7 @@ const COMMANDS = {
   START_TRANSFER: 'C0',    // Initialize file transfer
   CHUNK_DATA: 'C1',        // Send data chunk
   END_TRANSFER: 'C2',      // End file transfer
-  RENAME: 'C3',            // Rename/commit file
+  CONFIRM_TRANSFER: 'C3',  // Confirm file transfer
   CANCEL: 'C4',            // Cancel transfer
   RESUME: 'C5',            // Resume transfer
   PLAY_PAUSE: 'C6',        // Play/pause file
@@ -114,7 +114,7 @@ const COMMANDS = {
   SET_VOLUME: 'FA',        // Set volume (0-255)
   MEDIA_PLAY: 'FC',        // Play media (payload: 01)
   MEDIA_PAUSE: 'FC',       // Pause media (payload: 00)
-  MEDIA_BT: 'FD',          // Bluetooth audio (payload: 01)
+  ENABLE_CLASSIC_BT: 'FD', // Enable classic Bluetooth audio, aka live mode (payload: 01)
   
   // Lighting
   SET_MODE: 'F2',          // Set effect mode (1=static, 2=strobe, 3=pulsing)
@@ -141,7 +141,7 @@ const RESPONSES = {
   TRANSFER_START: 'BBC0',    // Transfer start ACK
   CHUNK_DROPPED: 'BBC1',     // Chunk dropped (resend request)
   TRANSFER_END: 'BBC2',      // Transfer end ACK
-  RENAME_ACK: 'BBC3',        // Rename ACK
+  CONFIRM_TRANSFER_ACK: 'BBC3', // Confirm transfer ACK
   CANCEL_ACK: 'BBC4',        // Cancel ACK
   RESUME_ACK: 'BBC5',        // Resume ACK
   PLAY_ACK: 'BBC6',          // Play/pause ACK
@@ -1292,18 +1292,18 @@ class FileManager {
         }
       }
 
-      // === Phase 4: Rename/Commit (C3) ===
+      // === Phase 4: Confirm Transfer (C3) ===
       const c3Payload = '5C55' + nameHex;
-      await this.ble.send(buildCommand(COMMANDS.RENAME, c3Payload, 8));
+      await this.ble.send(buildCommand(COMMANDS.CONFIRM_TRANSFER, c3Payload, 8));
 
-      const c3Response = await this.ble.waitForResponse(RESPONSES.RENAME_ACK, TIMEOUTS.ACK);
+      const c3Response = await this.ble.waitForResponse(RESPONSES.CONFIRM_TRANSFER_ACK, TIMEOUTS.ACK);
       if (!c3Response) {
-        throw new Error('Timeout waiting for rename acknowledgment');
+        throw new Error('Timeout waiting for confirm transfer acknowledgment');
       }
 
       const c3Failed = parseInt(c3Response.slice(4, 6), 16);
       if (c3Failed !== 0) {
-        throw new Error('Device failed final rename');
+        throw new Error('Device failed to confirm transfer');
       }
 
       this.log('File transfer complete ✔', LOG_CLASSES.WARNING);
@@ -1716,8 +1716,8 @@ class ProtocolParser {
       return;
     }
 
-    if (hex.startsWith(RESPONSES.RENAME_ACK)) {
-      this.parseRenameAck(hex);
+    if (hex.startsWith(RESPONSES.CONFIRM_TRANSFER_ACK)) {
+      this.parseConfirmTransferAck(hex);
       return;
     }
 
@@ -1974,11 +1974,11 @@ class ProtocolParser {
   }
 
   /**
-   * Parse rename ACK (BBC3)
+   * Parse confirm transfer ACK (BBC3)
    */
-  parseRenameAck(hex) {
+  parseConfirmTransferAck(hex) {
     const failed = parseInt(hex.slice(4, 6), 16);
-    this.log(`Rename: failed=${failed}`);
+    this.log(`Confirm Transfer: failed=${failed}`);
   }
 
   /**
@@ -2930,7 +2930,7 @@ class SkellyApp {
     }
 
     // Live Mode button
-    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.MEDIA_BT, '01'));
+    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.ENABLE_CLASSIC_BT, '01'));
   }
 
   /**

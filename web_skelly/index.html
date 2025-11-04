@@ -368,6 +368,11 @@
   <div id="editModal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="editTitle">
     <div class="modal-panel" style="background:#101318;border-color:#273449;color:#e5e7eb;">
       <h3 id="editTitle">Edit File</h3>
+      
+      <label>File name</label>
+      <input id="edName" placeholder="example.mp3" readonly>
+      
+      <div class="spacer"></div>
       <div class="row">
         <div>
           <label>Serial #</label>
@@ -375,7 +380,7 @@
         </div>
         <div>
           <label>Cluster</label>
-          <input id="edCluster" type="number" min="0" step="1">
+          <input id="edCluster" type="number" min="0" step="1" readonly>
         </div>
       </div>
       
@@ -442,15 +447,11 @@
       </button>
     </div>
 
-
-
-      <label>File name</label>
-      <input id="edName" placeholder="example.mp3">
       <div class="spacer"></div>
       <label>Upload new file (replace)</label>
       <input id="edUploadFile" type="file" />
       <label class="small checkline mt-8">
-        <input id="edChkConvert" type="checkbox">
+        <input id="edChkConvert" type="checkbox" checked>
         Convert to device format (MP3, 8 kHz mono)
       </label>
       <div id="edConvertOpts" class="row hidden" style="align-items:center">
@@ -470,7 +471,7 @@
       <div class="spacer"></div>
       
       <div class="modal-actions">
-        <button id="edDelete" class="btn danger">Delete (C7)</button>
+        <button id="edDelete" class="btn danger">Delete</button>
         <button id="edApplyAll" class="btn primary">Apply All Settings</button>
         <button id="edClose" class="btn">Close</button>
       </div>
@@ -545,7 +546,7 @@
             <option value="C0">C0 (Start Data Transfer)</option>
             <option value="C1">C1 (Send Data Chunk)</option>
             <option value="C2">C2 (End Data Transfer)</option>
-            <option value="C3">C3 (Rename/Commit File Transfer)</option>
+            <option value="C3">C3 (Commit File Transfer)</option>
             <option value="C4">C4 (Cancel Data Transfer)</option>
             <option value="C6">C6 (Play/Pause File)</option>
             <option value="C7">C7 (Delete File)</option>
@@ -584,7 +585,7 @@
 
 
       <label>Device filename (UTF-16LE; "5C55" prefix auto)</label>
-      <input id="fileName" placeholder="test2_Robot.mp3" />
+      <input id="fileName" placeholder="example.mp3" />
       <div class="actions">
         <button class="btn primary" id="btnSendFile">Send to Device</button>
         <button class="btn danger" id="btnCancelFile" disabled>Cancel</button>

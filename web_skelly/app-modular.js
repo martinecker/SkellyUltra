@@ -379,7 +379,7 @@ class SkellyApp {
     }
 
     // Live Mode button
-    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.MEDIA_BT, '01'));
+    $('#btnBT')?.addEventListener('click', () => this.sendMediaCommand(COMMANDS.ENABLE_CLASSIC_BT, '01'));
   }
 
   /**

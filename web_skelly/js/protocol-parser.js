@@ -104,8 +104,8 @@ export class ProtocolParser {
       return;
     }
 
-    if (hex.startsWith(RESPONSES.RENAME_ACK)) {
-      this.parseRenameAck(hex);
+    if (hex.startsWith(RESPONSES.CONFIRM_TRANSFER_ACK)) {
+      this.parseConfirmTransferAck(hex);
       return;
     }
 
@@ -362,11 +362,11 @@ export class ProtocolParser {
   }
 
   /**
-   * Parse rename ACK (BBC3)
+   * Parse confirm transfer ACK (BBC3)
    */
-  parseRenameAck(hex) {
+  parseConfirmTransferAck(hex) {
     const failed = parseInt(hex.slice(4, 6), 16);
-    this.log(`Rename: failed=${failed}`);
+    this.log(`Confirm Transfer: failed=${failed}`);
   }
 
   /**

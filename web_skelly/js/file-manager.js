@@ -199,18 +199,18 @@ export class FileManager {
         }
       }
 
-      // === Phase 4: Rename/Commit (C3) ===
+      // === Phase 4: Confirm Transfer (C3) ===
       const c3Payload = '5C55' + nameHex;
-      await this.ble.send(buildCommand(COMMANDS.RENAME, c3Payload, 8));
+      await this.ble.send(buildCommand(COMMANDS.CONFIRM_TRANSFER, c3Payload, 8));
 
-      const c3Response = await this.ble.waitForResponse(RESPONSES.RENAME_ACK, TIMEOUTS.ACK);
+      const c3Response = await this.ble.waitForResponse(RESPONSES.CONFIRM_TRANSFER_ACK, TIMEOUTS.ACK);
       if (!c3Response) {
-        throw new Error('Timeout waiting for rename acknowledgment');
+        throw new Error('Timeout waiting for confirm transfer acknowledgment');
       }
 
       const c3Failed = parseInt(c3Response.slice(4, 6), 16);
       if (c3Failed !== 0) {
-        throw new Error('Device failed final rename');
+        throw new Error('Device failed to confirm transfer');
       }
 
       this.log('File transfer complete ✔', LOG_CLASSES.WARNING);
