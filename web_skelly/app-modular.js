@@ -317,6 +317,25 @@ class SkellyApp {
       });
     });
 
+    // Get All button - executes all query commands in sequence
+    $('#btnGetAll')?.addEventListener('click', async () => {
+      if (!this.ble.isConnected()) {
+        this.logger.log('Not connected', LOG_CLASSES.WARNING);
+        return;
+      }
+      
+      this.logger.log('Executing all queries...', LOG_CLASSES.INFO);
+      const queries = ['E0', 'E1', 'E5', 'E6', 'EE', 'D2', 'D1'];
+      
+      for (const tag of queries) {
+        await this.ble.send(buildCommand(tag, '', 8));
+        // Small delay between queries to avoid overwhelming the device
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      this.logger.log('All queries completed', LOG_CLASSES.SUCCESS);
+    });
+
     // Raw command send button
     $('#btnSendRaw')?.addEventListener('click', async () => {
       if (!this.ble.isConnected()) {

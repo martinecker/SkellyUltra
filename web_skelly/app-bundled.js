@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T16:08:40.535740
+ * Generated: 2025-11-03T16:12:32.502304
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2787,6 +2787,25 @@ class SkellyApp {
         const tag = btn.getAttribute('data-q');
         await this.ble.send(buildCommand(tag, '', 8));
       });
+    });
+
+    // Get All button - executes all query commands in sequence
+    $('#btnGetAll')?.addEventListener('click', async () => {
+      if (!this.ble.isConnected()) {
+        this.logger.log('Not connected', LOG_CLASSES.WARNING);
+        return;
+      }
+      
+      this.logger.log('Executing all queries...', LOG_CLASSES.INFO);
+      const queries = ['E0', 'E1', 'E5', 'E6', 'EE', 'D2', 'D1'];
+      
+      for (const tag of queries) {
+        await this.ble.send(buildCommand(tag, '', 8));
+        // Small delay between queries to avoid overwhelming the device
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      
+      this.logger.log('All queries completed', LOG_CLASSES.SUCCESS);
     });
 
     // Raw command send button
