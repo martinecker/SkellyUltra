@@ -98,6 +98,7 @@ class SkellyApp {
         this.ble,
         this.state,
         this.fileManager,
+        this.audioConverter,
         this.logger.log.bind(this.logger)
       );
       console.log('Edit modal manager created');

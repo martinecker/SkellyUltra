@@ -15,10 +15,11 @@ const $ = (selector) => document.querySelector(selector);
  * Edit Modal Manager Class
  */
 export class EditModalManager {
-  constructor(bleManager, stateManager, fileManager, logger) {
+  constructor(bleManager, stateManager, fileManager, audioConverter, logger) {
     this.ble = bleManager;
     this.state = stateManager;
     this.fileManager = fileManager;
+    this.audioConverter = audioConverter;
     this.log = logger;
 
     // Current edit state
@@ -241,14 +242,13 @@ export class EditModalManager {
       this.checkFileNameConflict(name);
     });
 
-    // File upload for replacement (not yet implemented)
+    // File upload for replacement
     const edUploadFile = $('#edUploadFile');
     const edUploadBtn = $('#edUploadBtn');
 
     if (edUploadBtn) {
-      edUploadBtn.addEventListener('click', () => {
-        this.log('File upload/replace not yet implemented in modular version', LOG_CLASSES.WARNING);
-        // TODO: Implement file replacement functionality
+      edUploadBtn.addEventListener('click', async () => {
+        await this.handleFileUpload();
       });
     }
 
@@ -400,6 +400,79 @@ export class EditModalManager {
     }
     if (conflict) {
       this.log(`Warning: A file named "${conflict.name}" already exists on the device.`, LOG_CLASSES.WARNING);
+    }
+  }
+
+  /**
+   * Handle file upload/replacement
+   */
+  async handleFileUpload() {
+    if (!this.ble.isConnected()) {
+      this.log('Not connected', LOG_CLASSES.WARNING);
+      return;
+    }
+
+    const edUploadFile = $('#edUploadFile');
+    const file = edUploadFile?.files?.[0];
+    
+    if (!file) {
+      this.log('No file selected', LOG_CLASSES.WARNING);
+      return;
+    }
+
+    const fileName = ($('#edName')?.value || '').trim();
+    if (!fileName) {
+      this.log('File name is required', LOG_CLASSES.WARNING);
+      return;
+    }
+
+    // Confirm overwrite
+    if (!confirm(`Replace "${fileName}" with the selected file? This cannot be undone.`)) {
+      return;
+    }
+
+    const edUploadProg = $('#edUploadProg');
+    
+    try {
+      let bytes;
+
+      // Convert if checkbox is checked
+      const shouldConvert = $('#edChkConvert')?.checked;
+      if (shouldConvert) {
+        const kbps = parseInt($('#edMp3Kbps')?.value || '32', 10);
+        this.log(`Converting to MP3 8 kHz mono (${kbps} kbps)…`);
+        if (edUploadProg) edUploadProg.textContent = 'Converting...';
+        
+        const result = await this.audioConverter.convertToDeviceMp3(file, kbps);
+        bytes = result.u8;
+        
+        this.log(`Converted to ${(bytes.length / 1024).toFixed(1)} KB MP3`);
+      } else {
+        // Read file as bytes
+        const arrayBuffer = await file.arrayBuffer();
+        bytes = new Uint8Array(arrayBuffer);
+      }
+
+      // Upload via FileManager - MUST use exact same filename as before
+      if (edUploadProg) edUploadProg.textContent = 'Uploading...';
+      this.log(`Uploading ${fileName} (${(bytes.length / 1024).toFixed(1)} KB)...`);
+      
+      await this.fileManager.uploadFile(bytes, fileName);
+      
+      this.log(`File "${fileName}" uploaded successfully ✓`, LOG_CLASSES.SUCCESS);
+      if (edUploadProg) edUploadProg.textContent = 'Upload complete';
+      
+      // Clear the file input
+      if (edUploadFile) edUploadFile.value = '';
+      
+      // Refresh file list
+      setTimeout(() => {
+        this.fileManager.startFetchFiles();
+      }, 500);
+      
+    } catch (error) {
+      this.log(`Upload failed: ${error.message}`, LOG_CLASSES.WARNING);
+      if (edUploadProg) edUploadProg.textContent = `Error: ${error.message}`;
     }
   }
 
