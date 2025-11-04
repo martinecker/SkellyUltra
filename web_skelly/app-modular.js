@@ -408,7 +408,7 @@ class SkellyApp {
     
     const sendHeadBrightness = async (value) => {
       if (!this.ble.isConnected()) return;
-      const ch = '00'; // Head light is channel 0
+      const ch = '01'; // Head light is channel 1
       const brightness = parseInt(value, 10);
       const brightnessHex = brightness.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
@@ -434,7 +434,7 @@ class SkellyApp {
     
     const sendTorsoBrightness = async (value) => {
       if (!this.ble.isConnected()) return;
-      const ch = '01'; // Torso light is channel 1
+      const ch = '00'; // Torso light is channel 0
       const brightness = parseInt(value, 10);
       const brightnessHex = brightness.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
@@ -472,7 +472,7 @@ class SkellyApp {
         }
       }
       
-      const ch = '00'; // Head light is channel 0
+      const ch = '01'; // Head light is channel 1
       const r = parseInt(headRInput?.value || '255', 10);
       const g = parseInt(headGInput?.value || '0', 10);
       const b = parseInt(headBInput?.value || '0', 10);
@@ -524,7 +524,7 @@ class SkellyApp {
         }
       }
       
-      const ch = '01'; // Torso light is channel 1
+      const ch = '00'; // Torso light is channel 0
       const r = parseInt(torsoRInput?.value || '255', 10);
       const g = parseInt(torsoGInput?.value || '0', 10);
       const b = parseInt(torsoBInput?.value || '0', 10);
@@ -568,7 +568,7 @@ class SkellyApp {
         headEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
         
         if (!this.ble.isConnected()) return;
-        const ch = '00'; // Head light is channel 0
+        const ch = '01'; // Head light is channel 1
         const modeHex = v.toString(16).padStart(2, '0').toUpperCase();
         const cluster = '00000000';
         await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 9));
@@ -586,7 +586,7 @@ class SkellyApp {
         torsoEffectSpeedBlock.classList.toggle('hidden', v === 1); // hide for Static
         
         if (!this.ble.isConnected()) return;
-        const ch = '01'; // Torso light is channel 1
+        const ch = '00'; // Torso light is channel 0
         const modeHex = v.toString(16).padStart(2, '0').toUpperCase();
         const cluster = '00000000';
         await this.ble.send(buildCommand(COMMANDS.SET_MODE, ch + modeHex + cluster + '00', 8));
@@ -600,7 +600,7 @@ class SkellyApp {
 
     const sendHeadSpeed = async (value) => {
       if (!this.ble.isConnected()) return;
-      const ch = '00'; // Head light is channel 0
+      const ch = '01'; // Head light is channel 1
       const speed = parseInt(value, 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
@@ -626,7 +626,7 @@ class SkellyApp {
 
     const sendTorsoSpeed = async (value) => {
       if (!this.ble.isConnected()) return;
-      const ch = '01'; // Torso light is channel 1
+      const ch = '00'; // Torso light is channel 0
       const speed = parseInt(value, 10);
       const speedHex = speed.toString(16).padStart(2, '0').toUpperCase();
       const cluster = '00000000';
@@ -1173,9 +1173,9 @@ class SkellyApp {
 
     // Update light settings from live.lights array
     if (live.lights && Array.isArray(live.lights)) {
-      // Head light (index 0)
-      if (live.lights[0]) {
-        const headLight = live.lights[0];
+      // Head light (index 1)
+      if (live.lights[1]) {
+        const headLight = live.lights[1];
         
         // Brightness
         if ($('#headBrightness')) $('#headBrightness').value = headLight.brightness;
@@ -1211,9 +1211,9 @@ class SkellyApp {
         if ($('#headEffectSpeedRange')) $('#headEffectSpeedRange').value = headLight.effectSpeed;
       }
       
-      // Torso light (index 1)
-      if (live.lights[1]) {
-        const torsoLight = live.lights[1];
+      // Torso light (index 0)
+      if (live.lights[0]) {
+        const torsoLight = live.lights[0];
         
         // Brightness
         if ($('#torsoBrightness')) $('#torsoBrightness').value = torsoLight.brightness;
@@ -1271,10 +1271,10 @@ class SkellyApp {
       const tr = document.createElement('tr');
       const eyeImgIdx = file.eye;
       
-      // Generate Head color indicator (lights[0])
+      // Generate Head color indicator (lights[1])
       let headColorHtml = '';
-      if (file.lights && file.lights[0]) {
-        const headLight = file.lights[0];
+      if (file.lights && file.lights[1]) {
+        const headLight = file.lights[1];
         if (headLight.colorCycle) {
           headColorHtml = '<img src="images/icon_light_cycle_no.png" alt="Cycle" title="Color cycle enabled" style="width:24px;height:24px" />';
         } else {
@@ -1283,10 +1283,10 @@ class SkellyApp {
         }
       }
       
-      // Generate Torso color indicator (lights[1])
+      // Generate Torso color indicator (lights[0])
       let torsoColorHtml = '';
-      if (file.lights && file.lights[1]) {
-        const torsoLight = file.lights[1];
+      if (file.lights && file.lights[0]) {
+        const torsoLight = file.lights[0];
         if (torsoLight.colorCycle) {
           torsoColorHtml = '<img src="images/icon_light_cycle_no.png" alt="Cycle" title="Color cycle enabled" style="width:24px;height:24px" />';
         } else {

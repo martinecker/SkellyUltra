@@ -414,14 +414,14 @@ export class EditModalManager {
       // 3. Set Head Light Brightness (F3)
       const headBrightness = clamp($('#edHeadBrightness')?.value || 200, 0, 255);
       const headBrightnessHex = headBrightness.toString(16).padStart(2, '0').toUpperCase();
-      const headBrightnessPayload = buildPayload('00' + headBrightnessHex);
+      const headBrightnessPayload = buildPayload('01' + headBrightnessHex);
       await this.ble.send(buildCommand('F3', headBrightnessPayload, 8));
       this.log(`✓ Set Head Brightness (F3) brightness=${headBrightness}`);
 
       // 4. Set Head Light Effect Mode (F2)
       const headMode = parseInt($('#edHeadEffectMode')?.value || '1', 10);
       const headModeHex = headMode.toString(16).padStart(2, '0').toUpperCase();
-      const headModePayload = buildPayload('00' + headModeHex);
+      const headModePayload = buildPayload('01' + headModeHex);
       await this.ble.send(buildCommand('F2', headModePayload, 8));
       this.log(`✓ Set Head Effect Mode (F2) mode=${headMode}`);
 
@@ -429,7 +429,7 @@ export class EditModalManager {
       if (headMode !== 1) {
         const headSpeed = clamp($('#edHeadEffectSpeed')?.value || 0, 0, 255);
         const headSpeedHex = headSpeed.toString(16).padStart(2, '0').toUpperCase();
-        const headSpeedPayload = buildPayload('00' + headSpeedHex);
+        const headSpeedPayload = buildPayload('01' + headSpeedHex);
         await this.ble.send(buildCommand('F6', headSpeedPayload, 8));
         this.log(`✓ Set Head Effect Speed (F6) speed=${headSpeed}`);
       }
@@ -437,14 +437,14 @@ export class EditModalManager {
       // 6. Set Torso Light Brightness (F3)
       const torsoBrightness = clamp($('#edTorsoBrightness')?.value || 200, 0, 255);
       const torsoBrightnessHex = torsoBrightness.toString(16).padStart(2, '0').toUpperCase();
-      const torsoBrightnessPayload = buildPayload('01' + torsoBrightnessHex);
+      const torsoBrightnessPayload = buildPayload('00' + torsoBrightnessHex);
       await this.ble.send(buildCommand('F3', torsoBrightnessPayload, 8));
       this.log(`✓ Set Torso Brightness (F3) brightness=${torsoBrightness}`);
 
       // 7. Set Torso Light Effect Mode (F2)
       const torsoMode = parseInt($('#edTorsoEffectMode')?.value || '1', 10);
       const torsoModeHex = torsoMode.toString(16).padStart(2, '0').toUpperCase();
-      const torsoModePayload = buildPayload('01' + torsoModeHex);
+      const torsoModePayload = buildPayload('00' + torsoModeHex);
       await this.ble.send(buildCommand('F2', torsoModePayload, 8));
       this.log(`✓ Set Torso Effect Mode (F2) mode=${torsoMode}`);
 
@@ -452,7 +452,7 @@ export class EditModalManager {
       if (torsoMode !== 1) {
         const torsoSpeed = clamp($('#edTorsoEffectSpeed')?.value || 0, 0, 255);
         const torsoSpeedHex = torsoSpeed.toString(16).padStart(2, '0').toUpperCase();
-        const torsoSpeedPayload = buildPayload('01' + torsoSpeedHex);
+        const torsoSpeedPayload = buildPayload('00' + torsoSpeedHex);
         await this.ble.send(buildCommand('F6', torsoSpeedPayload, 8));
         this.log(`✓ Set Torso Effect Speed (F6) speed=${torsoSpeed}`);
       }
@@ -465,7 +465,7 @@ export class EditModalManager {
       const headRHex = headR.toString(16).padStart(2, '0').toUpperCase();
       const headGHex = headG.toString(16).padStart(2, '0').toUpperCase();
       const headBHex = headB.toString(16).padStart(2, '0').toUpperCase();
-      const headPayload = buildPayload('00' + headRHex + headGHex + headBHex + headColorCycle);
+      const headPayload = buildPayload('01' + headRHex + headGHex + headBHex + headColorCycle);
       await this.ble.send(buildCommand('F4', headPayload, 8));
       this.log(`✓ Set Head Color (F4) rgb=${headR},${headG},${headB} cycle=${headColorCycle}`);
 
@@ -477,7 +477,7 @@ export class EditModalManager {
       const torsoRHex = torsoR.toString(16).padStart(2, '0').toUpperCase();
       const torsoGHex = torsoG.toString(16).padStart(2, '0').toUpperCase();
       const torsoBHex = torsoB.toString(16).padStart(2, '0').toUpperCase();
-      const torsoPayload = buildPayload('01' + torsoRHex + torsoGHex + torsoBHex + torsoColorCycle);
+      const torsoPayload = buildPayload('00' + torsoRHex + torsoGHex + torsoBHex + torsoColorCycle);
       await this.ble.send(buildCommand('F4', torsoPayload, 8));
       this.log(`✓ Set Torso Color (F4) rgb=${torsoR},${torsoG},${torsoB} cycle=${torsoColorCycle}`);
 
@@ -599,8 +599,8 @@ export class EditModalManager {
     if ($('#edName')) $('#edName').value = file.name || '';
 
     // Populate lighting data from file if available
-    const headLight = file.lights?.[0];
-    const torsoLight = file.lights?.[1];
+    const headLight = file.lights?.[1];
+    const torsoLight = file.lights?.[0];
 
     if (headLight) {
       // Head brightness
