@@ -385,25 +385,28 @@
       </div>
       
       <div class="spacer"></div>
-      <label>Eye Icon</label>
-      <div id="eyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
-      
-      <!-- Movement (Per-file) -->
-      <div class="spacer"></div>
-      <label>Movement</label>
-      <div id="edMove" class="move-grid">
-        <button class="iconToggle" data-part="all"   title="All">
-          <img src="images/icon_action1_se.png" alt="All" />
-        </button>
-        <button class="iconToggle" data-part="head"  title="Head">
-          <img src="images/icon_action2_se.png" alt="Head" />
-        </button>
-        <button class="iconToggle" data-part="arm"   title="Arm">
-          <img src="images/icon_action3_se.png" alt="Arm" />
-        </button>
-        <button class="iconToggle" data-part="torso" title="Torso">
-          <img src="images/icon_action4_se.png" alt="Torso" />
-        </button>
+      <div class="row" style="align-items:start">
+        <div style="flex:2">
+          <label>Eye Icon</label>
+          <div id="eyeGrid" class="eye-grid" aria-label="Choose eye icon"></div>
+        </div>
+        <div style="flex:1">
+          <label>Movement</label>
+          <div id="edMove" class="move-grid" style="gap:0.5rem">
+            <button class="iconToggle" data-part="all" title="All" style="padding:4px">
+              <img src="images/icon_action1_se.png" alt="All" style="width:32px;height:32px" />
+            </button>
+            <button class="iconToggle" data-part="head" title="Head" style="padding:4px">
+              <img src="images/icon_action2_se.png" alt="Head" style="width:32px;height:32px" />
+            </button>
+            <button class="iconToggle" data-part="arm" title="Arm" style="padding:4px">
+              <img src="images/icon_action3_se.png" alt="Arm" style="width:32px;height:32px" />
+            </button>
+            <button class="iconToggle" data-part="torso" title="Torso" style="padding:4px">
+              <img src="images/icon_action4_se.png" alt="Torso" style="width:32px;height:32px" />
+            </button>
+          </div>
+        </div>
       </div>
 
     <div class="spacer"></div>
