@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-03T18:12:34.465414
+ * Generated: 2025-11-03T18:28:28.677878
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2409,6 +2409,10 @@ class EditModalManager {
       
       // Close the dialog after applying settings
       this.close();
+      
+      // Refresh the file list to show updated data
+      this.log('Refreshing file list from device...');
+      await this.fileManager.startFetchFiles();
     });
   }
 
@@ -3821,6 +3825,30 @@ class SkellyApp {
       const tr = document.createElement('tr');
       const eyeImgIdx = file.eye;
       
+      // Generate Head color indicator (lights[0])
+      let headColorHtml = '';
+      if (file.lights && file.lights[0]) {
+        const headLight = file.lights[0];
+        if (headLight.colorCycle) {
+          headColorHtml = '<img src="images/icon_light_cycle_no.png" alt="Cycle" title="Color cycle enabled" style="width:24px;height:24px" />';
+        } else {
+          const rgb = `rgb(${headLight.r}, ${headLight.g}, ${headLight.b})`;
+          headColorHtml = `<div style="width:24px;height:24px;border-radius:50%;background-color:${rgb};border:1px solid #444" title="RGB(${headLight.r},${headLight.g},${headLight.b})"></div>`;
+        }
+      }
+      
+      // Generate Torso color indicator (lights[1])
+      let torsoColorHtml = '';
+      if (file.lights && file.lights[1]) {
+        const torsoLight = file.lights[1];
+        if (torsoLight.colorCycle) {
+          torsoColorHtml = '<img src="images/icon_light_cycle_no.png" alt="Cycle" title="Color cycle enabled" style="width:24px;height:24px" />';
+        } else {
+          const rgb = `rgb(${torsoLight.r}, ${torsoLight.g}, ${torsoLight.b})`;
+          torsoColorHtml = `<div style="width:24px;height:24px;border-radius:50%;background-color:${rgb};border:1px solid #444" title="RGB(${torsoLight.r},${torsoLight.g},${torsoLight.b})"></div>`;
+        }
+      }
+      
       // Generate movement icons based on action bitfield
       let movementIcons = '';
       const actionBits = file.action || 0;
@@ -3844,6 +3872,8 @@ class SkellyApp {
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
         <td>${escapeHtml(file.name || '')}</td>
+        <td>${headColorHtml}</td>
+        <td>${torsoColorHtml}</td>
         <td>${movementIcons}</td>
         <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
