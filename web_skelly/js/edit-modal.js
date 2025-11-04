@@ -483,9 +483,6 @@ export class EditModalManager {
 
       this.log(`All settings applied successfully for file "${name || '(no name)'}"`, LOG_CLASSES.SUCCESS);
       
-      // Close the dialog after applying settings
-      this.close();
-      
       // Refresh the file list to show updated data
       this.log('Refreshing file list from device...');
       await this.fileManager.startFetchFiles();

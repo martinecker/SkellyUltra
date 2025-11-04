@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-04T13:46:52.645434
+ * Generated: 2025-11-04T13:50:23.153883
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -2503,9 +2503,6 @@ class EditModalManager {
       this.log(`✓ Set Torso Color (F4) rgb=${torsoR},${torsoG},${torsoB} cycle=${torsoColorCycle}`);
 
       this.log(`All settings applied successfully for file "${name || '(no name)'}"`, LOG_CLASSES.SUCCESS);
-      
-      // Close the dialog after applying settings
-      this.close();
       
       // Refresh the file list to show updated data
       this.log('Refreshing file list from device...');
