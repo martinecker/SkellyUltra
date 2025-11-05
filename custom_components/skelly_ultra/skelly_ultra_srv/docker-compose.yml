@@ -10,6 +10,9 @@ services:
       # Mount D-Bus socket for Bluetooth pairing
       - /var/run/dbus:/var/run/dbus
       - /run/dbus:/run/dbus
+      # Mount PipeWire runtime directory for audio playback
+      # Note: Replace '1000' with your actual user ID (run 'id -u' to find it)
+      - /run/user/1000/pipewire-0:/run/user/0/pipewire-0
       # Optional: Persist audio files
       - ./audio_cache:/tmp/skelly_audio
 
@@ -17,6 +20,8 @@ services:
       # Server configuration
       - SERVER_HOST=0.0.0.0
       - SERVER_PORT=8765
+      # PipeWire runtime directory
+      - XDG_RUNTIME_DIR=/run/user/0
       # Logging
       - PYTHONUNBUFFERED=1
 

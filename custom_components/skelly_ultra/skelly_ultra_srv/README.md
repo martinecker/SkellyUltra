@@ -127,12 +127,15 @@ Run the server in a Docker container. First, [build the Docker image](#-build-th
 
 **Using docker run:**
 ```bash
+# Replace 1000 with your user ID (run 'id -u' to find it)
 docker run -d \
   --name skelly-ultra-server \
   --privileged \
   --network host \
   -v /var/run/dbus:/var/run/dbus \
   -v /run/dbus:/run/dbus \
+  -v /run/user/1000/pipewire-0:/run/user/0/pipewire-0 \
+  -e XDG_RUNTIME_DIR=/run/user/0 \
   --restart unless-stopped \
   skelly-ultra-server
 ```
@@ -153,8 +156,10 @@ docker-compose down
 - `--privileged` flag is **required** for Bluetooth hardware access
 - `--network host` is **required** for Bluetooth device discovery
 - D-Bus socket mounts (`/var/run/dbus`, `/run/dbus`) are **required** for automated pairing
-- The host system must have a working Bluetooth adapter
+- PipeWire socket mount is **required** for audio playback (see docker-compose.yml)
+- The host system must have a working Bluetooth adapter and PipeWire running
 - Automated pairing works because the container runs as root by default
+- **Important**: Update the PipeWire volume mount in docker-compose.yml with your user ID (run `id -u`)
 
 **Monitor Docker container:**
 ```bash
