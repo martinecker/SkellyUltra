@@ -110,18 +110,51 @@ A systemd service file is provided: `skelly-ultra-server.service`
 
 ## 🔐 Important: Bluetooth Pairing
 
-**Bluetooth Classic devices that require a PIN must be paired manually first.**
+### Automated Pairing (Recommended)
 
-The REST API cannot fully automate PIN entry for Bluetooth Classic devices. Before using the `/connect_by_name` or `/connect_by_mac` endpoints, you must pair the device manually:
+The server now supports **automated pairing using D-Bus** via the `/pair_and_trust_by_name` and `/pair_and_trust_by_mac` endpoints. This is the easiest method:
 
-### Option 1: Use the helper script
+**Requirements:**
+- Server must be run as **root** (e.g., `sudo python3 run_server.py`)
+- Python package: `pydbus` (included in requirements.txt)
+
+**Usage (by name):**
+```bash
+curl -X POST http://localhost:8765/pair_and_trust_by_name \
+  -H "Content-Type: application/json" \
+  -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
+```
+
+**Usage (by MAC address):**
+```bash
+curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+  -H "Content-Type: application/json" \
+  -d '{"mac": "AA:BB:CC:DD:EE:FF", "pin": "1234"}'
+```
+
+**Benefits:**
+- ✅ Fully automated - no manual intervention needed
+- ✅ Handles PIN entry automatically
+- ✅ Returns clear error messages
+- ✅ Works with all Bluetooth Classic devices
+
+**Error handling:**
+- If not running as root and device is not paired: Returns 403 with instructions
+- If D-Bus not available: Returns 503 with package installation instructions
+- If device not found: Returns 503 with troubleshooting tips
+
+### Manual Pairing (Fallback)
+
+If you cannot run the server as root, you can pair manually:
+
+#### Option 1: Use the helper script
 ```bash
 chmod +x pair_device.sh
 ./pair_device.sh <MAC_ADDRESS> <PIN>
 # Example: ./pair_device.sh F5:A1:BC:80:63:EC 8947
 ```
 
-### Option 2: Manual pairing with bluetoothctl
+#### Option 2: Manual pairing with bluetoothctl
 ```bash
 bluetoothctl
 > power on
@@ -136,11 +169,152 @@ bluetoothctl
 > exit
 ```
 
-**After pairing once, the REST API can connect/disconnect automatically.**
+**After pairing once (either method), the REST API can connect/disconnect automatically without root.**
 
 ## 🌐 API Endpoints
 
-### 🔗 POST /connect_by_name
+### � POST /pair_and_trust_by_name
+**Automatically pair and trust a Bluetooth device by name using D-Bus agent.**
+
+**⚠️ Requires root privileges** - Server must be started with `sudo`
+
+This endpoint discovers the device by name, then uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`.
+
+**Request Body:**
+```json
+{
+    "device_name": "Skelly Speaker",
+    "pin": "1234",
+    "timeout": 30
+}
+```
+
+**Parameters:**
+- `device_name` (required): Name of the Bluetooth device to pair
+- `pin` (required): PIN code for pairing
+- `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
+
+**Response (success):**
+```json
+{
+    "success": true,
+    "paired": true,
+    "trusted": true,
+    "device_name": "Skelly Speaker",
+    "mac": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+**Response (device not found):**
+```json
+{
+    "success": false,
+    "error": "Could not find device with name: Skelly Speaker"
+}
+```
+
+**Status Codes:**
+- `200`: Pairing successful
+- `403`: Not running as root and device not paired
+- `503`: D-Bus not available or device not found
+- `400`: Invalid request or pairing failed
+
+**Example:**
+```bash
+# Pair device by name with PIN
+curl -X POST http://localhost:8765/pair_and_trust_by_name \
+  -H "Content-Type: application/json" \
+  -d '{"device_name": "Skelly Speaker", "pin": "8947"}'
+
+# With custom timeout
+curl -X POST http://localhost:8765/pair_and_trust_by_name \
+  -H "Content-Type: application/json" \
+  -d '{"device_name": "Skelly Speaker", "pin": "8947", "timeout": 60}'
+```
+
+---
+
+### � POST /pair_and_trust_by_mac
+**Automatically pair and trust a Bluetooth device by MAC address using D-Bus agent.**
+
+**⚠️ Requires root privileges** - Server must be started with `sudo`
+
+This endpoint uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`.
+
+**Request Body:**
+```json
+{
+    "mac": "AA:BB:CC:DD:EE:FF",
+    "pin": "1234",
+    "timeout": 30
+}
+```
+
+**Parameters:**
+- `mac` (required): MAC address of the device to pair
+- `pin` (required): PIN code for pairing
+- `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
+
+**Response (success):**
+```json
+{
+    "success": true,
+    "paired": true,
+    "trusted": true,
+    "mac": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+**Response (not root, device not paired):**
+```json
+{
+    "success": false,
+    "error": "Pairing requires root privileges. Device AA:BB:CC:DD:EE:FF is not paired. Run this server as root (e.g., sudo python server.py) or manually pair the device first: bluetoothctl -> pair AA:BB:CC:DD:EE:FF -> enter PIN: 1234"
+}
+```
+
+**Response (already paired):**
+```json
+{
+    "success": true,
+    "paired": true,
+    "trusted": true,
+    "mac": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+**Status Codes:**
+- `200`: Pairing successful
+- `403`: Not running as root and device not paired
+- `503`: D-Bus not available or device not found
+- `400`: Invalid request or pairing failed
+
+**Example:**
+```bash
+# Pair device with PIN
+curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+  -H "Content-Type: application/json" \
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+
+# With custom timeout
+curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+  -H "Content-Type: application/json" \
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947", "timeout": 60}'
+```
+
+**Notes:**
+- First time pairing requires root to register D-Bus agent
+- Once paired, device can be connected without root using `/connect_by_mac`
+- Device will be automatically trusted after successful pairing
+- If device is already paired, trusts it and returns success (no root needed)
+
+---
+
+### �🔗 POST /connect_by_name
+
+---
+
+### �🔗 POST /connect_by_name
 Connect to a Bluetooth device by name.
 
 **Request Body:**
@@ -400,7 +574,23 @@ Simple health check endpoint.
 
 ## 💡 Usage Examples
 
-### 🔗 Connect to device by name:
+### � Pair and trust device (automated):
+```bash
+# Start server as root
+sudo python3 run_server.py
+
+# Pair device with PIN
+curl -X POST http://localhost:8765/pair_and_trust \
+  -H "Content-Type: application/json" \
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+
+# After pairing, can connect without root
+curl -X POST http://localhost:8765/connect_by_mac \
+  -H "Content-Type: application/json" \
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+```
+
+### �🔗 Connect to device by name:
 ```bash
 curl -X POST http://localhost:8765/connect_by_name \
   -H "Content-Type: application/json" \

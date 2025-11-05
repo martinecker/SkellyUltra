@@ -49,23 +49,30 @@ async def main():
 
     print(f"Starting Skelly Ultra REST server on http://{args.host}:{args.port}")
     print("\nAvailable endpoints:")
+    print("\n  Pairing (requires root):")
+    print("  POST /pair_and_trust_by_name  - Pair and trust device by name")
+    print("  POST /pair_and_trust_by_mac   - Pair and trust device by MAC address")
+    print("\n  Connection:")
     print("  POST /connect_by_name  - Connect by device name")
     print("  POST /connect_by_mac   - Connect by MAC address")
+    print(
+        "  POST /disconnect       - Disconnect device(s) (optional mac/device_name, defaults to all)"
+    )
+    print("\n  Device Info:")
     print(
         "  GET  /name             - Get connected device name(s) (optional ?mac= filter)"
     )
     print(
         "  GET  /mac              - Get connected device MAC(s) (optional ?name= search)"
     )
+    print("  GET  /status           - Get full status (all devices and sessions)")
+    print("\n  Audio Playback:")
     print("  POST /play             - Upload and play audio (multipart/form-data)")
     print("  POST /play_filename    - Play audio from file path (JSON with file_path)")
     print(
         "  POST /stop             - Stop playback (optional mac/device_name, defaults to all)"
     )
-    print(
-        "  POST /disconnect       - Disconnect device(s) (optional mac/device_name, defaults to all)"
-    )
-    print("  GET  /status           - Get full status (all devices and sessions)")
+    print("\n  Health:")
     print("  GET  /health           - Health check")
     print(f"\nLog level: {'DEBUG (verbose)' if args.verbose else 'INFO'}")
     print("\nMulti-device support:")

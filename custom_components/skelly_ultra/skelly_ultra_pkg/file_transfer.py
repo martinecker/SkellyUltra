@@ -228,9 +228,7 @@ class FileTransferManager:
         self._state.chunk_size = chunk_size
 
         size = len(file_data)
-        chunk_count = (
-            size + chunk_size - 1
-        ) // chunk_size  # Ceiling division
+        chunk_count = (size + chunk_size - 1) // chunk_size  # Ceiling division
         self._state.total_chunks = chunk_count
 
         logger.info(

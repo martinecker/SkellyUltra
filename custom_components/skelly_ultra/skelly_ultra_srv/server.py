@@ -35,6 +35,12 @@ class SkellyUltraServer:
 
     def _setup_routes(self) -> None:
         """Set up API routes."""
+        self.app.router.add_post(
+            "/pair_and_trust_by_name", self.handle_pair_and_trust_by_name
+        )
+        self.app.router.add_post(
+            "/pair_and_trust_by_mac", self.handle_pair_and_trust_by_mac
+        )
         self.app.router.add_post("/connect_by_name", self.handle_connect_by_name)
         self.app.router.add_post("/connect_by_mac", self.handle_connect_by_mac)
         self.app.router.add_get("/name", self.handle_get_name)
@@ -54,6 +60,14 @@ class SkellyUltraServer:
             "device_name": "Skelly Speaker",
             "pin": "1234"
         }
+
+        Returns:
+        {
+            "success": true/false,
+            "device_name": "Skelly Speaker",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "error": "error message if failed"
+        }
         """
         try:
             data = await request.json()
@@ -66,13 +80,13 @@ class SkellyUltraServer:
                 )
 
             _LOGGER.info("Received connect_by_name request for: %s", device_name)
-            await self.bt_manager.connect_by_name(device_name, pin)
+            success, mac = await self.bt_manager.connect_by_name(device_name, pin)
 
             return web.json_response(
                 {
-                    "success": True,
+                    "success": success,
                     "device_name": self.bt_manager.get_connected_device_name(),
-                    "mac": self.bt_manager.get_connected_device_mac(),
+                    "mac": mac,
                 }
             )
 
@@ -95,6 +109,14 @@ class SkellyUltraServer:
         {
             "mac": "AA:BB:CC:DD:EE:FF",
             "pin": "1234"
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "device_name": "Skelly Speaker",
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "error": "error message if failed"
         }
         """
         try:
@@ -130,11 +152,182 @@ class SkellyUltraServer:
             _LOGGER.exception("Unexpected error in connect_by_mac")
             return web.json_response({"success": False, "error": str(exc)}, status=500)
 
+    async def handle_pair_and_trust_by_name(self, request: web.Request) -> web.Response:
+        """Handle POST /pair_and_trust_by_name endpoint.
+
+        Uses D-Bus agent to automatically pair and trust a Bluetooth device by name.
+        Requires root privileges to register D-Bus agent.
+
+        Expected JSON body:
+        {
+            "device_name": "Skelly Speaker",
+            "pin": "1234",
+            "timeout": 30  # optional, default 30 seconds
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "error": "error message if failed",
+            "paired": true,
+            "trusted": true,
+            "device_name": "Skelly Speaker",
+            "mac": "AA:BB:CC:DD:EE:FF"
+        }
+        """
+        try:
+            data = await request.json()
+            device_name = data.get("device_name")
+            pin = data.get("pin", "1234")
+            timeout = data.get("timeout", 30.0)
+
+            if not device_name:
+                return web.json_response(
+                    {"success": False, "error": "device_name is required"}, status=400
+                )
+
+            if not pin:
+                return web.json_response(
+                    {"success": False, "error": "pin is required"}, status=400
+                )
+
+            _LOGGER.info("Received pair_and_trust_by_name request for: %s", device_name)
+            success, mac = await self.bt_manager.pair_and_trust_by_name(
+                device_name, pin, timeout
+            )
+
+            return web.json_response(
+                {
+                    "success": success,
+                    "paired": True,
+                    "trusted": True,
+                    "device_name": device_name,
+                    "mac": mac,
+                }
+            )
+
+        except ValueError:
+            return web.json_response(
+                {"success": False, "error": "Invalid JSON"}, status=400
+            )
+        except RuntimeError as exc:
+            # RuntimeError contains specific error messages:
+            # - Device not found
+            # - D-Bus not available
+            # - Not running as root (and device not paired)
+            # - Pairing failed
+            _LOGGER.warning("Pair and trust by name failed: %s", exc)
+            error_str = str(exc)
+
+            # Determine appropriate status code
+            if "root privileges" in error_str or "not paired" in error_str.lower():
+                status_code = 403  # Forbidden
+            elif "not available" in error_str or "not found" in error_str:
+                status_code = 503  # Service Unavailable
+            else:
+                status_code = 400  # Bad Request
+
+            return web.json_response(
+                {"success": False, "error": error_str}, status=status_code
+            )
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in pair_and_trust_by_name")
+            return web.json_response({"success": False, "error": str(exc)}, status=500)
+
+    async def handle_pair_and_trust_by_mac(self, request: web.Request) -> web.Response:
+        """Handle POST /pair_and_trust_by_mac endpoint.
+
+        Uses D-Bus agent to automatically pair and trust a Bluetooth device by MAC.
+        Requires root privileges to register D-Bus agent.
+
+        Expected JSON body:
+        {
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "pin": "1234",
+            "timeout": 30  # optional, default 30 seconds
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "error": "error message if failed",
+            "paired": true,
+            "trusted": true,
+            "mac": "AA:BB:CC:DD:EE:FF"
+        }
+        """
+        try:
+            data = await request.json()
+            mac = data.get("mac")
+            pin = data.get("pin", "1234")
+            timeout = data.get("timeout", 30.0)
+
+            if not mac:
+                return web.json_response(
+                    {"success": False, "error": "mac is required"}, status=400
+                )
+
+            if not pin:
+                return web.json_response(
+                    {"success": False, "error": "pin is required"}, status=400
+                )
+
+            _LOGGER.info("Received pair_and_trust_by_mac request for: %s", mac)
+            success = await self.bt_manager.pair_and_trust_by_mac(mac, pin, timeout)
+
+            return web.json_response(
+                {
+                    "success": success,
+                    "paired": True,
+                    "trusted": True,
+                    "mac": mac,
+                }
+            )
+
+        except ValueError:
+            return web.json_response(
+                {"success": False, "error": "Invalid JSON"}, status=400
+            )
+        except RuntimeError as exc:
+            # RuntimeError contains specific error messages:
+            # - D-Bus not available
+            # - Not running as root (and device not paired)
+            # - Pairing failed
+            _LOGGER.warning("Pair and trust by MAC failed: %s", exc)
+            error_str = str(exc)
+
+            # Determine appropriate status code
+            if "root privileges" in error_str or "not paired" in error_str.lower():
+                status_code = 403  # Forbidden
+            elif "not available" in error_str or "not found" in error_str:
+                status_code = 503  # Service Unavailable
+            else:
+                status_code = 400  # Bad Request
+
+            return web.json_response(
+                {"success": False, "error": error_str}, status=status_code
+            )
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in pair_and_trust_by_mac")
+            return web.json_response({"success": False, "error": str(exc)}, status=500)
+
     async def handle_get_name(self, request: web.Request) -> web.Response:
         """Handle GET /name endpoint.
 
         Returns names of all connected devices or a specific device.
         Query param: mac=<MAC> for specific device
+
+        Returns:
+        {
+            "device_name": "Skelly Speaker",  # If mac param provided
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "connected": true/false
+        }
+        or
+        {
+            "devices": [{"name": "...", "mac": "..."}],
+            "count": 1
+        }
         """
         mac = request.query.get("mac")
         if mac:
@@ -163,6 +356,18 @@ class SkellyUltraServer:
 
         Returns MAC addresses of all connected devices or search by name.
         Query param: name=<NAME> to search by device name
+
+        Returns:
+        {
+            "mac": "AA:BB:CC:DD:EE:FF",  # If name param provided
+            "device_name": "Skelly Speaker",
+            "connected": true/false
+        }
+        or
+        {
+            "devices": [{"name": "...", "mac": "..."}],
+            "count": 1
+        }
         """
         name = request.query.get("name")
         if name:
@@ -195,6 +400,15 @@ class SkellyUltraServer:
         - device_name: Optional device name to find
         - macs: Optional JSON array of target MACs
         - all: Optional "true" to play on all devices
+
+        Returns:
+        {
+            "success": true/false,
+            "filename": "audio.wav",
+            "is_playing": true/false,
+            "sessions": {...},
+            "error": "error message if failed"
+        }
         """
         try:
             reader = await request.multipart()
@@ -291,6 +505,15 @@ class SkellyUltraServer:
             "macs": ["mac1", "mac2"],  # Multiple targets
             "all": true  # Play on all connected devices
         }
+
+        Returns:
+        {
+            "success": true/false,
+            "file_path": "/path/to/audio.wav",
+            "is_playing": true/false,
+            "sessions": {...},
+            "error": "error message if failed"
+        }
         """
         try:
             data = await request.json()
@@ -365,6 +588,14 @@ class SkellyUltraServer:
             "device_name": "optional_device_name",  # Find by name
             "all": true  # Stop all (default if no params)
         }
+
+        Returns:
+        {
+            "success": true/false,
+            "is_playing": true/false,
+            "sessions": {...},
+            "error": "error message if failed"
+        }
         """
         try:
             data = {}
@@ -417,6 +648,13 @@ class SkellyUltraServer:
             "device_name": "optional_device_name",  # Find by name
             "all": true  # Disconnect all (default if no params)
         }
+
+        Returns:
+        {
+            "success": true/false,
+            "connected": true/false,
+            "error": "error message if failed"
+        }
         """
         try:
             data = {}
@@ -459,6 +697,19 @@ class SkellyUltraServer:
         """Handle GET /status endpoint.
 
         Returns comprehensive status of both Bluetooth and audio player.
+
+        Returns:
+        {
+            "bluetooth": {
+                "connected_count": 1,
+                "devices": [{"name": "...", "mac": "..."}]
+            },
+            "audio": {
+                "is_playing": true/false,
+                "active_sessions": 1,
+                "sessions": [{"target": "...", "file_path": "...", "is_playing": true/false}]
+            }
+        }
         """
         connected_devices = self.bt_manager.get_connected_devices()
         playback_sessions = self.audio_player.get_all_sessions()
@@ -494,6 +745,11 @@ class SkellyUltraServer:
         """Handle GET /health endpoint.
 
         Simple health check endpoint.
+
+        Returns:
+        {
+            "status": "ok"
+        }
         """
         return web.json_response({"status": "ok"})
 

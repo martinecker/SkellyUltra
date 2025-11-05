@@ -642,27 +642,31 @@ class SkellyClient:
         return ev
 
     async def connect_live_mode(
-        self, timeout: float = 30.0, bt_pin: str = "1234"
+        self, timeout: float = 40.0, bt_pin: str = "1234"
     ) -> str | None:
         """Enable classic BT and connect via REST server.
 
         Sequence:
-        - Query the device for its live name (uses the existing BLE connection).
-        - Send the enable_classic_bt command so the device will expose a classic
-          Bluetooth (non-LE) device with that name.
-        - Request the REST server to connect to the device by name.
-        - Poll the REST server to retrieve the connected device's MAC address.
+        1. Query the device for its live name (uses the existing BLE connection)
+        2. Send the enable_classic_bt command to expose a classic Bluetooth device
+        3. Attempt automated pairing via REST server (requires root on server):
+           - If successful: Connect by MAC address and return immediately
+        4. Fallback to connect_by_name (for manually paired devices):
+           - Used if pairing fails or server lacks root privileges
+           - Requires device to be manually paired beforehand
 
         Args:
-            timeout: Total timeout for the entire process (default 30s).
+            timeout: Server-side timeout for pairing/connection operations (default 40s).
+                    HTTP requests use timeout + buffer to allow for network overhead.
             bt_pin: PIN code for pairing (default "1234").
 
         Returns:
-            The address (MAC) of the connected classic device on success,
+            The MAC address of the connected classic BT device on success,
             or None on failure.
 
-        Note: this method requires that the Skelly device is already connected
-        (so that `get_live_name`/`enable_classic_bt` can be sent).
+        Note:
+            This method requires the Skelly device to be already connected via BLE
+            so that get_live_name and enable_classic_bt commands can be sent.
         """
         # Must be connected to the device to request live name / enable classic
         if not self._client or not getattr(self._client, "is_connected", False):
@@ -688,12 +692,103 @@ class SkellyClient:
             "Requesting REST server to connect to classic BT device: %s", live_name
         )
 
+        # First, attempt to pair and trust the device (requires root on server)
+        # If successful, we'll have the MAC and can connect directly
+        # If pairing fails, fall back to connect_by_name (which requires manual pairing)
+        mac_address = None
+        pairing_succeeded = False
+
         try:
+            logger.debug("Attempting to pair and trust device: %s", live_name)
+            # Use a longer HTTP timeout than the server-side timeout to allow for response
+            # Server uses 'timeout' for pairing, HTTP client needs extra time for network overhead
+            http_timeout = timeout + 10  # Add 10 seconds buffer for HTTP response
+            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                async with session.post(
+                    f"{self.server_url}/pair_and_trust_by_name",
+                    json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
+                ) as resp:
+                    pair_data = await resp.json()
+
+                if pair_data.get("success"):
+                    mac_address = pair_data.get("mac")
+                    if mac_address:
+                        logger.info(
+                            "Successfully paired and trusted device %s (MAC: %s)",
+                            live_name,
+                            mac_address,
+                        )
+                        pairing_succeeded = True
+                    else:
+                        logger.warning(
+                            "Pairing succeeded but no MAC address returned, falling back to connect_by_name"
+                        )
+                else:
+                    error_msg = pair_data.get("error", "Unknown error")
+                    logger.info(
+                        "Pairing failed (%s), will attempt connect_by_name fallback",
+                        error_msg,
+                    )
+
+        except (TimeoutError, aiohttp.ClientError) as err:
+            logger.info(
+                "Pairing request failed (%s), will attempt connect_by_name fallback",
+                err,
+            )
+        except Exception:
+            logger.debug("Unexpected error during pairing attempt", exc_info=True)
+
+        # If pairing succeeded and we have a MAC, connect using MAC address
+        if pairing_succeeded and mac_address:
+            try:
+                logger.info(
+                    "Connecting to paired device by MAC address: %s", mac_address
+                )
+                # Connection should be quick after successful pairing, but add small buffer
+                http_timeout = timeout + 5
+                timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+                async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                    async with session.post(
+                        f"{self.server_url}/connect_by_mac",
+                        json={"mac": mac_address, "pin": bt_pin},
+                    ) as resp:
+                        connect_data = await resp.json()
+
+                    if connect_data.get("success"):
+                        logger.info(
+                            "Successfully connected to classic BT device %s",
+                            mac_address,
+                        )
+                        self._live_mode_client_address = mac_address
+                        return mac_address
+                    else:
+                        error_msg = (
+                            connect_data.get("error")
+                            or connect_data.get("message")
+                            or "Unknown error"
+                        )
+                        logger.warning(
+                            "Failed to connect by MAC after pairing: %s, trying connect_by_name",
+                            error_msg,
+                        )
+
+            except (TimeoutError, aiohttp.ClientError) as err:
+                logger.warning(
+                    "Error connecting by MAC after pairing: %s, trying connect_by_name",
+                    err,
+                )
+
+        # Fallback: Use connect_by_name (original approach for manually paired devices)
+        try:
+            logger.info("Attempting to connect by name: %s", live_name)
             # Use a fresh session for the long-running connection request
             # to avoid connection pool issues with the persistent session.
             # Bluetooth pairing can take 10-30+ seconds.
             # Set timeout on the session to ensure it applies to all operations
-            timeout_config = aiohttp.ClientTimeout(total=timeout)
+            # Add buffer for HTTP overhead
+            http_timeout = timeout + 5
+            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
             async with aiohttp.ClientSession(timeout=timeout_config) as session:
                 async with session.post(
                     f"{self.server_url}/connect_by_name",
