@@ -29,8 +29,8 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy server code
-COPY . .
+# Copy server code into skelly_ultra_srv subdirectory to maintain module structure
+COPY . ./skelly_ultra_srv
 
 # Expose REST API port
 EXPOSE 8765
