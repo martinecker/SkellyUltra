@@ -74,7 +74,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         # Build form schema
         schema = vol.Schema(
             {
-                vol.Required("mode", default="manual"): vol.In(["manual", "scan"]),
+                vol.Required("mode", default="scan"): vol.In(["manual", "scan"]),
                 vol.Optional(CONF_ADDRESS, default=""): str,
                 vol.Optional(CONF_NAME, default="Animated Skelly"): str,
                 vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
