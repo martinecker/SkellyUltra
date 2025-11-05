@@ -1,0 +1,51 @@
+version: '3.8'
+
+services:
+  skelly-ultra-server:
+    build: .
+    container_name: skelly-ultra-server
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+
+    volumes:
+      # Mount D-Bus socket for Bluetooth pairing
+      - /var/run/dbus:/var/run/dbus
+      - /run/dbus:/run/dbus
+      # Optional: Persist audio files
+      - ./audio_cache:/tmp/skelly_audio
+
+    environment:
+      # Server configuration
+      - SERVER_HOST=0.0.0.0
+      - SERVER_PORT=8765
+      # Logging
+      - PYTHONUNBUFFERED=1
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/status')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Notes:
+# - This container requires privileged mode and host network to access Bluetooth hardware
+# - The host must have a working Bluetooth adapter
+# - D-Bus system bus must be accessible for automated pairing
+#
+# To run:
+#   docker-compose up -d
+#
+# To view logs:
+#   docker-compose logs -f
+#
+# To stop:
+#   docker-compose down

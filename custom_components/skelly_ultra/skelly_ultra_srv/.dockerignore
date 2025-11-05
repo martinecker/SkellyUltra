@@ -1,0 +1,41 @@
+# Python
+
+**pycache**/
+_.py[cod]
+_$py.class
+\*.so
+.Python
+
+# Virtual environments
+
+venv/
+env/
+ENV/
+
+# IDE
+
+.vscode/
+.idea/
+_.swp
+_.swo
+
+# Documentation (already in image)
+
+\*.md
+
+# Git
+
+.git/
+.gitignore
+
+# Test files
+
+test\__.py
+_\_test.py
+tests/
+
+# Build artifacts
+
+build/
+dist/
+\*.egg-info/

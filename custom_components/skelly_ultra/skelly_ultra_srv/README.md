@@ -51,6 +51,66 @@ cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 pip3 install -r requirements.txt
 ```
 
+### 3. Docker Installation (Alternative)
+
+If you prefer containerized deployment, you can use Docker:
+
+#### 🐳 Build the Docker Image
+
+```bash
+cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
+docker build -t skelly-ultra-server .
+```
+
+#### 🚀 Run with Docker
+
+**Using docker run:**
+```bash
+docker run -d \
+  --name skelly-ultra-server \
+  --privileged \
+  --network host \
+  -v /var/run/dbus:/var/run/dbus \
+  -v /run/dbus:/run/dbus \
+  --restart unless-stopped \
+  skelly-ultra-server
+```
+
+**Using docker-compose (recommended):**
+```bash
+# Start the server
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the server
+docker-compose down
+```
+
+**Important Docker notes:**
+- `--privileged` flag is **required** for Bluetooth hardware access
+- `--network host` is **required** for Bluetooth device discovery
+- D-Bus socket mounts (`/var/run/dbus`, `/run/dbus`) are **required** for automated pairing
+- The host system must have a working Bluetooth adapter
+- Automated pairing works because the container runs as root by default
+
+#### 🔍 Monitor Docker Container
+
+```bash
+# View logs
+docker logs -f skelly-ultra-server
+
+# Check status
+docker ps | grep skelly-ultra-server
+
+# Enter container for debugging
+docker exec -it skelly-ultra-server /bin/bash
+
+# Restart container
+docker restart skelly-ultra-server
+```
+
 ## 🚀 Running the Server
 
 ### ▶️ Option 1: Using the provided run script (easiest)
