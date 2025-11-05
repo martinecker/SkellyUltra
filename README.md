@@ -4,6 +4,8 @@ Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween anim
 
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
 
+See the [Quick Start Guide](QUICK_START.md) or keep reading for detailed instructions.
+
 There is a companion project that provides a fully web browser-based controller here https://github.com/martinecker/SkellyUltraWebController
 
 ## 📑 Table of Contents
