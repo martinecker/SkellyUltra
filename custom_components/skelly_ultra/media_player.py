@@ -480,6 +480,9 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._is_playing = False
         self._monitor_task: asyncio.Task | None = None
 
+        # Cache for eye icon images (loaded asynchronously on startup)
+        self._eye_icon_cache: dict[int, str] = {}
+
         # Device grouping
         if address:
             self._attr_device_info = DeviceInfo(
@@ -489,10 +492,38 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass, load the file list and start event monitoring."""
         await super().async_added_to_hass()
+        # Pre-load eye icon images to avoid blocking I/O in property getter
+        await self._async_load_eye_icon_cache()
         # Load file list on startup via coordinator
         await self.coordinator.async_refresh_file_list()
         # Start monitoring PlaybackEvent notifications from device
         self._monitor_task = asyncio.create_task(self._monitor_play_pause_events())
+
+    async def _async_load_eye_icon_cache(self) -> None:
+        """Load all eye icon images into cache asynchronously.
+
+        This prevents blocking I/O operations in the entity_picture property
+        which is called during state updates.
+        """
+        images_path = Path(__file__).parent / "images"
+
+        # Load all 18 eye icons (1-18)
+        for icon_num in range(1, 19):
+            img_path = images_path / f"eye_icon_{icon_num}.png"
+
+            if not img_path.is_file():
+                _LOGGER.debug("Eye icon image not found: %s", img_path)
+                continue
+
+            try:
+                # Use executor to avoid blocking the event loop
+                img_data = await self.hass.async_add_executor_job(img_path.read_bytes)
+                img_base64 = base64.b64encode(img_data).decode("utf-8")
+                self._eye_icon_cache[icon_num] = f"data:image/png;base64,{img_base64}"
+            except (OSError, UnicodeDecodeError):
+                _LOGGER.warning(
+                    "Failed to load eye icon image %d: %s", icon_num, img_path
+                )
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
@@ -599,23 +630,8 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         if current_eye_icon < 1 or current_eye_icon > 18:
             return None
 
-        # Serve the image as a base64 data URI
-        # This allows the icon to be displayed without requiring www folder access
-        images_path = Path(__file__).parent / "images"
-        img_path = images_path / f"eye_icon_{current_eye_icon}.png"
-
-        if not img_path.is_file():
-            _LOGGER.debug("Eye icon image not found: %s", img_path)
-            return None
-
-        try:
-            img_data = img_path.read_bytes()
-            img_base64 = base64.b64encode(img_data).decode("utf-8")
-        except (OSError, UnicodeDecodeError):
-            _LOGGER.exception("Failed to encode eye icon image: %s", img_path)
-            return None
-        else:
-            return f"data:image/png;base64,{img_base64}"
+        # Return cached base64 data URI (pre-loaded during initialization)
+        return self._eye_icon_cache.get(current_eye_icon)
 
     @property
     def media_title(self) -> str | None:
