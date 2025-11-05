@@ -443,6 +443,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if transfer_sensor:
                 transfer_sensor.set_complete()
 
+            # Refresh the file list via coordinator
+            coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+            if coordinator:
+                _LOGGER.debug("Refreshing file list after successful upload")
+                await coordinator.async_refresh_file_list()
+
         except FileTransferCancelled:
             _LOGGER.warning("File transfer was cancelled: %s", target_filename)
             if transfer_sensor:

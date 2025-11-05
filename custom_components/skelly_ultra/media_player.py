@@ -475,7 +475,6 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._attr_media_content_type = MediaType.MUSIC
 
         # Playlist state
-        self._file_list: list[Any] = []
         self._current_file_index: int | None = None
         self._is_playing = False
         self._monitor_task: asyncio.Task | None = None
@@ -489,8 +488,8 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass, load the file list and start event monitoring."""
         await super().async_added_to_hass()
-        # Load file list on startup
-        await self._async_refresh_file_list()
+        # Load file list on startup via coordinator
+        await self.coordinator.async_refresh_file_list()
         # Start monitoring PlaybackEvent notifications from device
         self._monitor_task = asyncio.create_task(self._monitor_play_pause_events())
 
@@ -501,18 +500,6 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
             with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
         await super().async_will_remove_from_hass()
-
-    async def _async_refresh_file_list(self) -> None:
-        """Refresh the list of files from the device."""
-        try:
-            self._file_list = await self.adapter.client.get_file_list(timeout=10.0)
-            _LOGGER.debug("Loaded %d files from device", len(self._file_list))
-        except TimeoutError:
-            _LOGGER.warning("Timeout loading file list from device")
-            self._file_list = []
-        except Exception:
-            _LOGGER.exception("Failed to load file list from device")
-            self._file_list = []
 
     async def _monitor_play_pause_events(self) -> None:
         """Monitor the client's event queue for PlaybackEvent notifications.
@@ -599,7 +586,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         # Find the current file's eye_icon value
         current_eye_icon = None
-        for file_info in self._file_list:
+        for file_info in self.coordinator.file_list:
             if file_info.file_index == self._current_file_index:
                 current_eye_icon = file_info.eye_icon
                 break
@@ -635,7 +622,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         if self._current_file_index is None:
             return None
         # Find the file with this index
-        for file_info in self._file_list:
+        for file_info in self.coordinator.file_list:
             if file_info.file_index == self._current_file_index:
                 return file_info.name or f"File {self._current_file_index}"
         return f"File {self._current_file_index}"
@@ -657,7 +644,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         """Return the list of available input sources (file names)."""
         return [
             file_info.name or f"File {file_info.file_index}"
-            for file_info in self._file_list
+            for file_info in self.coordinator.file_list
         ]
 
     @property
@@ -681,7 +668,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         if self._current_file_index is not None:
             # Find current file metadata
-            for file_info in self._file_list:
+            for file_info in self.coordinator.file_list:
                 if file_info.file_index == self._current_file_index:
                     attrs["file_index"] = file_info.file_index
                     attrs["file_name"] = file_info.name
@@ -692,7 +679,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
                     break
 
         # Include playlist information
-        attrs["total_files"] = len(self._file_list)
+        attrs["total_files"] = len(self.coordinator.file_list)
         attrs["file_order"] = self.coordinator.data.get("file_order", [])
 
         return attrs
@@ -735,9 +722,9 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def async_media_play(self) -> None:
         """Play the current file or first file if none selected."""
-        if self._current_file_index is None and self._file_list:
+        if self._current_file_index is None and self.coordinator.file_list:
             # No file selected, play first file
-            self._current_file_index = self._file_list[0].file_index
+            self._current_file_index = self.coordinator.file_list[0].file_index
 
         if self._current_file_index is not None:
             try:
@@ -759,20 +746,20 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def async_media_next_track(self) -> None:
         """Play the next file in the list."""
-        if not self._file_list:
+        if not self.coordinator.file_list:
             return
 
         # Find current index in list
         current_idx = 0
         if self._current_file_index is not None:
-            for i, file_info in enumerate(self._file_list):
+            for i, file_info in enumerate(self.coordinator.file_list):
                 if file_info.file_index == self._current_file_index:
                     current_idx = i
                     break
 
         # Move to next file (wrap around)
-        next_idx = (current_idx + 1) % len(self._file_list)
-        self._current_file_index = self._file_list[next_idx].file_index
+        next_idx = (current_idx + 1) % len(self.coordinator.file_list)
+        self._current_file_index = self.coordinator.file_list[next_idx].file_index
 
         if self._is_playing:
             await self.async_media_play()
@@ -781,20 +768,20 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
     async def async_media_previous_track(self) -> None:
         """Play the previous file in the list."""
-        if not self._file_list:
+        if not self.coordinator.file_list:
             return
 
         # Find current index in list
         current_idx = 0
         if self._current_file_index is not None:
-            for i, file_info in enumerate(self._file_list):
+            for i, file_info in enumerate(self.coordinator.file_list):
                 if file_info.file_index == self._current_file_index:
                     current_idx = i
                     break
 
         # Move to previous file (wrap around)
-        prev_idx = (current_idx - 1) % len(self._file_list)
-        self._current_file_index = self._file_list[prev_idx].file_index
+        prev_idx = (current_idx - 1) % len(self.coordinator.file_list)
+        self._current_file_index = self.coordinator.file_list[prev_idx].file_index
 
         if self._is_playing:
             await self.async_media_play()
@@ -804,7 +791,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
     async def async_select_source(self, source: str) -> None:
         """Select a file to play by name."""
         # Find file by name
-        for file_info in self._file_list:
+        for file_info in self.coordinator.file_list:
             file_name = file_info.name or f"File {file_info.file_index}"
             if file_name == source:
                 self._current_file_index = file_info.file_index
@@ -821,11 +808,11 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         This allows the media browser to show the list of files.
         """
         # Refresh file list when browsing
-        await self._async_refresh_file_list()
+        await self.coordinator.async_refresh_file_list()
 
         # Build media library structure
         children = []
-        for file_info in self._file_list:
+        for file_info in self.coordinator.file_list:
             file_name = file_info.name or f"File {file_info.file_index}"
             children.append(
                 {

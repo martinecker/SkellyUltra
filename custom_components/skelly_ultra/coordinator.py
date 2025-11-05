@@ -43,6 +43,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self.action_lock = asyncio.Lock()
         self._last_refresh_request = 0.0
         self._updates_paused = False
+        self._file_list: list[Any] = []
         _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def pause_updates(self) -> None:
@@ -61,6 +62,32 @@ class SkellyCoordinator(DataUpdateCoordinator):
         """
         _LOGGER.info("Resuming coordinator updates")
         self._updates_paused = False
+
+    async def async_refresh_file_list(self) -> None:
+        """Refresh the list of files from the device.
+
+        This method fetches the current file list from the device and stores
+        it in the coordinator. It can be called by both entities and services
+        that need the latest file list information.
+        """
+        try:
+            self._file_list = await self.adapter.client.get_file_list(timeout=10.0)
+            _LOGGER.debug("Loaded %d files from device", len(self._file_list))
+        except TimeoutError:
+            _LOGGER.warning("Timeout loading file list from device")
+            self._file_list = []
+        except Exception:
+            _LOGGER.exception("Failed to load file list from device")
+            self._file_list = []
+
+    @property
+    def file_list(self) -> list[Any]:
+        """Return the current file list.
+
+        Returns:
+            list[Any]: List of file information objects from the device
+        """
+        return self._file_list
 
     async def async_request_refresh(self) -> None:
         """Request a refresh with debouncing and delay.

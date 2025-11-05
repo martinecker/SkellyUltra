@@ -91,7 +91,7 @@ send_file:
         text:
     target_filename:
       name: Target filename
-      description: The filename to save as on the device (should end with .mp3)
+      description: The filename to save as on the device (should end with .mp3). If a file of this name already exists on the device it will be overwritten!
       required: true
       example: "announcement.mp3"
       selector:
