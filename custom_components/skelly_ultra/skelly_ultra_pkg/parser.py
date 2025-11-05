@@ -114,6 +114,11 @@ class EnableClassicBTEvent:
     status: int
 
 
+@dataclass
+class KeepAliveEvent:
+    payload: bytes
+
+
 def get_utf16le_from_bytes(b: bytes) -> str:
     try:
         return b.decode("utf-16le").strip("\x00")
@@ -145,9 +150,16 @@ def parse_notification(
     | CapacityEvent
     | FileOrderEvent
     | FileInfoEvent
+    | EnableClassicBTEvent
+    | KeepAliveEvent
     | None
 ):
     hexstr = data.hex().upper()
+
+    if hexstr.startswith("FEDC"):
+        # Keep alive message - strip the FEDC prefix and return the payload
+        payload = data[2:]  # Skip first 2 bytes (FEDC)
+        return KeepAliveEvent(payload=payload)
 
     if hexstr.startswith("BBE1"):
         action = int(hexstr[4:6], 16)
