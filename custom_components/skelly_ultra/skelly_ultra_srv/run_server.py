@@ -10,6 +10,7 @@ from pathlib import Path
 # Add parent directory to path to import from skelly_ultra_srv
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from skelly_ultra_srv.colored_logging import setup_colored_logging
 from skelly_ultra_srv.server import SkellyUltraServer
 
 
@@ -37,13 +38,9 @@ async def main():
     )
     args = parser.parse_args()
 
-    # Configure logging
+    # Configure colored logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+    setup_colored_logging(level=log_level)
 
     server = SkellyUltraServer(host=args.host, port=args.port)
 
