@@ -18,10 +18,11 @@ import {
  * Protocol Response Parser
  */
 export class ProtocolParser {
-  constructor(stateManager, fileManager, logger) {
+  constructor(stateManager, fileManager, logger, onPlayPauseCallback = null) {
     this.state = stateManager;
     this.fileManager = fileManager;
     this.log = logger;
+    this.onPlayPause = onPlayPauseCallback;
   }
 
   /**
@@ -393,6 +394,11 @@ export class ProtocolParser {
     const playing = !!parseInt(hex.slice(8, 10), 16);
     const duration = parseInt(hex.slice(10, 14), 16);
     this.log(`Play/Pause serial=${serial} playing=${playing} duration=${duration}`);
+    
+    // Notify callback if provided
+    if (this.onPlayPause) {
+      this.onPlayPause(serial, playing, duration);
+    }
   }
 
   /**

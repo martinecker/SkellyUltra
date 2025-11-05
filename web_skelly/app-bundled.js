@@ -2,7 +2,7 @@
  * Skelly Ultra - Bundled Version
  * All modules combined into a single file for file:// protocol compatibility
  * 
- * Generated: 2025-11-04T15:38:19.850769
+ * Generated: 2025-11-04T16:35:43.652324
  * 
  * This is an automatically generated file.
  * To modify, edit the source modules in js/ and app-modular.js, 
@@ -1625,10 +1625,11 @@ class AudioConverter {
  * Protocol Response Parser
  */
 class ProtocolParser {
-  constructor(stateManager, fileManager, logger) {
+  constructor(stateManager, fileManager, logger, onPlayPauseCallback = null) {
     this.state = stateManager;
     this.fileManager = fileManager;
     this.log = logger;
+    this.onPlayPause = onPlayPauseCallback;
   }
 
   /**
@@ -2000,6 +2001,11 @@ class ProtocolParser {
     const playing = !!parseInt(hex.slice(8, 10), 16);
     const duration = parseInt(hex.slice(10, 14), 16);
     this.log(`Play/Pause serial=${serial} playing=${playing} duration=${duration}`);
+    
+    // Notify callback if provided
+    if (this.onPlayPause) {
+      this.onPlayPause(serial, playing, duration);
+    }
   }
 
   /**
@@ -2828,6 +2834,15 @@ class SkellyApp {
       // Initialize state manager
       this.state = new StateManager();
       console.log('State manager created');
+      
+      // Initialize play state tracking
+      this.playState = {
+        serial: null,
+        playing: false,
+        duration: 0,
+        startTime: null,
+        timerInterval: null
+      };
 
       // Initialize BLE manager
       this.ble = new BLEManager(this.state, this.logger.log.bind(this.logger));
@@ -2847,7 +2862,12 @@ class SkellyApp {
       console.log('Audio converter created');
 
       // Initialize protocol parser
-      this.parser = new ProtocolParser(this.state, this.fileManager, this.logger.log.bind(this.logger));
+      this.parser = new ProtocolParser(
+        this.state, 
+        this.fileManager, 
+        this.logger.log.bind(this.logger),
+        this.handlePlayPauseMessage.bind(this)
+      );
       console.log('Protocol parser created');
 
       // Initialize edit modal manager
@@ -3595,7 +3615,7 @@ class SkellyApp {
       const item = this.state.files.items.get(serial);
       if (!item) return;
 
-      if (btn.dataset.action === 'play') {
+      if (btn.dataset.action === 'play' || btn.dataset.action === 'stop') {
         this.handlePlayFile(serial);
       } else if (btn.dataset.action === 'edit') {
         if (btn.disabled) return;
@@ -3609,8 +3629,19 @@ class SkellyApp {
    */
   async handlePlayFile(serial) {
     const serialHex = serial.toString(16).padStart(4, '0').toUpperCase();
-    await this.ble.send(buildCommand(COMMANDS.PLAY_PAUSE, serialHex + '01', 8));
-    this.logger.log(`Playing file #${serial}`);
+    
+    // Check if this file is currently playing
+    const isPlaying = this.playState.playing && this.playState.serial === serial;
+    
+    // Send '01' to play, '00' to stop
+    const playPauseByte = isPlaying ? '00' : '01';
+    await this.ble.send(buildCommand(COMMANDS.PLAY_PAUSE, serialHex + playPauseByte, 8));
+    
+    if (isPlaying) {
+      this.logger.log(`Stopping file #${serial}`);
+    } else {
+      this.logger.log(`Playing file #${serial}`);
+    }
   }
 
   /**
@@ -3618,6 +3649,80 @@ class SkellyApp {
    */
   handleEditFile(item) {
     this.editModal.open(item);
+  }
+
+  /**
+   * Handle play/pause message from device
+   */
+  handlePlayPauseMessage(serial, playing, duration) {
+    if (playing) {
+      // Start playing
+      this.playState.serial = serial;
+      this.playState.playing = true;
+      this.playState.duration = duration;
+      this.playState.startTime = Date.now();
+      
+      // Start countdown timer
+      this.startPlayTimer(serial);
+    } else {
+      // Stop playing
+      this.stopPlayTimer();
+      this.playState.serial = null;
+      this.playState.playing = false;
+      this.playState.duration = 0;
+      this.playState.startTime = null;
+    }
+    
+    // Update the file table to reflect play state
+    this.updateFilesTable();
+  }
+
+  /**
+   * Start countdown timer for playing file
+   */
+  startPlayTimer(serial) {
+    // Clear any existing timer
+    this.stopPlayTimer();
+    
+    // Update timer every second
+    this.playState.timerInterval = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - this.playState.startTime) / 1000);
+      const remaining = Math.max(0, this.playState.duration - elapsed);
+      
+      // Update the timer display
+      this.updatePlayTimer(serial, remaining);
+      
+      // Stop timer when done
+      if (remaining <= 0) {
+        this.stopPlayTimer();
+      }
+    }, 1000);
+    
+    // Initial update
+    this.updatePlayTimer(serial, this.playState.duration);
+  }
+
+  /**
+   * Stop countdown timer
+   */
+  stopPlayTimer() {
+    if (this.playState.timerInterval) {
+      clearInterval(this.playState.timerInterval);
+      this.playState.timerInterval = null;
+    }
+  }
+
+  /**
+   * Update play timer display for a specific file
+   */
+  updatePlayTimer(serial, seconds) {
+    const btn = document.querySelector(`button[data-action="stop"][data-serial="${serial}"]`);
+    if (btn) {
+      const mins = Math.floor(seconds / 60);
+      const secs = seconds % 60;
+      const timeStr = `${mins}:${secs.toString().padStart(2, '0')}`;
+      btn.textContent = `⏹ Stop (${timeStr})`;
+    }
   }
 
   /**
@@ -4071,6 +4176,12 @@ class SkellyApp {
         }
       }
       
+      // Determine if this file is currently playing
+      const isPlaying = this.playState.playing && this.playState.serial === file.serial;
+      const playButtonHtml = isPlaying
+        ? `<button class="btn sm" data-action="stop" data-serial="${file.serial}">⏹ Stop</button>`
+        : `<button class="btn sm" data-action="play" data-serial="${file.serial}">▶ Play</button>`;
+      
       tr.innerHTML = `
         <td>${file.serial}</td>
         <td>${file.cluster}</td>
@@ -4081,7 +4192,7 @@ class SkellyApp {
         <td><img class="eye-thumb" src="images/eye_icon_${eyeImgIdx}.png" alt="eye ${file.eye}" />${file.eye ?? ''}</td>
         <td>${file.db}</td>
         <td>
-          <button class="btn sm" data-action="play" data-serial="${file.serial}">▶ Play</button>
+          ${playButtonHtml}
           <button class="btn sm" data-action="edit" data-serial="${file.serial}"
             ${canEdit ? '' : 'disabled'}>✏️ Edit</button>
         </td>
