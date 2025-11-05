@@ -145,14 +145,13 @@ automation:
 
 - Make sure Skelly is **powered on**
 - Check that **Bluetooth is enabled** on your Home Assistant device
-- Try using **Manual** mode and enter the MAC address
-  - Find MAC on the Skelly's control panel or mobile app
+- Try using **Manual** mode and enter the MAC address if you know it (via `bluetoothctrl` for example)
 
 ### Live Mode not working?
 
 - Did you set up the REST server? (It's optional, only needed for Live Mode)
 - Is the REST server running on your Linux device?
-- Did you pair the device using `bluetoothctl`?
+- Did you pair the device using `bluetoothctl`? Check the HA and REST server logs for hints as to what could be wrong.
 
 ### Where do I find my entities?
 
