@@ -1,22 +1,37 @@
-# Skelly Ultra REST Server
+# 🖥️ Skelly Ultra REST Server
 
 A Python REST API server using aiohttp for managing Bluetooth Classic device connections and audio playback for the Home Depot Ultra Skelly Halloween animatronic.
 
-## Overview
+## 📑 Table of Contents
+
+- [📖 Overview](#-overview)
+- [📋 Requirements](#-requirements)
+- [⚙️ Installation](#️-installation)
+- [🚀 Running the Server](#-running-the-server)
+- [🔐 Important: Bluetooth Pairing](#-important-bluetooth-pairing)
+- [🌐 API Endpoints](#-api-endpoints)
+- [💡 Usage Examples](#-usage-examples)
+- [🧪 Quick Testing](#-quick-testing)
+- [🛠️ Troubleshooting](#️-troubleshooting)
+- [⚙️ Default Configuration](#️-default-configuration)
+- [🏗️ Architecture](#️-architecture)
+- [📝 Notes](#-notes)
+
+## 📖 Overview
 
 This server is designed to work around limitations of managing Bluetooth Classic audio devices from within Home Assistant containers. It provides a REST API interface to:
-- Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
-- Play audio files through connected devices
-- **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
+- 📡 Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
+- 🎵 Play audio files through connected devices
+- 🔗 **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
 
-## Requirements
+## 📋 Requirements
 
-- **Python 3.11+**
-- **aiohttp** (Python web framework)
-- **bluetoothctl** (part of bluez - Bluetooth management)
-- **pw-play** (part of PipeWire - audio playback)
+- 🐍 **Python 3.11+**
+- 🌐 **aiohttp** (Python web framework)
+- 📡 **bluetoothctl** (part of bluez - Bluetooth management)
+- 🔊 **pw-play** (part of PipeWire - audio playback)
 
-## Installation
+## ⚙️ Installation
 
 ### 1. Install System Dependencies
 
@@ -36,9 +51,9 @@ cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 pip3 install -r requirements.txt
 ```
 
-## Running the Server
+## 🚀 Running the Server
 
-### Option 1: Using the provided run script (easiest)
+### ▶️ Option 1: Using the provided run script (easiest)
 
 ```bash
 cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
@@ -50,14 +65,14 @@ For debug logging:
 python3 run_server.py --verbose
 ```
 
-### Option 2: Using the server module directly
+### 🔧 Option 2: Using the server module directly
 
 ```bash
 cd /path/to/custom_components/skelly_ultra
 python3 -m skelly_ultra_srv.server
 ```
 
-### Option 3: Programmatically
+### 💻 Option 3: Programmatically
 
 ```python
 from skelly_ultra_srv.server import SkellyUltraServer
@@ -66,7 +81,7 @@ server = SkellyUltraServer(host="0.0.0.0", port=8765)
 server.run()
 ```
 
-### Option 4: As a systemd service (recommended for production)
+### 🔄 Option 4: As a systemd service (recommended for production)
 
 A systemd service file is provided: `skelly-ultra-server.service`
 
@@ -93,7 +108,7 @@ A systemd service file is provided: `skelly-ultra-server.service`
    sudo journalctl -u skelly-ultra-server -f
    ```
 
-## Important: Bluetooth Pairing
+## 🔐 Important: Bluetooth Pairing
 
 **Bluetooth Classic devices that require a PIN must be paired manually first.**
 
@@ -123,9 +138,9 @@ bluetoothctl
 
 **After pairing once, the REST API can connect/disconnect automatically.**
 
-## API Endpoints
+## 🌐 API Endpoints
 
-### POST /connect_by_name
+### 🔗 POST /connect_by_name
 Connect to a Bluetooth device by name.
 
 **Request Body:**
@@ -145,7 +160,7 @@ Connect to a Bluetooth device by name.
 }
 ```
 
-### POST /connect_by_mac
+### 🔗 POST /connect_by_mac
 Connect to a Bluetooth device by MAC address.
 
 **Request Body:**
@@ -165,7 +180,7 @@ Connect to a Bluetooth device by MAC address.
 }
 ```
 
-### GET /name
+### 📛 GET /name
 Get the names of all connected devices, or query for a specific device by MAC address.
 
 **Query Parameters:**
@@ -200,7 +215,7 @@ curl http://localhost:8765/name
 curl "http://localhost:8765/name?mac=AA:BB:CC:DD:EE:FF"
 ```
 
-### GET /mac
+### 🔍 GET /mac
 Get the MAC addresses of all connected devices, or search for a device by name.
 
 **Query Parameters:**
@@ -235,7 +250,7 @@ curl http://localhost:8765/mac
 curl "http://localhost:8765/mac?name=Skelly%20Speaker"
 ```
 
-### POST /play
+### ▶️ POST /play
 Upload and play an audio file through the connected device(s).
 
 **Request:** multipart/form-data with the following fields:
@@ -278,7 +293,7 @@ curl -X POST http://localhost:8765/play \
 }
 ```
 
-### POST /play_filename
+### 🎵 POST /play_filename
 Play an audio file from a file path (legacy endpoint for direct file access).
 
 **Request Body:**
@@ -304,7 +319,7 @@ Play an audio file from a file path (legacy endpoint for direct file access).
 }
 ```
 
-### POST /stop
+### ⏹️ POST /stop
 Stop currently playing audio.
 
 **Request Body (optional):**
@@ -325,7 +340,7 @@ Stop currently playing audio.
 }
 ```
 
-### POST /disconnect
+### 🔌 POST /disconnect
 Disconnect Bluetooth device(s).
 
 **Request Body (optional):**
@@ -345,7 +360,7 @@ Disconnect Bluetooth device(s).
 }
 ```
 
-### GET /status
+### 📊 GET /status
 Get comprehensive status information including all connected devices and their playback sessions.
 
 **Response:**
@@ -373,7 +388,7 @@ Get comprehensive status information including all connected devices and their p
 }
 ```
 
-### GET /health
+### ✅ GET /health
 Simple health check endpoint.
 
 **Response:**
@@ -383,112 +398,110 @@ Simple health check endpoint.
 }
 ```
 
-## Usage Examples
+## 💡 Usage Examples
 
-### Connect to device by name:
+### 🔗 Connect to device by name:
 ```bash
 curl -X POST http://localhost:8765/connect_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 ```
 
-### Connect to device by MAC:
+### 🔗 Connect to device by MAC:
 ```bash
 curl -X POST http://localhost:8765/connect_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF", "pin": "1234"}'
 ```
 
-### Upload and play audio on specific device:
+### ▶️ Upload and play audio on specific device:
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/spooky_sound.wav" \
   -F "mac=AA:BB:CC:DD:EE:FF"
 ```
 
-### Upload and play audio on all devices:
+### ▶️ Upload and play audio on all devices:
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/spooky_sound.wav" \
   -F "all=true"
 ```
 
-### Play audio from file path (legacy):
+### 🎵 Play audio from file path (legacy):
 ```bash
 curl -X POST http://localhost:8765/play_filename \
   -H "Content-Type: application/json" \
   -d '{"file_path": "/path/to/spooky_sound.wav", "mac": "AA:BB:CC:DD:EE:FF"}'
 ```
 
-### Stop playback on specific device:
+### ⏹️ Stop playback on specific device:
 ```bash
 curl -X POST http://localhost:8765/stop \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF"}'
 ```
 
-### Stop playback on all devices:
+### ⏹️ Stop playback on all devices:
 ```bash
 curl -X POST http://localhost:8765/stop
 ```
 
-### Get status:
+### 📊 Get status:
 ```bash
 curl http://localhost:8765/status
 ```
 
-### Disconnect specific device:
+### 🔌 Disconnect specific device:
 ```bash
 curl -X POST http://localhost:8765/disconnect \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF"}'
 ```
 
-### Disconnect all devices:
+### 🔌 Disconnect all devices:
 ```bash
 curl -X POST http://localhost:8765/disconnect
 ```
 
+## 🧪 Quick Testing
 
-
-## Quick Testing
-
-### Basic connectivity test:
+### ✅ Basic connectivity test:
 
 ```bash
 curl http://localhost:8765/health
 # Expected: {"status": "ok"}
 ```
 
-### Check status:
+### 📊 Check status:
 
 ```bash
 curl http://localhost:8765/status
 ```
 
-## Troubleshooting
+## 🛠️ Troubleshooting
 
-### Server won't start
+### ❌ Server won't start
 - Check if port 8765 is already in use: `sudo netstat -tulpn | grep 8765`
 - Check if bluetoothctl is available: `which bluetoothctl`
 - Check if pw-play is available: `which pw-play`
 
-### Can't connect to Bluetooth device
+### 📡 Can't connect to Bluetooth device
 - Make sure Bluetooth is powered on: `bluetoothctl power on`
 - Try scanning manually first: `bluetoothctl scan on`
 - Check if device is already paired: `bluetoothctl devices`
 - If device is already paired, try removing it first: `bluetoothctl remove AA:BB:CC:DD:EE:FF`
 
-### Audio playback not working
+### 🔇 Audio playback not working
 - Check PipeWire is running: `systemctl --user status pipewire`
 - List available audio devices: `pw-cli list-objects | grep node.name`
 - Test pw-play directly: `pw-play /path/to/test.wav`
 
-### Permission issues
+### 🔐 Permission issues
 - Make sure your user is in the `bluetooth` group: `sudo usermod -aG bluetooth $USER`
 - Log out and back in for group changes to take effect
 
-## Default Configuration
+## ⚙️ Default Configuration
 
 - **Host**: `0.0.0.0` (all interfaces)
 - **Port**: `8765`
@@ -498,7 +511,7 @@ curl http://localhost:8765/status
 
 These can be modified in the `SkellyUltraServer` class initialization.
 
-## Architecture
+## 🏗️ Architecture
 
 The server consists of three main components:
 
@@ -506,7 +519,7 @@ The server consists of three main components:
 2. **bluetooth_manager.py**: Manages Bluetooth connections using bluetoothctl
 3. **audio_player.py**: Manages audio playback using pw-play (PipeWire)
 
-## Notes
+## 📝 Notes
 
 - The server uses bluetoothctl in interactive mode to handle pairing and connections
 - Audio playback uses PipeWire's pw-play command for streaming
