@@ -448,6 +448,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
     _attr_has_entity_name = True
     _attr_supported_features = (
         MediaPlayerEntityFeature.PLAY
+        | MediaPlayerEntityFeature.PLAY_MEDIA
         | MediaPlayerEntityFeature.STOP
         | MediaPlayerEntityFeature.NEXT_TRACK
         | MediaPlayerEntityFeature.PREVIOUS_TRACK
