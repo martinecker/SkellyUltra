@@ -18,7 +18,7 @@
         },
         "data_description": {
           "server_url": "URL of the Skelly Ultra REST server for live mode audio features (default: http://localhost:8765)",
-          "live_mode_pin": "PIN code for pairing the Live Mode Bluetooth speaker. Note: This integration cannot automatically pair the device. You must manually pair using bluetoothctl on the host running the REST server (bluetoothctl -&gt; pair &lt;MAC&gt; -&gt; enter PIN when prompted). Default: 1234"
+          "live_mode_pin": "PIN code for pairing the Live Mode Bluetooth speaker. Note: This integration can only automatically pair the device if the REST server is running as root. Otherwise, you must manually pair using bluetoothctl on the host running the REST server (bluetoothctl -&gt; pair &lt;MAC&gt; -&gt; enter PIN when prompted). Default: 1234"
         }
       },
       "server_warning": {

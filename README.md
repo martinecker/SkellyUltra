@@ -69,11 +69,30 @@ For installation and setup of the REST server, see the [REST Server Documentatio
 
 ### 📡 Live Mode Bluetooth Pairing
 
-**Live Mode uses Classic Bluetooth**, which requires manual, interactive pairing:
+**Live Mode uses Classic Bluetooth**, which can be paired either automatically (if REST server runs as root) or manually:
 
-#### Step 1: Make the Bluetooth Speaker Discoverable
+#### Option 1: Automatic Pairing (Recommended)
 
-The Skelly Ultra device only makes its Classic Bluetooth speaker discoverable after you tell it to enable Live Mode:
+The REST server can automatically pair devices when you enable Live Mode, if it's running with root privileges:
+
+**Requirements**:
+- REST server must be run as **root** (e.g., `sudo python3 run_server.py`)
+- Python package: `pydbus` (included in requirements.txt)
+
+**How it works**:
+1. **Add the integration in Home Assistant** (see Installation section below)
+2. **Turn on the "Live Mode" switch** in Home Assistant
+   - The integration will automatically discover, pair, and connect to the device
+   - Pairing happens seamlessly in the background using the configured PIN
+   - The switch should stay on once pairing completes
+
+**That's it!** The pairing persists and you won't need to pair again.
+
+#### Option 2: Manual Pairing
+
+If you prefer not to run the REST server as root, or automatic pairing fails, you can pair manually:
+
+**Step 1: Make the Bluetooth Speaker Discoverable**
 
 1. **First, add the integration in Home Assistant** (see Installation section below)
 2. **Turn on the "Live Mode" switch** in Home Assistant
@@ -83,7 +102,7 @@ The Skelly Ultra device only makes its Classic Bluetooth speaker discoverable af
 
 The Skelly device will now be discoverable via Bluetooth as `<Device Name>(Live)`. For example, if your device is named "Animated Skelly" (the default), it will appear as **"Animated Skelly(Live)"**.
 
-#### Step 2: Pair Using bluetoothctl
+**Step 2: Pair Using bluetoothctl**
 
 On the Linux host running the REST server, use `bluetoothctl` to pair with the device:
 
@@ -101,8 +120,6 @@ bluetoothctl
 - Pairing only needs to be done **once per device**. The pairing will persist.
 - You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
 - Look for the device name with **(Live)** suffix - this is the Classic Bluetooth speaker
-
-**Why manual pairing?** Classic Bluetooth devices require interactive PIN entry during pairing. This is a limitation of the Bluetooth Classic protocol and cannot be automated by the integration.
 
 ## 🚀 Installation
 
@@ -139,7 +156,7 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - **REST server URL**: URL of the Skelly Ultra REST server (default: `http://localhost:8765`)
      - If the server is on a different host, use `http://<server-ip>:8765`
    - **Live Mode PIN**: Bluetooth PIN for pairing (default: 1234)
-     - This is for reference only - actual pairing must be done manually via `bluetoothctl`
+     - This is only used if the REST server runs as root, otherwise it's for reference only - actual pairing must be done manually via `bluetoothctl`
 
 4. **Verify setup**:
    - The integration should show as "Connected"
