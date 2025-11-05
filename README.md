@@ -1,23 +1,40 @@
-# Skelly Ultra Integration
+# 💀 Skelly Ultra Integration
 
 Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
 
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
 
-There is a companion project that provides a fully web browser-based controller here: https://github.com/martinecker/SkellyUltraWebController
+There is a companion project that provides a fully web browser-based controller here https://github.com/martinecker/SkellyUltraWebController
 
-## Features
+## 📑 Table of Contents
 
-- **Sensor entities**: Volume, live name, storage capacity, file count, file order
-- **Light entities**: RGB lighting control for Torso and Head channels
-- **Switch entities**:
+- [✨ Features](#-features)
+- [📋 Prerequisites](#-prerequisites)
+  - [🖥️ Skelly Ultra REST Server](#️-skelly-ultra-rest-server)
+  - [📡 Live Mode Bluetooth Pairing](#-live-mode-bluetooth-pairing)
+- [🚀 Installation](#-installation)
+- [🎮 Usage](#-usage)
+  - [📦 Available Entities](#-available-entities)
+  - [🔊 Playing Audio](#-playing-audio)
+  - [🤖 Automation Examples](#-automation-examples)
+  - [📁 Using the Internal Files Media Player](#-using-the-internal-files-media-player)
+  - [🎵 Playing Files Stored on Device (via Services)](#-playing-files-stored-on-device-via-services)
+  - [📤 Uploading Audio Files to Device](#-uploading-audio-files-to-device)
+- [🛠️ Troubleshooting](#️-troubleshooting)
+- [📄 License](#-license)
+
+## ✨ Features
+
+- 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
+- 💡 **Light entities**: RGB lighting control for Torso and Head channels
+- 🔌 **Switch entities**:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect for Torso and Head lights)
   - Movement controls (Head, Arm, Torso, and All body parts)
-- **Number entities**: Volume control, effect speed (for Torso and Head)
-- **Select entities**: Eye icon selection, effect mode (Static/Strobe/Pulse for Torso and Head)
-- **Image entities**: Eye icon preview
-- **Media Player entities**:
+- 🎚️ **Number entities**: Volume control, effect speed (for Torso and Head)
+- 🎨 **Select entities**: Eye icon selection, effect mode (Static/Strobe/Pulse for Torso and Head)
+- 🖼️ **Image entities**: Eye icon preview
+- 🎵 **Media Player entities**:
   - **Live Mode Speaker**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
     - Supports TTS (Text-to-Speech) services
     - Supports multiple audio formats (WAV, MP3, FLAC, OGG, etc.)
@@ -26,11 +43,11 @@ There is a companion project that provides a fully web browser-based controller 
     - Next/previous track controls
     - File metadata available as entity attributes
     - Select files by name
-- **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
+- ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
 
-## Prerequisites
+## 📋 Prerequisites
 
-### Skelly Ultra REST Server
+### 🖥️ Skelly Ultra REST Server
 
 If you want to use Skelly's live mode and the live mode media player provided by this integration you have to set up and run the Skelly Ultra REST server.
 
@@ -48,7 +65,7 @@ The REST server handles:
 
 For installation and setup of the REST server, see the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md).
 
-### Live Mode Bluetooth Pairing
+### 📡 Live Mode Bluetooth Pairing
 
 **Live Mode uses Classic Bluetooth**, which requires manual, interactive pairing:
 
@@ -85,7 +102,7 @@ bluetoothctl
 
 **Why manual pairing?** Classic Bluetooth devices require interactive PIN entry during pairing. This is a limitation of the Bluetooth Classic protocol and cannot be automated by the integration.
 
-## Installation
+## 🚀 Installation
 
 ### Step 1: Install the Integration Files
 
@@ -143,9 +160,9 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - Check REST server logs for connection details
    - Verify the device is paired and trusted in `bluetoothctl`
 
-## Usage
+## 🎮 Usage
 
-### Available Entities
+### 📦 Available Entities
 
 The integration creates the following entities:
 
@@ -176,7 +193,7 @@ For example, if your device is named "Animated Skelly" with MAC address `AA:BB:C
 
 You can find your actual entity IDs in **Settings** → **Devices & Services** → **Skelly Ultra** → click on your device.
 
-### Playing Audio
+### 🔊 Playing Audio
 
 > **Note**: In all examples below, replace `media_player.skelly_ultra_live_mode_speaker` with your actual media player entity ID (see note above about entity naming).
 
@@ -236,7 +253,7 @@ data:
   media_content_id: "/config/www/sounds/my_audio.wav"
 ```
 
-### Automation Examples
+### 🤖 Automation Examples
 
 #### Announce When Someone Arrives
 
@@ -278,7 +295,7 @@ automation:
 - Pairing must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
 
-### Using the Internal Files Media Player
+### 📁 Using the Internal Files Media Player
 
 The **Internal Files** media player entity provides a full playlist interface for audio files stored on the device's internal storage.
 
@@ -365,7 +382,7 @@ The media player exposes the following attributes when a file is selected/playin
 - `total_files`: Total number of files on device
 - `file_order`: Playback order list (same as File Order sensor)
 
-### Playing Files Stored on Device (via Services)
+### 🎵 Playing Files Stored on Device (via Services)
 
 The Skelly Ultra can store audio files on its internal storage. You can play or stop these files using the integration's services.
 
@@ -404,7 +421,7 @@ data:
   file_index: 1  # File index (1-based, must be ≥ 1)
 ```
 
-### Uploading Audio Files to Device
+### 📤 Uploading Audio Files to Device
 
 The integration provides file transfer services to upload audio files to the device's internal storage. Audio files are automatically converted to 8kHz mono MP3 format for compatibility with the device.
 
@@ -500,9 +517,9 @@ automation:
 - If you have multiple Skelly devices, specify `device_id` or `entity_id`
 - If you have only one device, these parameters can be omitted
 
-## Troubleshooting
+## 🛠️ Troubleshooting
 
-### Media Player Shows "Unavailable"
+### ❌ Media Player Shows "Unavailable"
 
 **Cause**: Live Mode is not enabled or the Bluetooth speaker is not connected.
 
@@ -516,7 +533,7 @@ automation:
    ```
    - Look for `Paired: yes` and `Trusted: yes`
 
-### "Device is NOT Paired" Error
+### ⚠️ "Device is NOT Paired" Error
 
 **Cause**: The Skelly device has not been manually paired via Bluetooth.
 
@@ -533,7 +550,7 @@ automation:
    ```
 2. Try enabling Live Mode again in Home Assistant
 
-### Audio Playback Fails
+### 🔇 Audio Playback Fails
 
 **Symptom**: Media player accepts commands but no audio plays.
 
@@ -553,7 +570,7 @@ automation:
    # Look for "Connected: yes"
    ```
 
-### REST Server Connection Fails
+### 🌐 REST Server Connection Fails
 
 **Symptom**: Integration shows "Cannot connect to REST server" or similar error.
 
@@ -568,7 +585,7 @@ automation:
    - If on different host: `http://<server-ip>:8765`
 3. **Check firewall rules** if the REST server is on a different host
 
-### Bluetooth Connection Takes Too Long
+### ⏱️ Bluetooth Connection Takes Too Long
 
 **Symptom**: Live Mode switch takes 30+ seconds to turn on.
 
@@ -579,7 +596,7 @@ automation:
 - Check REST server logs for progress
 - If it fails, try disabling and re-enabling Live Mode
 
-### Wrong PIN Error
+### 🔐 Wrong PIN Error
 
 **Symptom**: Cannot pair device, or pairing fails with authentication error.
 
@@ -591,14 +608,14 @@ automation:
    bluetoothctl remove <MAC_ADDRESS>
    ```
 
-### Still Having Issues?
+### 🆘 Still Having Issues?
 
 1. **Check Home Assistant logs**: Settings → System → Logs
 2. **Check REST server logs**: See output from the REST server terminal
 3. **Verify prerequisites**: Ensure PipeWire, bluetoothctl, and all dependencies are installed on the REST server host
 4. **Test manually**: Try connecting and playing audio directly on the REST server host before using Home Assistant
 
-## License
+## 📄 License
 
 This integration is provided as-is for use with Ultra Skelly devices. Use it at your own risk. It might brick your Skelly.
 
