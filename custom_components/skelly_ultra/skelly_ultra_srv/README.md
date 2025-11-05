@@ -175,40 +175,84 @@ docker restart skelly-ultra-server
 
 ### Automated Pairing (Recommended)
 
-The server now supports **automated pairing using D-Bus** via the `/pair_and_trust_by_name` and `/pair_and_trust_by_mac` endpoints. This is the easiest method:
+The server supports **automated pairing using D-Bus** via the `/pair_and_trust_by_name` and `/pair_and_trust_by_mac` endpoints. The server automatically handles privilege elevation when needed for pairing operations.
 
-**Requirements:**
-- Server must be run as **root** (e.g., `sudo python3 run_server.py`)
-- Python package: `pydbus` (included in requirements.txt)
+**✨ Key Features:**
+- ✅ Server runs as regular user (for PipeWire/audio access)
+- ✅ Automatically uses `sudo` only when pairing/trusting devices
+- ✅ Fully automated PIN entry via D-Bus
+- ✅ No manual intervention needed
 
-**Usage (by name):**
+#### Setup: Configure Sudo for Pairing (One-time)
+
+**Check if you need this step:**
+
+First, test if you already have passwordless sudo:
+```bash
+sudo -l
+```
+
+If you see `(ALL) NOPASSWD: ALL` or similar, you can **skip this setup** - your system already allows passwordless sudo. This is common on:
+- **Raspberry Pi OS** (default `pi` user configuration)
+- Systems where you're in the `wheel` or `admin` group with NOPASSWD
+- Development environments with relaxed sudo policies
+
+**If sudo prompts for a password**, configure passwordless sudo for the Python executable:
+
+1. **Add to sudoers**:
+   ```bash
+   sudo visudo -f /etc/sudoers.d/skelly-ultra-server
+   ```
+
+2. **Add this line** (replace `your_username` with your actual username):
+   ```
+   your_username ALL=(ALL) NOPASSWD: /usr/bin/python3
+   ```
+
+3. **Save and exit** (Ctrl+X, then Y, then Enter)
+
+**Note:** This configuration only grants passwordless access to the Python executable, not all commands. If you already have broader sudo access (like on Raspberry Pi OS), this explicit rule is redundant but harmless.
+
+#### Running the Server
+
+Simply run as your regular user:
+```bash
+python3 -m skelly_ultra_srv.server
+```
+
+**How it works:**
+1. Server runs as your user → ✅ PipeWire audio works perfectly
+2. When pairing needed → Automatically uses `sudo` for that operation only
+3. After pairing completes → Returns to user context
+4. Audio playback continues → ✅ Uses your user's PipeWire session
+
+#### Pairing Usage
+
+**Pair by device name:**
 ```bash
 curl -X POST http://localhost:8765/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 ```
 
-**Usage (by MAC address):**
+**Pair by MAC address:**
 ```bash
 curl -X POST http://localhost:8765/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF", "pin": "1234"}'
 ```
 
-**Benefits:**
-- ✅ Fully automated - no manual intervention needed
-- ✅ Handles PIN entry automatically
-- ✅ Returns clear error messages
-- ✅ Works with all Bluetooth Classic devices
+**After pairing once, the device can connect/disconnect automatically without sudo.**
 
-**Error handling:**
-- If not running as root and device is not paired: Returns 403 with instructions
-- If D-Bus not available: Returns 503 with package installation instructions
-- If device not found: Returns 503 with troubleshooting tips
+#### Requirements
+
+- Python package: `pydbus` (included in requirements.txt)
+- Sudo access for pairing (configured above)
+- Device must be in pairing mode and within range. Pairing mode is automatically enabled by the HA integration if called from it. See the HA integration service `skelly_ultra.enable_classic_bt`.
 
 ### Manual Pairing (Fallback)
 
-If you cannot run the server as root, you can pair manually:
+If you cannot configure sudo, you can pair manually:
 
 #### Option 1: Use the helper script
 ```bash
@@ -236,12 +280,12 @@ bluetoothctl
 
 ## 🌐 API Endpoints
 
-### � POST /pair_and_trust_by_name
+### 🔐 POST /pair_and_trust_by_name
 **Automatically pair and trust a Bluetooth device by name using D-Bus agent.**
 
-**⚠️ Requires root privileges** - Server must be started with `sudo`
+**✨ Auto-elevates with sudo when needed** - Server can run as regular user
 
-This endpoint discovers the device by name, then uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`.
+This endpoint discovers the device by name, then uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`. If the server is not running as root and the device is not already paired, it will automatically use `sudo` to elevate privileges only for the pairing operation.
 
 **Request Body:**
 ```json
@@ -278,9 +322,11 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 
 **Status Codes:**
 - `200`: Pairing successful
-- `403`: Not running as root and device not paired
+- `403`: Not running as root, no sudo available, and device not paired
 - `503`: D-Bus not available or device not found
 - `400`: Invalid request or pairing failed
+
+**Note:** If not running as root, the server will automatically attempt to use `sudo` for pairing. Ensure your user has sudo privileges (preferably passwordless for automation).
 
 **Example:**
 ```bash
@@ -739,8 +785,13 @@ curl http://localhost:8765/status
 
 ### 🔇 Audio playback not working
 - Check PipeWire is running: `systemctl --user status pipewire`
-- List available audio devices: `pw-cli list-objects | grep node.name`
-- Test pw-play directly: `pw-play /path/to/test.wav`
+- List available audio devices: `pw-cli list-objects | grep node.name`. You should see a device called `bluez_output.AA_BB_CC_DD_EE_FF.1` or similar with the MAC address of the Skelly live speaker.
+- Test pw-play directly: `pw-play --target AA:BB:CC:DD:EE:FF /path/to/test.wav` where `AA:BB:CC:DD:EE:FF` should be replaced with the MAC address of your Skelly live speaker.
+- Check that certain packages that often conflict with pipewire's ability to use Bluetooth speakers. Remove them via `sudo apt purge`. In particular:
+  - bluez-alsa-utils
+  - libasound2-plugin-bluez
+  - pulseaudio
+  - pulseaudio-utils
 
 ### 🔐 Permission issues
 - Make sure your user is in the `bluetooth` group: `sudo usermod -aG bluetooth $USER`

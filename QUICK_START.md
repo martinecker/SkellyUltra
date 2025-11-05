@@ -67,7 +67,7 @@ Live Mode lets you:
    - Run the server script (see [detailed guide](custom_components/skelly_ultra/skelly_ultra_srv/README.md))
 
 2. **Pair Bluetooth** (one-time setup)
-   - Use automatic pairing when running the REST Server as root, or
+   - Use automatic pairing when running the REST Server (requires python3 to get elevanted iiviledges for pairing), or
    - Pair manually:
      - Enable Live Mode in Home Assistant
      - Use `bluetoothctl` to pair with your Skelly

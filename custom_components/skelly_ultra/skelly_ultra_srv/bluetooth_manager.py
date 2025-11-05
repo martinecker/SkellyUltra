@@ -233,6 +233,97 @@ class BluetoothManager:
             _LOGGER.exception("Failed to discover device by name")
             raise RuntimeError(f"Failed to discover device by name: {exc}") from exc
 
+    async def _pair_with_sudo(self, mac: str, pin: str, timeout: float = 30.0) -> bool:
+        """Pair device using sudo to elevate privileges only for pairing.
+
+        This method invokes a Python subprocess with sudo that performs
+        the D-Bus pairing operation. This allows the main server to run
+        as a regular user (for PipeWire access) while only elevating
+        for the pairing operation.
+
+        Args:
+            mac: MAC address of the device to pair
+            pin: PIN code for pairing
+            timeout: Maximum time to wait for pairing
+
+        Returns:
+            True if pairing successful, False otherwise
+
+        Raises:
+            RuntimeError: If sudo fails or pairing fails
+        """
+        import sys
+
+        # Create a Python script that will run with sudo
+        # This script will perform the D-Bus pairing
+        script = f"""
+import sys
+import os
+import asyncio
+
+# Add parent directory to path for imports
+sys.path.insert(0, {repr(os.path.dirname(os.path.dirname(__file__)))})
+
+from skelly_ultra_srv.bluetooth_manager import BluetoothManager
+
+async def main():
+    manager = BluetoothManager()
+    try:
+        success = await manager.pair_and_trust_by_mac({repr(mac)}, {repr(pin)}, {timeout})
+        sys.exit(0 if success else 1)
+    except Exception as e:
+        print(f"Pairing failed: {{e}}", file=sys.stderr)
+        sys.exit(2)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+"""
+
+        _LOGGER.info("Attempting pairing with sudo elevation for %s", mac)
+
+        try:
+            # Run the script with sudo
+            proc = await asyncio.create_subprocess_exec(
+                "sudo",
+                sys.executable,
+                "-c",
+                script,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    proc.communicate(), timeout=timeout + 10
+                )
+            except TimeoutError:
+                proc.kill()
+                await proc.wait()
+                error_msg = f"Sudo pairing timed out after {timeout + 10}s"
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
+
+            if proc.returncode == 0:
+                _LOGGER.info("Sudo pairing successful for %s", mac)
+                return True
+            else:
+                error_output = stderr.decode() if stderr else "Unknown error"
+                error_msg = f"Sudo pairing failed: {error_output}"
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
+
+        except FileNotFoundError:
+            error_msg = (
+                "sudo command not found. Please install sudo or run the server as root. "
+                f"Alternatively, manually pair the device: bluetoothctl -> pair {mac}"
+            )
+            _LOGGER.error(error_msg)
+            raise RuntimeError(error_msg)
+        except Exception as exc:
+            error_msg = f"Failed to execute sudo pairing: {exc}"
+            _LOGGER.error(error_msg)
+            raise RuntimeError(error_msg) from exc
+
     async def pair_and_trust_by_name(
         self, device_name: str, pin: str, timeout: float = 30.0
     ) -> tuple[bool, str | None]:
@@ -277,8 +368,9 @@ class BluetoothManager:
         """Pair and trust a Bluetooth device by MAC address using D-Bus agent.
 
         This method registers a D-Bus agent to handle PIN code requests,
-        then initiates pairing with the device. It requires root privileges
-        to register the agent with BlueZ.
+        then initiates pairing with the device. If not running as root,
+        it will attempt to use sudo to elevate privileges only for the
+        pairing operation.
 
         Args:
             mac: MAC address of the device to pair (format: XX:XX:XX:XX:XX:XX)
@@ -289,8 +381,7 @@ class BluetoothManager:
             True if pairing and trust successful, False otherwise
 
         Raises:
-            RuntimeError: If D-Bus not available, not running as root,
-                         or pairing fails
+            RuntimeError: If D-Bus not available or pairing fails
         """
         if not DBUS_AVAILABLE:
             error_msg = (
@@ -315,13 +406,11 @@ class BluetoothManager:
             except Exception:
                 pass
 
-            error_msg = (
-                f"Pairing requires root privileges. Device {mac} is not paired. "
-                "Run this server as root (e.g., sudo python server.py) or manually "
-                f"pair the device first: bluetoothctl -> pair {mac} -> enter PIN: {pin}"
+            # Not running as root and device not paired - try using sudo
+            _LOGGER.info(
+                "Not running as root, attempting to use sudo for pairing %s", mac
             )
-            _LOGGER.error(error_msg)
-            raise RuntimeError(error_msg)
+            return await self._pair_with_sudo(mac, pin, timeout)
 
         _LOGGER.info("Starting D-Bus pairing for device: %s", mac)
 

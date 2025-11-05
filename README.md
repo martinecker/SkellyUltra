@@ -73,11 +73,8 @@ For installation and setup of the REST server, see the [REST Server Documentatio
 
 #### Option 1: Automatic Pairing (Recommended)
 
-The REST server can automatically pair devices when you enable Live Mode, if it's running with root privileges:
-
-**Requirements**:
-- REST server must be run as **root** (e.g., `sudo python3 run_server.py`)
-- Python package: `pydbus` (included in requirements.txt)
+The REST server can automatically pair devices when you enable Live Mode, if it's able to acquire root privileges during the pairing:
+See the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md) for details.
 
 **How it works**:
 1. **Add the integration in Home Assistant** (see Installation section below)
@@ -90,7 +87,7 @@ The REST server can automatically pair devices when you enable Live Mode, if it'
 
 #### Option 2: Manual Pairing
 
-If you prefer not to run the REST server as root, or automatic pairing fails, you can pair manually:
+If you prefer not to run the REST server allowing it elevated root privileges for pairing, or automatic pairing fails, you can pair manually:
 
 **Step 1: Make the Bluetooth Speaker Discoverable**
 
@@ -311,7 +308,7 @@ automation:
 **Notes**:
 - Supported audio formats: MP3, WAV, FLAC, OGG, M4A, and more
 - The integration automatically handles connecting the Bluetooth speaker
-- Pairing can be done automatically if the REST server is running as root and otherwise must be done manually via `bluetoothctl` (only needed once)
+- Pairing can be done automatically if the REST server can get elevated root privileges and otherwise must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
 
 ### 📁 Using the Internal Files Media Player
