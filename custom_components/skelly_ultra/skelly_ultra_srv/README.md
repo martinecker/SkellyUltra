@@ -31,9 +31,11 @@ This server is designed to work around limitations of managing Bluetooth Classic
 - 📡 **bluetoothctl** (part of bluez - Bluetooth management)
 - 🔊 **pw-play** (part of PipeWire - audio playback)
 
+**Important**: When using a Raspberry Pi to run the server it is *highly* recommended to use a dedicated Bluetooth USB dongle. The built-in Bluetooth controller usually has problems to stream audio to a classic Bluetooth speaker device like the Ultra Skelly, resulting in very choppy playback. I've successfully used the TP-Link UB500 Plus.
+
 ## ⚙️ Installation
 
-### 1. Install System Dependencies
+### 1. Install System and Pytthon Dependencies
 
 ```bash
 # On Debian/Ubuntu
@@ -44,14 +46,12 @@ sudo apt-get install bluez pipewire-bin python3-pip
 sudo dnf install bluez pipewire-utils python3-pip
 ```
 
-### 2. Install Python Dependencies
-
 ```bash
 cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 pip3 install -r requirements.txt
 ```
 
-### 3. Docker Installation (Alternative)
+### 2. Docker Installation (Alternative)
 
 If you prefer containerized deployment, you can use Docker:
 
@@ -62,54 +62,7 @@ cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 docker build -t skelly-ultra-server .
 ```
 
-#### 🚀 Run with Docker
-
-**Using docker run:**
-```bash
-docker run -d \
-  --name skelly-ultra-server \
-  --privileged \
-  --network host \
-  -v /var/run/dbus:/var/run/dbus \
-  -v /run/dbus:/run/dbus \
-  --restart unless-stopped \
-  skelly-ultra-server
-```
-
-**Using docker-compose (recommended):**
-```bash
-# Start the server
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop the server
-docker-compose down
-```
-
-**Important Docker notes:**
-- `--privileged` flag is **required** for Bluetooth hardware access
-- `--network host` is **required** for Bluetooth device discovery
-- D-Bus socket mounts (`/var/run/dbus`, `/run/dbus`) are **required** for automated pairing
-- The host system must have a working Bluetooth adapter
-- Automated pairing works because the container runs as root by default
-
-#### 🔍 Monitor Docker Container
-
-```bash
-# View logs
-docker logs -f skelly-ultra-server
-
-# Check status
-docker ps | grep skelly-ultra-server
-
-# Enter container for debugging
-docker exec -it skelly-ultra-server /bin/bash
-
-# Restart container
-docker restart skelly-ultra-server
-```
+After building the image, see [Option 5: Using Docker](#-option-5-using-docker-containerized-deployment) in the Running the Server section below.
 
 ## 🚀 Running the Server
 
@@ -167,6 +120,56 @@ A systemd service file is provided: `skelly-ultra-server.service`
    ```bash
    sudo journalctl -u skelly-ultra-server -f
    ```
+
+### 🐳 Option 5: Using Docker (containerized deployment)
+
+Run the server in a Docker container. First, [build the Docker image](#-build-the-docker-image) if you haven't already.
+
+**Using docker run:**
+```bash
+docker run -d \
+  --name skelly-ultra-server \
+  --privileged \
+  --network host \
+  -v /var/run/dbus:/var/run/dbus \
+  -v /run/dbus:/run/dbus \
+  --restart unless-stopped \
+  skelly-ultra-server
+```
+
+**Using docker-compose (recommended):**
+```bash
+# Start the server
+docker-compose up -d
+
+# View logs
+docker-compose logs -f
+
+# Stop the server
+docker-compose down
+```
+
+**Important Docker notes:**
+- `--privileged` flag is **required** for Bluetooth hardware access
+- `--network host` is **required** for Bluetooth device discovery
+- D-Bus socket mounts (`/var/run/dbus`, `/run/dbus`) are **required** for automated pairing
+- The host system must have a working Bluetooth adapter
+- Automated pairing works because the container runs as root by default
+
+**Monitor Docker container:**
+```bash
+# View logs
+docker logs -f skelly-ultra-server
+
+# Check status
+docker ps | grep skelly-ultra-server
+
+# Enter container for debugging
+docker exec -it skelly-ultra-server /bin/bash
+
+# Restart container
+docker restart skelly-ultra-server
+```
 
 ## 🔐 Important: Bluetooth Pairing
 

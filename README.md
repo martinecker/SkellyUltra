@@ -63,7 +63,7 @@ The REST server handles:
 
 **Important**: The REST server requires `pipewire`, `bluetoothctl`, and related audio tools on the Linux host where it runs.
 
-**Important**: When using a Raspberry Pi to run the server it is *highly* recommended to use a dedicated Bluetooth USB dongle. The built-in Bluetooth controller usually has problems to stream audio to a classic Bluetooth speaker device like the Ultra Skelly, resulting in very choppy playback.
+**Important**: When using a Raspberry Pi to run the server it is *highly* recommended to use a dedicated Bluetooth USB dongle. The built-in Bluetooth controller usually has problems to stream audio to a classic Bluetooth speaker device like the Ultra Skelly, resulting in very choppy playback. I've successfully used the TP-Link UB500 Plus.
 
 For installation and setup of the REST server, see the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md).
 
@@ -311,7 +311,7 @@ automation:
 **Notes**:
 - Supported audio formats: MP3, WAV, FLAC, OGG, M4A, and more
 - The integration automatically handles connecting the Bluetooth speaker
-- Pairing must be done manually via `bluetoothctl` (only needed once)
+- Pairing can be done automatically if the REST server is running as root and otherwise must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
 
 ### 📁 Using the Internal Files Media Player
@@ -395,11 +395,11 @@ The media player exposes the following attributes when a file is selected/playin
 - `file_index`: The 1-based index of the file
 - `file_name`: The filename
 - `file_length`: Duration in milliseconds
-- `file_action`: Associated action/movement setting
+- `file_action`: Associated action/movement setting, which is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
 - `file_eye_icon`: Associated eye icon
 - `file_cluster`: File cluster information
 - `total_files`: Total number of files on device
-- `file_order`: Playback order list (same as File Order sensor)
+- `file_order`: Playback order list (same as File Order sensor, something like `[3, 1, 5, 4, 2]`)
 
 ### 🎵 Playing Files Stored on Device (via Services)
 
@@ -476,7 +476,7 @@ data:
 
 **Notes**:
 - The `.mp3` extension is added automatically to `target_filename`
-- Audio is automatically converted to 8kHz mono MP3 format
+- Audio is automatically converted to the preferred device format, which is 8kHz mono MP3 format
 - Supported input formats: MP3, WAV, FLAC, OGG, M4A, and many others
 - Upload progress is displayed in Home Assistant logs
 - Large files may take several minutes to upload over BLE
