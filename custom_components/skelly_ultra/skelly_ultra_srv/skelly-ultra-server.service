@@ -6,8 +6,10 @@ Wants=bluetooth.target
 
 [Service]
 Type=simple
-User=YOUR_USERNAME_HERE
-Group=YOUR_USERNAME_HERE
+# Run as root to enable automatic Bluetooth pairing via D-Bus
+# If you don't need automatic pairing, you can set User=YOUR_USERNAME_HERE instead
+User=root
+Group=root
 WorkingDirectory=/path/to/custom_components/skelly_ultra
 ExecStart=/usr/bin/python3 -m skelly_ultra_srv.server
 Restart=always
@@ -15,11 +17,9 @@ RestartSec=10
 StandardOutput=journal
 StandardError=journal
 
-# Security hardening (optional but recommended)
-NoNewPrivileges=true
+# Security hardening
+# Note: NoNewPrivileges and ProtectSystem are relaxed to allow D-Bus system bus access
 PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
 ReadWritePaths=/tmp
 
 [Install]

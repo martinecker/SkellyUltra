@@ -67,8 +67,10 @@ Live Mode lets you:
    - Run the server script (see [detailed guide](custom_components/skelly_ultra/skelly_ultra_srv/README.md))
 
 2. **Pair Bluetooth** (one-time setup)
-   - Enable Live Mode in Home Assistant
-   - Use `bluetoothctl` to pair with your Skelly
+   - Use automatic pairing when running the REST Server as root, or
+   - Pair manually:
+     - Enable Live Mode in Home Assistant
+     - Use `bluetoothctl` to pair with your Skelly
 
 3. **Configure** the integration
    - Add REST server URL: `http://<linux-device-ip>:8765`

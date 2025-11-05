@@ -232,8 +232,6 @@ curl -X POST http://localhost:8765/pair_and_trust_by_name \
   -d '{"device_name": "Skelly Speaker", "pin": "8947", "timeout": 60}'
 ```
 
----
-
 ### � POST /pair_and_trust_by_mac
 **Automatically pair and trust a Bluetooth device by MAC address using D-Bus agent.**
 
@@ -307,12 +305,6 @@ curl -X POST http://localhost:8765/pair_and_trust_by_mac \
 - Once paired, device can be connected without root using `/connect_by_mac`
 - Device will be automatically trusted after successful pairing
 - If device is already paired, trusts it and returns success (no root needed)
-
----
-
-### �🔗 POST /connect_by_name
-
----
 
 ### �🔗 POST /connect_by_name
 Connect to a Bluetooth device by name.
