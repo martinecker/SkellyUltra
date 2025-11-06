@@ -641,6 +641,277 @@ class SkellyClient:
         )
         return ev
 
+    # Private helper methods for connect_live_mode
+
+    async def _get_live_name_for_connection(self) -> str | None:
+        """Get device live name via BLE.
+
+        Returns:
+            Device name on success, None on failure.
+        """
+        try:
+            return await self.get_live_name(timeout=2.0)
+        except TimeoutError:
+            logger.debug("Timed out while querying live name")
+            return None
+        except Exception:
+            logger.exception("Failed to query live name")
+            return None
+
+    async def _enable_bt_advertising(self) -> bool:
+        """Enable classic Bluetooth advertising on device.
+
+        Returns:
+            True on success, False on failure.
+        """
+        try:
+            await self.enable_classic_bt()
+        except Exception:
+            logger.exception("Failed to send enable_classic_bt command")
+            return False
+        else:
+            return True
+
+    async def _attempt_automated_pairing(
+        self, live_name: str, bt_pin: str, timeout: float
+    ) -> tuple[str | None, bool]:
+        """Attempt automated pairing via REST server.
+
+        Args:
+            live_name: Device name to pair
+            bt_pin: PIN code for pairing
+            timeout: Server-side timeout for pairing operation
+
+        Returns:
+            Tuple of (mac_address, pairing_succeeded)
+        """
+        try:
+            logger.debug("Attempting to pair and trust device: %s", live_name)
+            http_timeout = timeout + 10  # Add buffer for HTTP response
+            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                async with session.post(
+                    f"{self.server_url}/pair_and_trust_by_name",
+                    json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
+                ) as resp:
+                    pair_data = await resp.json()
+
+            if pair_data.get("success"):
+                mac_address = pair_data.get("mac")
+                if mac_address:
+                    logger.info(
+                        "Successfully paired and trusted device %s (MAC: %s)",
+                        live_name,
+                        mac_address,
+                    )
+                    return mac_address, True
+                logger.warning(
+                    "Pairing succeeded but no MAC address returned, falling back to connect_by_name"
+                )
+            error_msg = pair_data.get("error", "Unknown error")
+            logger.info(
+                "Pairing failed (%s), will attempt connect_by_name fallback",
+                error_msg,
+            )
+
+        except (TimeoutError, aiohttp.ClientError) as err:
+            logger.info(
+                "Pairing request failed (%s), will attempt connect_by_name fallback",
+                err,
+            )
+        except Exception:
+            logger.debug("Unexpected error during pairing attempt", exc_info=True)
+
+        return None, False
+
+    async def _connect_by_mac_after_pairing(
+        self, mac_address: str, bt_pin: str, timeout: float
+    ) -> str | None:
+        """Connect to paired device by MAC address.
+
+        Args:
+            mac_address: MAC address of paired device
+            bt_pin: PIN code for connection
+            timeout: Server-side timeout for connection operation
+
+        Returns:
+            MAC address on success, None on failure.
+        """
+        try:
+            logger.info("Connecting to paired device by MAC address: %s", mac_address)
+            http_timeout = timeout + 5  # Connection should be quick after pairing
+            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+                async with session.post(
+                    f"{self.server_url}/connect_by_mac",
+                    json={"mac": mac_address, "pin": bt_pin},
+                ) as resp:
+                    connect_data = await resp.json()
+
+            if connect_data.get("success"):
+                logger.info(
+                    "Successfully connected to classic BT device %s", mac_address
+                )
+                self._live_mode_client_address = mac_address
+                return mac_address
+            error_msg = (
+                connect_data.get("error")
+                or connect_data.get("message")
+                or "Unknown error"
+            )
+            logger.warning(
+                "Failed to connect by MAC after pairing: %s, trying connect_by_name",
+                error_msg,
+            )
+
+        except (TimeoutError, aiohttp.ClientError) as err:
+            logger.warning(
+                "Error connecting by MAC after pairing: %s, trying connect_by_name", err
+            )
+
+        return None
+
+    async def _connect_by_name_simple(
+        self, live_name: str, bt_pin: str, timeout: float
+    ) -> str | None:
+        """Connect to device by name without retry logic.
+
+        Args:
+            live_name: Device name to connect to
+            bt_pin: PIN code for connection
+            timeout: Server-side timeout for connection operation
+
+        Returns:
+            MAC address on success, None on failure.
+        """
+        http_timeout = timeout + 5  # Add buffer for HTTP overhead
+        timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+        async with aiohttp.ClientSession(timeout=timeout_config) as session:
+            async with session.post(
+                f"{self.server_url}/connect_by_name",
+                json={"device_name": live_name, "pin": bt_pin},
+            ) as resp:
+                connect_data = await resp.json()
+
+        if not connect_data.get("success"):
+            error_msg = (
+                connect_data.get("error")
+                or connect_data.get("message")
+                or "Unknown error"
+            )
+            logger.warning(
+                "REST server failed to connect to %s: %s (response: %s)",
+                live_name,
+                error_msg,
+                connect_data,
+            )
+            return None
+
+        mac_address = connect_data.get("mac")
+        if not mac_address:
+            logger.warning("REST server connected but did not return MAC address")
+            return None
+
+        logger.info("Successfully connected to classic BT device %s", mac_address)
+        self._live_mode_client_address = mac_address
+        return mac_address
+
+    async def _check_device_in_status(self, live_name: str) -> str | None:
+        """Check if device is connected by querying REST server status.
+
+        Args:
+            live_name: Device name to look for
+
+        Returns:
+            MAC address if device found and connected, None otherwise.
+        """
+        try:
+            status_data = await self.get_audio_status_live_mode()
+            bluetooth_info = status_data.get("bluetooth", {})
+            connected_devices = bluetooth_info.get("devices", [])
+
+            live_name_lower = live_name.lower()
+            for device in connected_devices:
+                device_name = device.get("name", "").lower()
+                if device_name == live_name_lower:
+                    mac_address = device.get("mac")
+                    if mac_address:
+                        logger.info(
+                            "Found connected device %s with MAC %s in REST server status",
+                            live_name,
+                            mac_address,
+                        )
+                        self._live_mode_client_address = mac_address
+                        return mac_address
+        except Exception:
+            logger.debug("Failed to check device status", exc_info=True)
+
+        return None
+
+    async def _connect_by_name_with_retry(
+        self, live_name: str, bt_pin: str, timeout: float
+    ) -> str | None:
+        """Connect to device by name with retry logic on timeout.
+
+        This handles the case where the connection succeeds but the response times out.
+
+        Args:
+            live_name: Device name to connect to
+            bt_pin: PIN code for connection
+            timeout: Server-side timeout for connection operation
+
+        Returns:
+            MAC address on success, None on failure.
+        """
+        try:
+            logger.info("Attempting to connect by name: %s", live_name)
+            return await self._connect_by_name_simple(live_name, bt_pin, timeout)
+
+        except TimeoutError:
+            logger.warning("REST server connection request timed out")
+            logger.info(
+                "Checking REST server status to verify connection for %s", live_name
+            )
+
+            # Check if connection succeeded despite timeout
+            mac_address = await self._check_device_in_status(live_name)
+            if mac_address:
+                return mac_address
+
+            # Not found in status, retry the connection once
+            logger.info(
+                "Device %s not found in REST server status, retrying connection",
+                live_name,
+            )
+
+            try:
+                mac_address = await self._connect_by_name_simple(
+                    live_name, bt_pin, timeout
+                )
+                if mac_address:
+                    logger.info(
+                        "Successfully connected to classic BT device %s on retry",
+                        mac_address,
+                    )
+                return mac_address
+
+            except TimeoutError:
+                logger.warning("REST server retry connection also timed out")
+                # One more status check after retry timeout
+                mac_address = await self._check_device_in_status(live_name)
+                return mac_address
+
+            except aiohttp.ClientError as err:
+                logger.warning("REST server retry communication error: %s", err)
+                return None
+
+        except aiohttp.ClientError as err:
+            logger.warning("REST server communication error: %s", err)
+            return None
+        except Exception:
+            logger.exception("Unexpected error during REST server communication")
+            return None
+
     async def connect_live_mode(
         self, timeout: float = 40.0, bt_pin: str = "1234"
     ) -> str | None:
@@ -668,271 +939,35 @@ class SkellyClient:
             This method requires the Skelly device to be already connected via BLE
             so that get_live_name and enable_classic_bt commands can be sent.
         """
-        # Must be connected to the device to request live name / enable classic
+        # Validate BLE connection
         if not self._client or not getattr(self._client, "is_connected", False):
             raise RuntimeError("Not connected to device to request live-mode")
 
-        try:
-            live_name = await self.get_live_name(timeout=2.0)
-        except TimeoutError:
-            logger.debug("Timed out while querying live name")
-            return None
-        except Exception:  # keep broad here since parsing could raise multiple errors
-            logger.exception("Failed to query live name")
+        # Step 1: Get device name via BLE
+        live_name = await self._get_live_name_for_connection()
+        if not live_name:
             return None
 
-        # Tell the device to enable classic BT advertising/visibility
-        try:
-            await self.enable_classic_bt()
-        except Exception:
-            logger.exception("Failed to send enable_classic_bt command")
+        # Step 2: Enable classic Bluetooth advertising
+        if not await self._enable_bt_advertising():
             return None
 
         logger.info(
             "Requesting REST server to connect to classic BT device: %s", live_name
         )
 
-        # First, attempt to pair and trust the device (requires root on server)
-        # If successful, we'll have the MAC and can connect directly
-        # If pairing fails, fall back to connect_by_name (which requires manual pairing)
-        mac_address = None
-        pairing_succeeded = False
+        # Step 3: Try automated pairing (requires root privileges on server)
+        mac_address, pairing_succeeded = await self._attempt_automated_pairing(
+            live_name, bt_pin, timeout
+        )
 
-        try:
-            logger.debug("Attempting to pair and trust device: %s", live_name)
-            # Use a longer HTTP timeout than the server-side timeout to allow for response
-            # Server uses 'timeout' for pairing, HTTP client needs extra time for network overhead
-            http_timeout = timeout + 10  # Add 10 seconds buffer for HTTP response
-            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-            async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                async with session.post(
-                    f"{self.server_url}/pair_and_trust_by_name",
-                    json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
-                ) as resp:
-                    pair_data = await resp.json()
-
-                if pair_data.get("success"):
-                    mac_address = pair_data.get("mac")
-                    if mac_address:
-                        logger.info(
-                            "Successfully paired and trusted device %s (MAC: %s)",
-                            live_name,
-                            mac_address,
-                        )
-                        pairing_succeeded = True
-                    else:
-                        logger.warning(
-                            "Pairing succeeded but no MAC address returned, falling back to connect_by_name"
-                        )
-                else:
-                    error_msg = pair_data.get("error", "Unknown error")
-                    logger.info(
-                        "Pairing failed (%s), will attempt connect_by_name fallback",
-                        error_msg,
-                    )
-
-        except (TimeoutError, aiohttp.ClientError) as err:
-            logger.info(
-                "Pairing request failed (%s), will attempt connect_by_name fallback",
-                err,
-            )
-        except Exception:
-            logger.debug("Unexpected error during pairing attempt", exc_info=True)
-
-        # If pairing succeeded and we have a MAC, connect using MAC address
+        # Step 4: If pairing succeeded, connect by MAC address
         if pairing_succeeded and mac_address:
-            try:
-                logger.info(
-                    "Connecting to paired device by MAC address: %s", mac_address
-                )
-                # Connection should be quick after successful pairing, but add small buffer
-                http_timeout = timeout + 5
-                timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-                async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                    async with session.post(
-                        f"{self.server_url}/connect_by_mac",
-                        json={"mac": mac_address, "pin": bt_pin},
-                    ) as resp:
-                        connect_data = await resp.json()
-
-                    if connect_data.get("success"):
-                        logger.info(
-                            "Successfully connected to classic BT device %s",
-                            mac_address,
-                        )
-                        self._live_mode_client_address = mac_address
-                        return mac_address
-                    else:
-                        error_msg = (
-                            connect_data.get("error")
-                            or connect_data.get("message")
-                            or "Unknown error"
-                        )
-                        logger.warning(
-                            "Failed to connect by MAC after pairing: %s, trying connect_by_name",
-                            error_msg,
-                        )
-
-            except (TimeoutError, aiohttp.ClientError) as err:
-                logger.warning(
-                    "Error connecting by MAC after pairing: %s, trying connect_by_name",
-                    err,
-                )
-
-        # Fallback: Use connect_by_name (original approach for manually paired devices)
-        try:
-            logger.info("Attempting to connect by name: %s", live_name)
-            # Use a fresh session for the long-running connection request
-            # to avoid connection pool issues with the persistent session.
-            # Bluetooth pairing can take 10-30+ seconds.
-            # Set timeout on the session to ensure it applies to all operations
-            # Add buffer for HTTP overhead
-            http_timeout = timeout + 5
-            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-            async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                async with session.post(
-                    f"{self.server_url}/connect_by_name",
-                    json={"device_name": live_name, "pin": bt_pin},
-                ) as resp:
-                    connect_data = await resp.json()
-                if not connect_data.get("success"):
-                    error_msg = (
-                        connect_data.get("error")
-                        or connect_data.get("message")
-                        or "Unknown error"
-                    )
-                    logger.warning(
-                        "REST server failed to connect to %s: %s (response: %s)",
-                        live_name,
-                        error_msg,
-                        connect_data,
-                    )
-                    return None
-
-                # Use the MAC address directly from the response
-                mac_address = connect_data.get("mac")
-                if not mac_address:
-                    logger.warning(
-                        "REST server connected but did not return MAC address"
-                    )
-                    return None
-
-                logger.info(
-                    "Successfully connected to classic BT device %s",
-                    mac_address,
-                )
-                self._live_mode_client_address = mac_address
-                return mac_address
-
-        except TimeoutError:
-            logger.warning("REST server connection request timed out")
-            # Check if connection actually succeeded despite timeout
-            logger.info(
-                "Checking REST server status to verify connection for %s", live_name
+            connected_mac = await self._connect_by_mac_after_pairing(
+                mac_address, bt_pin, timeout
             )
-            try:
-                status_data = await self.get_audio_status_live_mode()
-                bluetooth_info = status_data.get("bluetooth", {})
-                connected_devices = bluetooth_info.get("devices", [])
+            if connected_mac:
+                return connected_mac
 
-                # Look for a device with matching name
-                live_name_lower = live_name.lower()
-                for device in connected_devices:
-                    device_name = device.get("name", "").lower()
-                    if device_name == live_name_lower:
-                        mac_address = device.get("mac")
-                        if mac_address:
-                            logger.info(
-                                "Found connected device %s with MAC %s in REST server status",
-                                live_name,
-                                mac_address,
-                            )
-                            self._live_mode_client_address = mac_address
-                            return mac_address
-
-                # Device not found in status, retry the connection once
-                logger.info(
-                    "Device %s not found in REST server status, retrying connection",
-                    live_name,
-                )
-                try:
-                    # Retry with fresh session
-                    timeout_config = aiohttp.ClientTimeout(total=timeout)
-                    async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                        async with session.post(
-                            f"{self.server_url}/connect_by_name",
-                            json={"device_name": live_name, "pin": bt_pin},
-                        ) as resp:
-                            connect_data = await resp.json()
-
-                        if not connect_data.get("success"):
-                            error_msg = (
-                                connect_data.get("error")
-                                or connect_data.get("message")
-                                or "Unknown error"
-                            )
-                            logger.warning(
-                                "REST server retry failed to connect to %s: %s (response: %s)",
-                                live_name,
-                                error_msg,
-                                connect_data,
-                            )
-                            return None
-
-                        mac_address = connect_data.get("mac")
-                        if not mac_address:
-                            logger.warning(
-                                "REST server retry connected but did not return MAC address"
-                            )
-                            return None
-
-                        logger.info(
-                            "Successfully connected to classic BT device %s on retry",
-                            mac_address,
-                        )
-                        self._live_mode_client_address = mac_address
-                        return mac_address
-
-                except TimeoutError:
-                    logger.warning("REST server retry connection also timed out")
-                    # One more status check after retry timeout
-                    try:
-                        status_data = await self.get_audio_status_live_mode()
-                        bluetooth_info = status_data.get("bluetooth", {})
-                        connected_devices = bluetooth_info.get("devices", [])
-
-                        for device in connected_devices:
-                            device_name = device.get("name", "").lower()
-                            if device_name == live_name_lower:
-                                mac_address = device.get("mac")
-                                if mac_address:
-                                    logger.info(
-                                        "Found connected device %s with MAC %s after retry timeout",
-                                        live_name,
-                                        mac_address,
-                                    )
-                                    self._live_mode_client_address = mac_address
-                                    return mac_address
-                    except Exception:
-                        logger.debug(
-                            "Failed to check status after retry timeout", exc_info=True
-                        )
-
-                    return None
-
-                except aiohttp.ClientError as err:
-                    logger.warning("REST server retry communication error: %s", err)
-                    return None
-
-            except (aiohttp.ClientError, KeyError, ValueError) as err:
-                logger.warning(
-                    "Error checking REST server status after timeout: %s", err
-                )
-                return None
-
-        except aiohttp.ClientError as err:
-            logger.warning("REST server communication error: %s", err)
-            return None
-        except Exception:
-            logger.exception("Unexpected error during REST server communication")
-            return None
+        # Step 5: Fallback to connect_by_name (for manually paired devices)
+        return await self._connect_by_name_with_retry(live_name, bt_pin, timeout)

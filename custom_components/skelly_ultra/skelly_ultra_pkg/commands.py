@@ -3,8 +3,6 @@
 All functions are pure and return bytes for BLE writes.
 """
 
-from typing import List
-
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
 
@@ -76,6 +74,8 @@ def query_capacity() -> bytes:
 
 # Media Controls
 def set_volume(vol: int) -> bytes:
+    if not 0 <= vol <= 255:
+        raise ValueError(f"Volume must be between 0 and 255, got {vol}")
     return build_cmd("FA", int_to_hex(vol, 1))
 
 
@@ -92,6 +92,8 @@ def enable_classic_bt() -> bytes:
 
 
 def set_music_mode(mode: int) -> bytes:
+    if not 0 <= mode <= 255:
+        raise ValueError(f"Music mode must be between 0 and 255, got {mode}")
     return build_cmd("FE", int_to_hex(mode, 1))
 
 
@@ -100,6 +102,14 @@ def set_music_mode(mode: int) -> bytes:
 
 # Sets the light mode aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
 def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") -> bytes:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    if not 1 <= mode <= 3:
+        raise ValueError(
+            f"Light mode must be 1 (static), 2 (strobe), or 3 (pulsing), got {mode}"
+        )
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -115,6 +125,12 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
 def set_light_brightness(
     channel: int, brightness: int, cluster: int = 0, name: str = ""
 ) -> bytes:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    if not 0 <= brightness <= 255:
+        raise ValueError(f"Brightness must be between 0 and 255, got {brightness}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -130,6 +146,18 @@ def set_light_brightness(
 def set_light_rgb(
     channel: int, r: int, g: int, b: int, loop: int, cluster: int = 0, name: str = ""
 ) -> bytes:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    if not 0 <= r <= 255:
+        raise ValueError(f"Red value must be between 0 and 255, got {r}")
+    if not 0 <= g <= 255:
+        raise ValueError(f"Green value must be between 0 and 255, got {g}")
+    if not 0 <= b <= 255:
+        raise ValueError(f"Blue value must be between 0 and 255, got {b}")
+    if not 0 <= loop <= 255:
+        raise ValueError(f"Loop value must be between 0 and 255, got {loop}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -148,6 +176,12 @@ def set_light_rgb(
 def set_light_speed(
     channel: int, speed: int, cluster: int = 0, name: str = ""
 ) -> bytes:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    if not 0 <= speed <= 255:
+        raise ValueError(f"Speed must be between 0 and 255, got {speed}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -161,10 +195,18 @@ def set_light_speed(
 
 
 def select_rgb_channel(channel: int) -> bytes:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
     return build_cmd("F5", "FF" if channel == -1 else int_to_hex(channel, 1))
 
 
 def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
+    if not 0 <= icon <= 255:
+        raise ValueError(f"Icon must be between 0 and 255, got {icon}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
+    if not name:
+        raise ValueError("Name cannot be empty for set_eye_icon")
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
@@ -180,6 +222,12 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
 # If a bit is set movement for that body part is enabled, otherwise disabled.
 # Can send a value of 255 to enable all (head+arm+torso) which in the phone app has a unique icon.
 def set_action(action: int, cluster: int, name: str) -> bytes:
+    if not 0 <= action <= 255:
+        raise ValueError(f"Action must be between 0 and 255, got {action}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
+    if not name:
+        raise ValueError("Name cannot be empty for set_action")
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
@@ -193,6 +241,14 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
 
 # File transfer and playback
 def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
+    if not 0 <= size <= 0xFFFFFFFF:
+        raise ValueError(f"Size must be between 0 and {0xFFFFFFFF}, got {size}")
+    if not 0 <= chunk_count <= 0xFFFF:
+        raise ValueError(
+            f"Chunk count must be between 0 and {0xFFFF}, got {chunk_count}"
+        )
+    if not filename:
+        raise ValueError("Filename cannot be empty")
     return build_cmd(
         "C0",
         int_to_hex(size, 4)
@@ -203,6 +259,10 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
 
 
 def send_data_chunk(index: int, data: bytes) -> bytes:
+    if not 0 <= index <= 0xFFFF:
+        raise ValueError(f"Index must be between 0 and {0xFFFF}, got {index}")
+    if not data:
+        raise ValueError("Data cannot be empty")
     return build_cmd("C1", int_to_hex(index, 2) + data.hex().upper())
 
 
@@ -211,6 +271,8 @@ def end_send_data() -> bytes:
 
 
 def confirm_file(filename: str) -> bytes:
+    if not filename:
+        raise ValueError("Filename cannot be empty")
     return build_cmd("C3", "5C55" + to_utf16le_hex(filename))
 
 
@@ -219,12 +281,20 @@ def cancel_send() -> bytes:
 
 
 def play_file(file_index: int) -> bytes:
+    if not 0 <= file_index <= 0xFFFF:
+        raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
     return build_cmd("C6", int_to_hex(file_index, 2) + "01")
 
 
 def stop_file(file_index: int) -> bytes:
+    if not 0 <= file_index <= 0xFFFF:
+        raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
     return build_cmd("C6", int_to_hex(file_index, 2) + "00")
 
 
 def delete_file(file_index: int, cluster: int) -> bytes:
+    if not 0 <= file_index <= 0xFFFF:
+        raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
+    if not 0 <= cluster <= 0xFFFFFFFF:
+        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     return build_cmd("C7", int_to_hex(file_index, 2) + int_to_hex(cluster, 4))
