@@ -262,10 +262,20 @@ class SkellyCoordinator(DataUpdateCoordinator):
             capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
             file_count = getattr(cap, "file_count", None) if cap else None
 
-            # Extract pin_code from DeviceParamsEvent
+            # Extract pin_code and show_mode from DeviceParamsEvent
             pin_code = (
                 getattr(device_params, "pin_code", None) if device_params else None
             )
+            show_mode = (
+                getattr(device_params, "show_mode", None) if device_params else None
+            )
+
+            # Check if device is in show mode (show_mode=1) on initial update
+            if show_mode == 1 and self.data is None:
+                _LOGGER.error(
+                    "Device is in SHOW MODE - This integration requires the device to be in normal mode. "
+                    "To switch out of show mode, hold the button on the Skelly device for about 10 seconds until it beeps."
+                )
 
             data = {
                 "volume": vol,
