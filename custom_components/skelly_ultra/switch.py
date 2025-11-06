@@ -40,6 +40,7 @@ async def async_setup_entry(
             SkellyMovementSwitch(coordinator, entry.entry_id, address, part="arm"),
             SkellyMovementSwitch(coordinator, entry.entry_id, address, part="torso"),
             SkellyMovementSwitch(coordinator, entry.entry_id, address, part="all"),
+            SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, address),
         ]
     )
 
@@ -513,3 +514,51 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
                 await self.coordinator.async_request_refresh()
         except Exception:
             _LOGGER.exception("Failed to disable movement for %s", self.part)
+
+
+class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to enable/disable manual chunk size override for file transfers."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+    ) -> None:
+        """Initialize the override chunk size switch."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Override Chunk Size"
+        self._attr_unique_id = f"{entry_id}_override_chunk_size"
+        self._attr_icon = "mdi:cog"
+        if address:
+            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if override is enabled."""
+        return (
+            self.coordinator.data.get("override_chunk_size", False)
+            if self.coordinator.data
+            else False
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable chunk size override."""
+        _LOGGER.debug("Enabling chunk size override")
+        new_data = dict(self.coordinator.data or {})
+        new_data["override_chunk_size"] = True
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable chunk size override."""
+        _LOGGER.debug("Disabling chunk size override")
+        new_data = dict(self.coordinator.data or {})
+        new_data["override_chunk_size"] = False
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+        self.async_write_ha_state()

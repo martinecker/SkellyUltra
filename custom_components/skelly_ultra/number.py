@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
-from homeassistant.components.number import NumberEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
-from homeassistant.const import PERCENTAGE
-from homeassistant.helpers.device_registry import DeviceInfo
 import contextlib
+
+from homeassistant.components.number import NumberEntity
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import PERCENTAGE
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
+from .skelly_ultra_pkg.file_transfer import FileTransferManager
 
 
 async def async_setup_entry(
@@ -27,6 +29,9 @@ async def async_setup_entry(
             SkellyVolumeNumber(coordinator, entry.entry_id, address),
             SkellyEffectSpeedNumber(coordinator, entry.entry_id, address, channel=0),
             SkellyEffectSpeedNumber(coordinator, entry.entry_id, address, channel=1),
+            SkellyChunkSizeNumber(
+                coordinator, data.get("adapter"), entry.entry_id, address
+            ),
         ]
     )
 
@@ -207,3 +212,93 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         # Request coordinator refresh
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()
+
+
+class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
+    """Number entity for file transfer chunk size.
+
+    Shows the calculated chunk size when override is off (read-only),
+    or allows manual setting when override is on.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        adapter,
+        entry_id: str,
+        address: str | None,
+    ) -> None:
+        """Initialize the chunk size number entity."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self.adapter = adapter
+        self._attr_name = "Chunk Size"
+        self._attr_unique_id = f"{entry_id}_chunk_size"
+        self._attr_native_unit_of_measurement = "bytes"
+        self._attr_icon = "mdi:package-variant"
+
+        # Set range from file_transfer constants
+        self._attr_native_min_value = FileTransferManager.MIN_CHUNK_SIZE
+        self._attr_native_max_value = FileTransferManager.MAX_CHUNK_SIZE
+        self._attr_native_step = 10
+
+        if address:
+            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+
+    @property
+    def mode(self) -> str:
+        """Return mode based on override switch state."""
+        override_enabled = (
+            self.coordinator.data.get("override_chunk_size", False)
+            if self.coordinator.data
+            else False
+        )
+        return "box" if override_enabled else "slider"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return current chunk size.
+
+        If override is enabled, returns the user-set value.
+        If override is disabled, calculates from MTU.
+        """
+        data = self.coordinator.data
+        if not data:
+            return None
+
+        override_enabled = data.get("override_chunk_size", False)
+
+        if override_enabled:
+            # Return user-set value
+            return data.get("chunk_size_override", 250)
+
+        # Calculate from MTU (read-only display)
+        manager = FileTransferManager()
+        try:
+            return manager.get_chunk_size(self.adapter.client)
+        except Exception:
+            return 250  # Default fallback
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the chunk size override value.
+
+        Only works when override switch is enabled.
+        """
+        data = self.coordinator.data
+        if not data:
+            return
+
+        override_enabled = data.get("override_chunk_size", False)
+        if not override_enabled:
+            # Don't allow changes when override is disabled
+            return
+
+        # Store the override value
+        new_data = dict(data)
+        new_data["chunk_size_override"] = int(value)
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+
+        self.async_write_ha_state()

@@ -68,6 +68,7 @@ class FileTransferManager:
     """
 
     # Protocol constants
+    MIN_CHUNK_SIZE = 50  # Minimum bytes per chunk
     MAX_CHUNK_SIZE = 500  # Maximum bytes per chunk
     DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
     ATT_OVERHEAD = 3  # ATT protocol overhead bytes
@@ -82,37 +83,39 @@ class FileTransferManager:
         self._lock = asyncio.Lock()
         self._chunk_cache: dict[int, bytes] = {}
 
-    def _get_chunk_size(self, client: SkellyClient) -> int:
-        """Determine safe chunk size based on BLE MTU.
+    def get_chunk_size(
+        self, client: SkellyClient, override_size: int | None = None
+    ) -> int:
+        """Calculate optimal chunk size based on BLE MTU or use override value.
 
         Args:
-            client: SkellyClient with active BLE connection
+            client: The BLE client to query for MTU
+            override_size: Optional manual chunk size override (50-500 bytes)
 
         Returns:
-            Safe chunk size in bytes
-
-        Notes:
-            - Queries MTU from BleakClient if available (Bleak 0.19.0+)
-            - Reserves ATT_OVERHEAD (3 bytes) for ATT protocol overhead
-            - Caps at MAX_CHUNK_SIZE (500 bytes) for tested maximum
-            - Falls back to DEFAULT_CHUNK_SIZE (250 bytes) if MTU unavailable
+            Optimal chunk size in bytes
         """
-        # Try to get MTU from the client
-        mtu = client.get_mtu_size()
-        if mtu is not None:
-            # Calculate safe chunk size (MTU minus ATT overhead)
-            safe_size = mtu - self.ATT_OVERHEAD
-            # Cap at tested maximum
-            chunk_size = min(safe_size, self.MAX_CHUNK_SIZE)
-            logger.info(
-                "Using MTU-based chunk size: %d bytes (MTU=%d)", chunk_size, mtu
+        if override_size is not None:
+            if self.MIN_CHUNK_SIZE <= override_size <= self.MAX_CHUNK_SIZE:
+                logger.info("Using user override chunk size: %d bytes", override_size)
+                return override_size
+            logger.warning(
+                "Override chunk size %d out of range (%d-%d), using default",
+                override_size,
+                self.MIN_CHUNK_SIZE,
+                self.MAX_CHUNK_SIZE,
             )
-            return chunk_size
 
-        # MTU not available, use conservative default
-        logger.info(
-            "Using default chunk size: %d bytes (MTU unknown)", self.DEFAULT_CHUNK_SIZE
-        )
+        if client.device and hasattr(client.device, "mtu_size"):
+            mtu = client.device.mtu_size
+            # Account for ATT protocol overhead
+            chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
+            logger.info(
+                "Using MTU-based chunk size: %d bytes (MTU: %d)", chunk_size, mtu
+            )
+            return max(chunk_size, self.MIN_CHUNK_SIZE)
+
+        logger.info("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
 
     @property
@@ -133,6 +136,7 @@ class FileTransferManager:
         file_path: str | Path,
         filename: str | None = None,
         progress_callback: Callable[[int, int], None] | None = None,
+        override_chunk_size: int | None = None,
     ) -> None:
         """Send file to device with progress tracking.
 
@@ -141,6 +145,7 @@ class FileTransferManager:
             file_path: Path to file to send
             filename: Target filename on device (uses source filename if None)
             progress_callback: Optional callback(sent_chunks, total_chunks)
+            override_chunk_size: Optional user-specified chunk size (bypasses MTU calculation)
 
         Raises:
             FileTransferError: On transfer failure
@@ -170,7 +175,9 @@ class FileTransferManager:
             self._chunk_cache.clear()
 
             try:
-                await self._do_transfer(client, file_data, filename, progress_callback)
+                await self._do_transfer(
+                    client, file_data, filename, progress_callback, override_chunk_size
+                )
                 logger.info("File transfer complete: %s", filename)
             except FileTransferCancelled:
                 logger.warning("File transfer cancelled: %s", filename)
@@ -209,6 +216,7 @@ class FileTransferManager:
         file_data: bytes,
         filename: str,
         progress_callback: Callable[[int, int], None] | None,
+        override_chunk_size: int | None = None,
     ) -> None:
         """Execute the file transfer protocol.
 
@@ -217,14 +225,15 @@ class FileTransferManager:
             file_data: File content as bytes
             filename: Target filename on device
             progress_callback: Optional progress callback
+            override_chunk_size: Optional user-specified chunk size
 
         Raises:
             FileTransferCancelled: If cancelled during transfer
             FileTransferTimeout: If device doesn't respond
             FileTransferError: On protocol errors
         """
-        # Determine optimal chunk size based on BLE MTU
-        chunk_size = self._get_chunk_size(client)
+        # Determine optimal chunk size based on BLE MTU or user override
+        chunk_size = self.get_chunk_size(client, override_chunk_size)
         self._state.chunk_size = chunk_size
 
         size = len(file_data)
