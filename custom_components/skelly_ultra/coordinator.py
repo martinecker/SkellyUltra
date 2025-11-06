@@ -130,38 +130,43 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Clear event queue first to ensure we only get fresh responses.
             self.adapter.client.drain_event_queue()
 
-            # Send queries first, then wait for all responses to avoid race
-            # conditions where responses arrive before tasks start waiting.
-            timeout_seconds = 5.0
+            # Query device state with staggered delays to avoid overwhelming the device.
+            # Each get_*() method sends its query and waits for the response.
+            # We stagger the calls by 50ms each to prevent command flooding.
+            timeout_seconds = 10.0
             try:
                 async with asyncio.timeout(timeout_seconds):
-                    # Send all queries first to trigger device responses
-                    await self.adapter.client.query_volume()
-                    await self.adapter.client.query_live_name()
-                    await self.adapter.client.query_capacity()
-                    await self.adapter.client.query_live_mode()
-                    await self.adapter.client.query_file_order()
-                    await self.adapter.client.query_device_params()
-
-                    # Now wait for all responses concurrently
-                    vol_task = asyncio.create_task(
-                        self.adapter.client.get_volume(timeout=timeout_seconds)
-                    )
-                    live_name_task = asyncio.create_task(
-                        self.adapter.client.get_live_name(timeout=timeout_seconds)
-                    )
-                    cap_task = asyncio.create_task(
-                        self.adapter.client.get_capacity(timeout=timeout_seconds)
-                    )
+                    # Start tasks with delays between them (similar to JavaScript app pattern)
                     live_mode_task = asyncio.create_task(
                         self.adapter.client.get_live_mode(timeout=timeout_seconds)
                     )
-                    file_order_task = asyncio.create_task(
-                        self.adapter.client.get_file_order(timeout=timeout_seconds)
-                    )
+                    await asyncio.sleep(0.05)  # 50ms delay
+
                     device_params_task = asyncio.create_task(
                         self.adapter.client.get_device_params(timeout=timeout_seconds)
                     )
+                    await asyncio.sleep(0.05)  # 50ms delay
+
+                    vol_task = asyncio.create_task(
+                        self.adapter.client.get_volume(timeout=timeout_seconds)
+                    )
+                    await asyncio.sleep(0.05)  # 50ms delay
+
+                    live_name_task = asyncio.create_task(
+                        self.adapter.client.get_live_name(timeout=timeout_seconds)
+                    )
+                    await asyncio.sleep(0.05)  # 50ms delay
+
+                    cap_task = asyncio.create_task(
+                        self.adapter.client.get_capacity(timeout=timeout_seconds)
+                    )
+                    await asyncio.sleep(0.05)  # 50ms delay
+
+                    file_order_task = asyncio.create_task(
+                        self.adapter.client.get_file_order(timeout=timeout_seconds)
+                    )
+
+                    # Wait for all responses
                     (
                         vol,
                         live_name,
