@@ -122,7 +122,7 @@ class SkellyLiveNameSensor(CoordinatorEntity, SensorEntity):
 
 
 class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the device storage capacity in kilobytes."""
+    """Sensor exposing the remaining device storage capacity in kilobytes."""
 
     _attr_has_entity_name = True
     _attr_native_unit_of_measurement = "kB"
@@ -137,7 +137,7 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
         """Initialize the storage capacity sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Storage Capacity"
+        self._attr_name = "Remaining Capacity"
         self._attr_unique_id = f"{entry_id}_capacity_kb"
         if address:
             self._attr_device_info = DeviceInfo(
@@ -146,7 +146,7 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return the storage capacity in kilobytes from coordinator data."""
+        """Return the remaining storage capacity in kilobytes from coordinator data."""
         if self.coordinator.data is None:
             return None
         return self.coordinator.data.get("capacity_kb")
