@@ -375,6 +375,9 @@ class SkellyClient:
     async def query_capacity(self) -> None:
         await self.send_command(commands.query_capacity())
 
+    async def query_device_params(self) -> None:
+        await self.send_command(commands.query_device_params())
+
     async def query_file_infos(self) -> None:
         await self.send_command(commands.query_file_infos())
 
@@ -638,6 +641,18 @@ class SkellyClient:
         await self.send_command(commands.query_capacity())
         ev = await self._wait_for_event(
             lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout
+        )
+        return ev
+
+    async def get_device_params(self, timeout: float = 2.0) -> parser.DeviceParamsEvent:
+        """Query device parameters including PIN code, WiFi password, and channels.
+
+        Returns:
+            DeviceParamsEvent with device configuration parameters.
+        """
+        await self.send_command(commands.query_device_params())
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.DeviceParamsEvent), timeout=timeout
         )
         return ev
 

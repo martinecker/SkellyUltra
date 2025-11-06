@@ -40,7 +40,7 @@ def build_cmd(tag: str, payload: str = "00") -> bytes:
 
 
 # Query Commands
-def query_device_parameter() -> bytes:
+def query_device_params() -> bytes:
     return build_cmd("E0")
 
 

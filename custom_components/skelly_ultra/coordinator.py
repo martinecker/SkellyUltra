@@ -141,6 +141,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     await self.adapter.client.query_capacity()
                     await self.adapter.client.query_live_mode()
                     await self.adapter.client.query_file_order()
+                    await self.adapter.client.query_device_params()
 
                     # Now wait for all responses concurrently
                     vol_task = asyncio.create_task(
@@ -158,12 +159,23 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     file_order_task = asyncio.create_task(
                         self.adapter.client.get_file_order(timeout=timeout_seconds)
                     )
-                    vol, live_name, cap, live_mode, file_order = await asyncio.gather(
+                    device_params_task = asyncio.create_task(
+                        self.adapter.client.get_device_params(timeout=timeout_seconds)
+                    )
+                    (
+                        vol,
+                        live_name,
+                        cap,
+                        live_mode,
+                        file_order,
+                        device_params,
+                    ) = await asyncio.gather(
                         vol_task,
                         live_name_task,
                         cap_task,
                         live_mode_task,
                         file_order_task,
+                        device_params_task,
                     )
             except TimeoutError as ex:
                 _LOGGER.warning(
@@ -245,6 +257,11 @@ class SkellyCoordinator(DataUpdateCoordinator):
             capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
             file_count = getattr(cap, "file_count", None) if cap else None
 
+            # Extract pin_code from DeviceParamsEvent
+            pin_code = (
+                getattr(device_params, "pin_code", None) if device_params else None
+            )
+
             data = {
                 "volume": vol,
                 "live_name": live_name,
@@ -256,6 +273,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "action": action,
                 # file_order is a list of integers representing playback order
                 "file_order": file_order,
+                # pin_code is the Bluetooth pairing PIN (e.g., "1234")
+                "pin_code": pin_code,
                 # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
                 "lights": [
                     {

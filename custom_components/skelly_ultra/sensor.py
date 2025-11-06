@@ -52,6 +52,7 @@ async def async_setup_entry(
             SkellyFileCountSensor(coordinator, entry.entry_id, address, device_name),
             SkellyFileOrderSensor(coordinator, entry.entry_id, address, device_name),
             SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
+            SkellyPinCodeSensor(coordinator, entry.entry_id, address, device_name),
             transfer_sensor,
         ]
     )
@@ -238,6 +239,36 @@ class SkellyLiveBTMacSensor(SensorEntity):
         """Return the Live Mode BT MAC address or '<not connected>'."""
         mac = self.adapter.client.live_mode_client_address
         return mac if mac else "<not connected>"
+
+
+class SkellyPinCodeSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the device Bluetooth pairing PIN code."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the PIN code sensor."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "PIN Code"
+        self._attr_unique_id = f"{entry_id}_pin_code"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the device PIN code from coordinator data."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("pin_code")
 
 
 class SkellyFileTransferProgressSensor(SensorEntity):
