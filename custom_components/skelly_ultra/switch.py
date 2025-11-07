@@ -201,8 +201,13 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Connect to the classic/live Bluetooth device exposed by the Skelly."""
         try:
+            # Get PIN from coordinator data, fallback to default if not available yet
+            bt_pin = "1234"  # Default PIN
+            if self.coordinator.data:
+                bt_pin = self.coordinator.data.get("pin_code", "1234")
+
             # Use the adapter-level helper so HA can use establish_connection
-            result = await self.adapter.connect_live_mode()
+            result = await self.adapter.connect_live_mode(bt_pin=bt_pin)
             if result:
                 _LOGGER.info("Live mode connected: %s", result)
                 # Update state immediately
