@@ -462,6 +462,30 @@ class SkellyClient:
     async def delete_file(self, file_index: int, cluster: int) -> None:
         await self.send_command(commands.delete_file(file_index, cluster))
 
+    async def delete_file_with_confirmation(
+        self, file_index: int, cluster: int, timeout: float = 5.0
+    ) -> bool:
+        """Delete a file and wait for confirmation from the device.
+
+        Sends a delete command and waits for a DeleteFileEvent response.
+
+        Args:
+            file_index: Index of the file to delete
+            cluster: Cluster value of the file to delete
+            timeout: Maximum time to wait for delete confirmation (default 5 seconds)
+
+        Returns:
+            True if the delete was successful, False otherwise
+
+        Raises:
+            TimeoutError: If no confirmation is received within the timeout period
+        """
+        await self.send_command(commands.delete_file(file_index, cluster))
+        ev = await self._wait_for_event(
+            lambda e: isinstance(e, parser.DeleteFileEvent), timeout=timeout
+        )
+        return ev.success
+
     async def format_device(self) -> None:
         await self.send_command(commands.format_device())
 

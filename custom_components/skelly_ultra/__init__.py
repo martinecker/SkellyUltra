@@ -484,6 +484,167 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=SERVICE_SEND_FILE,
     )
 
+    # Register delete_file service
+    # Note: The schema allows all file identification parameters to be optional,
+    # but validation in the service function ensures that either:
+    # - filename is provided (alone), OR
+    # - both file_index AND cluster are provided together
+    SERVICE_DELETE_FILE = vol.Schema(
+        vol.All(
+            {
+                vol.Optional("device_id"): cv.string,
+                vol.Optional("entity_id"): cv.entity_id,
+                vol.Optional("file_index"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+                vol.Optional("cluster"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+                vol.Optional("filename"): cv.string,
+            },
+            # Ensure at least one file identification method is provided
+            cv.has_at_least_one_key("filename", "file_index"),
+        )
+    )
+
+    async def _delete_file_service(call) -> None:
+        """Delete a file from the device.
+
+        The service can specify the file in two ways:
+        1. Directly by file_index and cluster (both required if using this method)
+        2. By filename (will look up file_index and cluster from the file list)
+
+        The service accepts either `device_id` or `entity_id`. If neither is
+        provided and there is exactly one configured entry for this
+        integration, that entry will be used.
+
+        The service performs the following steps:
+        1. Refresh the file list to ensure accurate information
+        2. Validate the file exists (if using filename, look up index/cluster)
+        3. Send delete command
+        4. Wait for DeleteFileEvent confirmation
+        5. Refresh file list again to reflect the change
+        """
+        result = _get_adapter_from_service_call(call, raise_on_error=True)
+        adapter, entry_id = result
+
+        coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+        if not coordinator:
+            raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+
+        # Determine which parameters were provided
+        file_index = call.data.get("file_index")
+        cluster = call.data.get("cluster")
+        filename = call.data.get("filename")
+
+        # Validate that we have either (file_index AND cluster) OR filename
+        if filename:
+            if file_index is not None or cluster is not None:
+                raise HomeAssistantError(
+                    "Cannot specify both filename and file_index/cluster"
+                )
+        else:
+            if file_index is None or cluster is None:
+                raise HomeAssistantError(
+                    "Must provide either filename OR both file_index and cluster"
+                )
+
+        try:
+            # Step 1: Refresh file list to ensure accurate info
+            _LOGGER.info("Refreshing file list before delete for entry %s", entry_id)
+            await coordinator.async_refresh_file_list()
+
+            # Step 2: If filename provided, look up file_index and cluster
+            if filename:
+                file_list = coordinator.file_list
+                matching_file = None
+
+                for file_info in file_list:
+                    if file_info.name == filename:
+                        matching_file = file_info
+                        break
+
+                if not matching_file:
+                    raise HomeAssistantError(
+                        f"File '{filename}' not found in device file list"
+                    )
+
+                file_index = matching_file.file_index
+                cluster = matching_file.cluster
+                _LOGGER.info(
+                    "Resolved filename '%s' to file_index=%d, cluster=%d",
+                    filename,
+                    file_index,
+                    cluster,
+                )
+            else:
+                # Validate that the file_index and cluster exist in the file list
+                # and get the filename for logging
+                file_list = coordinator.file_list
+                matching_file = None
+
+                for file_info in file_list:
+                    if (
+                        file_info.file_index == file_index
+                        and file_info.cluster == cluster
+                    ):
+                        matching_file = file_info
+                        break
+
+                if not matching_file:
+                    raise HomeAssistantError(
+                        f"File with index {file_index} and cluster {cluster} not found in device file list"
+                    )
+
+                # Get filename for logging
+                filename = matching_file.name
+                _LOGGER.info(
+                    "Resolved file_index=%d, cluster=%d to filename '%s'",
+                    file_index,
+                    cluster,
+                    filename,
+                )
+
+            # Step 3: Send delete command and wait for confirmation
+            _LOGGER.info(
+                "Deleting file '%s' (index=%d, cluster=%d) for entry %s",
+                filename,
+                file_index,
+                cluster,
+                entry_id,
+            )
+
+            success = await adapter.client.delete_file_with_confirmation(
+                file_index, cluster, timeout=10.0
+            )
+
+            if not success:
+                raise HomeAssistantError(
+                    f"Device reported delete failed for file index {file_index}"
+                )
+
+            _LOGGER.info(
+                "Successfully deleted file '%s' (index=%d, cluster=%d)",
+                filename,
+                file_index,
+                cluster,
+            )
+
+            # Step 4: Refresh file list to reflect the deletion
+            _LOGGER.info("Refreshing file list after successful delete")
+            await coordinator.async_refresh_file_list()
+
+        except TimeoutError:
+            raise HomeAssistantError(
+                "Timeout waiting for delete confirmation from device"
+            ) from None
+        except Exception as exc:
+            _LOGGER.exception("Failed to delete file")
+            raise HomeAssistantError(f"Failed to delete file: {exc}") from exc
+
+    hass.services.async_register(
+        DOMAIN,
+        "delete_file",
+        _delete_file_service,
+        schema=SERVICE_DELETE_FILE,
+    )
+
     return True
 
 
@@ -517,5 +678,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             hass.services.async_remove(DOMAIN, "cancel_file_transfer")
         if hass.services.has_service(DOMAIN, "send_file"):
             hass.services.async_remove(DOMAIN, "send_file")
+        if hass.services.has_service(DOMAIN, "delete_file"):
+            hass.services.async_remove(DOMAIN, "delete_file")
 
     return True
