@@ -72,7 +72,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         that need the latest file list information.
         """
         try:
-            self._file_list = await self.adapter.client.get_file_list(timeout=10.0)
+            self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
             _LOGGER.debug("Loaded %d files from device", len(self._file_list))
             # Update the file_count_received in coordinator data
             if self.data:
