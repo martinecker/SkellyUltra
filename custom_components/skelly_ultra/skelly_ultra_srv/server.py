@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import json
 import logging
-import tempfile
 from pathlib import Path
+import tempfile
 
 from aiohttp import web
 
@@ -18,20 +18,46 @@ _LOGGER = logging.getLogger(__name__)
 class SkellyUltraServer:
     """REST server for managing Bluetooth connections and audio playback."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 8765) -> None:
+    def __init__(
+        self, host: str = "0.0.0.0", port: int = 8765, debug_json: bool = False
+    ) -> None:
         """Initialize the server.
 
         Args:
             host: Host address to bind to
             port: Port to listen on
+            debug_json: Enable debug logging of JSON requests/responses
         """
         self.host = host
         self.port = port
+        self.debug_json = debug_json
         self.bt_manager = BluetoothManager()
         self.audio_player = AudioPlayer()
         self.app = web.Application()
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
         self._setup_routes()
+
+    def _log_request(self, endpoint: str, data: dict | None) -> None:
+        """Log incoming request data in debug mode.
+
+        Args:
+            endpoint: The endpoint name
+            data: The request data (JSON body or query params)
+        """
+        if self.debug_json and data:
+            _LOGGER.debug("📥 REQUEST to %s:\n%s", endpoint, json.dumps(data, indent=2))
+
+    def _log_response(self, endpoint: str, data: dict) -> None:
+        """Log outgoing response data in debug mode.
+
+        Args:
+            endpoint: The endpoint name
+            data: The response data
+        """
+        if self.debug_json:
+            _LOGGER.debug(
+                "📤 RESPONSE from %s:\n%s", endpoint, json.dumps(data, indent=2)
+            )
 
     def _setup_routes(self) -> None:
         """Set up API routes."""
@@ -71,36 +97,42 @@ class SkellyUltraServer:
         """
         try:
             data = await request.json()
+            self._log_request("connect_by_name", data)
+
             device_name = data.get("device_name")
             pin = data.get("pin", "1234")
 
             if not device_name:
-                return web.json_response(
-                    {"success": False, "error": "device_name is required"}, status=400
-                )
+                response_data = {"success": False, "error": "device_name is required"}
+                self._log_response("connect_by_name", response_data)
+                return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received connect_by_name request for: %s", device_name)
             success, mac = await self.bt_manager.connect_by_name(device_name, pin)
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "device_name": self.bt_manager.get_connected_device_name(),
-                    "mac": mac,
-                }
-            )
+            response_data = {
+                "success": success,
+                "device_name": self.bt_manager.get_connected_device_name(),
+                "mac": mac,
+            }
+            self._log_response("connect_by_name", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("connect_by_name", response_data)
+            return web.json_response(response_data, status=400)
         except RuntimeError as exc:
             # RuntimeError contains the specific error message from bluetooth_manager
             _LOGGER.warning("Connect by name failed: %s", exc)
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("connect_by_name", response_data)
+            return web.json_response(response_data, status=400)
         except Exception as exc:
             _LOGGER.exception("Unexpected error in connect_by_name")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("connect_by_name", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_connect_by_mac(self, request: web.Request) -> web.Response:
         """Handle POST /connect_by_mac endpoint.
@@ -121,36 +153,42 @@ class SkellyUltraServer:
         """
         try:
             data = await request.json()
+            self._log_request("connect_by_mac", data)
+
             mac = data.get("mac")
             pin = data.get("pin", "1234")
 
             if not mac:
-                return web.json_response(
-                    {"success": False, "error": "mac is required"}, status=400
-                )
+                response_data = {"success": False, "error": "mac is required"}
+                self._log_response("connect_by_mac", response_data)
+                return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received connect_by_mac request for: %s", mac)
             await self.bt_manager.connect_by_mac(mac, pin)
 
-            return web.json_response(
-                {
-                    "success": True,
-                    "device_name": self.bt_manager.get_connected_device_name(),
-                    "mac": self.bt_manager.get_connected_device_mac(),
-                }
-            )
+            response_data = {
+                "success": True,
+                "device_name": self.bt_manager.get_connected_device_name(),
+                "mac": self.bt_manager.get_connected_device_mac(),
+            }
+            self._log_response("connect_by_mac", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("connect_by_mac", response_data)
+            return web.json_response(response_data, status=400)
         except RuntimeError as exc:
             # RuntimeError contains the specific error message from bluetooth_manager
             _LOGGER.warning("Connect by MAC failed: %s", exc)
-            return web.json_response({"success": False, "error": str(exc)}, status=400)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("connect_by_mac", response_data)
+            return web.json_response(response_data, status=400)
         except Exception as exc:
             _LOGGER.exception("Unexpected error in connect_by_mac")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("connect_by_mac", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_pair_and_trust_by_name(self, request: web.Request) -> web.Response:
         """Handle POST /pair_and_trust_by_name endpoint.
@@ -177,39 +215,41 @@ class SkellyUltraServer:
         """
         try:
             data = await request.json()
+            self._log_request("pair_and_trust_by_name", data)
+
             device_name = data.get("device_name")
             pin = data.get("pin", "1234")
             timeout = data.get("timeout", 30.0)
 
             if not device_name:
-                return web.json_response(
-                    {"success": False, "error": "device_name is required"}, status=400
-                )
+                response_data = {"success": False, "error": "device_name is required"}
+                self._log_response("pair_and_trust_by_name", response_data)
+                return web.json_response(response_data, status=400)
 
             if not pin:
-                return web.json_response(
-                    {"success": False, "error": "pin is required"}, status=400
-                )
+                response_data = {"success": False, "error": "pin is required"}
+                self._log_response("pair_and_trust_by_name", response_data)
+                return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received pair_and_trust_by_name request for: %s", device_name)
             success, mac = await self.bt_manager.pair_and_trust_by_name(
                 device_name, pin, timeout
             )
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "paired": True,
-                    "trusted": True,
-                    "device_name": device_name,
-                    "mac": mac,
-                }
-            )
+            response_data = {
+                "success": success,
+                "paired": True,
+                "trusted": True,
+                "device_name": device_name,
+                "mac": mac,
+            }
+            self._log_response("pair_and_trust_by_name", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("pair_and_trust_by_name", response_data)
+            return web.json_response(response_data, status=400)
         except RuntimeError as exc:
             # RuntimeError contains specific error messages:
             # - Device not found
@@ -227,12 +267,14 @@ class SkellyUltraServer:
             else:
                 status_code = 400  # Bad Request
 
-            return web.json_response(
-                {"success": False, "error": error_str}, status=status_code
-            )
+            response_data = {"success": False, "error": error_str}
+            self._log_response("pair_and_trust_by_name", response_data)
+            return web.json_response(response_data, status=status_code)
         except Exception as exc:
             _LOGGER.exception("Unexpected error in pair_and_trust_by_name")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("pair_and_trust_by_name", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_pair_and_trust_by_mac(self, request: web.Request) -> web.Response:
         """Handle POST /pair_and_trust_by_mac endpoint.
@@ -258,36 +300,38 @@ class SkellyUltraServer:
         """
         try:
             data = await request.json()
+            self._log_request("pair_and_trust_by_mac", data)
+
             mac = data.get("mac")
             pin = data.get("pin", "1234")
             timeout = data.get("timeout", 30.0)
 
             if not mac:
-                return web.json_response(
-                    {"success": False, "error": "mac is required"}, status=400
-                )
+                response_data = {"success": False, "error": "mac is required"}
+                self._log_response("pair_and_trust_by_mac", response_data)
+                return web.json_response(response_data, status=400)
 
             if not pin:
-                return web.json_response(
-                    {"success": False, "error": "pin is required"}, status=400
-                )
+                response_data = {"success": False, "error": "pin is required"}
+                self._log_response("pair_and_trust_by_mac", response_data)
+                return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received pair_and_trust_by_mac request for: %s", mac)
             success = await self.bt_manager.pair_and_trust_by_mac(mac, pin, timeout)
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "paired": True,
-                    "trusted": True,
-                    "mac": mac,
-                }
-            )
+            response_data = {
+                "success": success,
+                "paired": True,
+                "trusted": True,
+                "mac": mac,
+            }
+            self._log_response("pair_and_trust_by_mac", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("pair_and_trust_by_mac", response_data)
+            return web.json_response(response_data, status=400)
         except RuntimeError as exc:
             # RuntimeError contains specific error messages:
             # - D-Bus not available
@@ -304,12 +348,14 @@ class SkellyUltraServer:
             else:
                 status_code = 400  # Bad Request
 
-            return web.json_response(
-                {"success": False, "error": error_str}, status=status_code
-            )
+            response_data = {"success": False, "error": error_str}
+            self._log_response("pair_and_trust_by_mac", response_data)
+            return web.json_response(response_data, status=status_code)
         except Exception as exc:
             _LOGGER.exception("Unexpected error in pair_and_trust_by_mac")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("pair_and_trust_by_mac", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_get_name(self, request: web.Request) -> web.Response:
         """Handle GET /name endpoint.
@@ -330,26 +376,27 @@ class SkellyUltraServer:
         }
         """
         mac = request.query.get("mac")
+        query_params = {"mac": mac} if mac else {}
+        self._log_request("get_name", query_params)
+
         if mac:
             device = self.bt_manager.get_device_by_mac(mac)
-            return web.json_response(
-                {
-                    "device_name": device.name if device else None,
-                    "mac": mac,
-                    "connected": device is not None,
-                }
-            )
+            response_data = {
+                "device_name": device.name if device else None,
+                "mac": mac,
+                "connected": device is not None,
+            }
+            self._log_response("get_name", response_data)
+            return web.json_response(response_data)
 
         # Return all connected devices
         devices = self.bt_manager.get_connected_devices()
-        return web.json_response(
-            {
-                "devices": [
-                    {"name": dev.name, "mac": dev.mac} for dev in devices.values()
-                ],
-                "count": len(devices),
-            }
-        )
+        response_data = {
+            "devices": [{"name": dev.name, "mac": dev.mac} for dev in devices.values()],
+            "count": len(devices),
+        }
+        self._log_response("get_name", response_data)
+        return web.json_response(response_data)
 
     async def handle_get_mac(self, request: web.Request) -> web.Response:
         """Handle GET /mac endpoint.
@@ -370,26 +417,27 @@ class SkellyUltraServer:
         }
         """
         name = request.query.get("name")
+        query_params = {"name": name} if name else {}
+        self._log_request("get_mac", query_params)
+
         if name:
             device = self.bt_manager.get_device_by_name(name)
-            return web.json_response(
-                {
-                    "mac": device.mac if device else None,
-                    "device_name": name,
-                    "connected": device is not None,
-                }
-            )
+            response_data = {
+                "mac": device.mac if device else None,
+                "device_name": name,
+                "connected": device is not None,
+            }
+            self._log_response("get_mac", response_data)
+            return web.json_response(response_data)
 
         # Return all connected devices
         devices = self.bt_manager.get_connected_devices()
-        return web.json_response(
-            {
-                "devices": [
-                    {"name": dev.name, "mac": dev.mac} for dev in devices.values()
-                ],
-                "count": len(devices),
-            }
-        )
+        response_data = {
+            "devices": [{"name": dev.name, "mac": dev.mac} for dev in devices.values()],
+            "count": len(devices),
+        }
+        self._log_response("get_mac", response_data)
+        return web.json_response(response_data)
 
     async def handle_play(self, request: web.Request) -> web.Response:
         """Handle POST /play endpoint with file upload.
@@ -437,13 +485,12 @@ class SkellyUltraServer:
                             "Found device %s with MAC: %s", device_name, target
                         )
                     else:
-                        return web.json_response(
-                            {
-                                "success": False,
-                                "error": f"Device '{device_name}' not found",
-                            },
-                            status=404,
-                        )
+                        response_data = {
+                            "success": False,
+                            "error": f"Device '{device_name}' not found",
+                        }
+                        self._log_response("play", response_data)
+                        return web.json_response(response_data, status=404)
                 elif part.name == "macs":
                     macs_str = (await part.read()).decode()
                     targets = json.loads(macs_str)
@@ -451,10 +498,20 @@ class SkellyUltraServer:
                     all_str = (await part.read()).decode()
                     play_all = all_str.lower() == "true"
 
+            # Log request metadata (not binary file data)
+            request_data = {
+                "filename": filename,
+                "file_size": len(file_data) if file_data else 0,
+                "target": target,
+                "targets": targets,
+                "play_all": play_all,
+            }
+            self._log_request("play", request_data)
+
             if not file_data:
-                return web.json_response(
-                    {"success": False, "error": "No file uploaded"}, status=400
-                )
+                response_data = {"success": False, "error": "No file uploaded"}
+                self._log_response("play", response_data)
+                return web.json_response(response_data, status=400)
 
             # Save uploaded file to temporary directory
             upload_dir = self.app["upload_dir"]
@@ -477,14 +534,14 @@ class SkellyUltraServer:
                 str(file_path), target=target, targets=targets
             )
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "filename": filename,
-                    "is_playing": self.audio_player.is_playing(),
-                    "sessions": self.audio_player.get_all_sessions(),
-                }
-            )
+            response_data = {
+                "success": success,
+                "filename": filename,
+                "is_playing": self.audio_player.is_playing(),
+                "sessions": self.audio_player.get_all_sessions(),
+            }
+            self._log_response("play", response_data)
+            return web.json_response(response_data)
 
         except ValueError as exc:
             return web.json_response(
@@ -517,12 +574,14 @@ class SkellyUltraServer:
         """
         try:
             data = await request.json()
+            self._log_request("play_filename", data)
+
             file_path = data.get("file_path")
 
             if not file_path:
-                return web.json_response(
-                    {"success": False, "error": "file_path is required"}, status=400
-                )
+                response_data = {"success": False, "error": "file_path is required"}
+                self._log_response("play_filename", response_data)
+                return web.json_response(response_data, status=400)
 
             # Determine target(s)
             target = None
@@ -546,13 +605,12 @@ class SkellyUltraServer:
                         "Found device %s with MAC: %s", data["device_name"], target
                     )
                 else:
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": f"Device '{data['device_name']}' not found",
-                        },
-                        status=404,
-                    )
+                    response_data = {
+                        "success": False,
+                        "error": f"Device '{data['device_name']}' not found",
+                    }
+                    self._log_response("play_filename", response_data)
+                    return web.json_response(response_data, status=404)
             elif data.get("mac"):
                 # Single target by MAC
                 target = data["mac"]
@@ -562,22 +620,24 @@ class SkellyUltraServer:
                 file_path, target=target, targets=targets
             )
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "file_path": file_path,
-                    "is_playing": self.audio_player.is_playing(),
-                    "sessions": self.audio_player.get_all_sessions(),
-                }
-            )
+            response_data = {
+                "success": success,
+                "file_path": file_path,
+                "is_playing": self.audio_player.is_playing(),
+                "sessions": self.audio_player.get_all_sessions(),
+            }
+            self._log_response("play_filename", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("play_filename", response_data)
+            return web.json_response(response_data, status=400)
         except Exception as exc:
             _LOGGER.exception("Error in play_filename")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("play_filename", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_stop(self, request: web.Request) -> web.Response:
         """Handle POST /stop endpoint.
@@ -602,6 +662,8 @@ class SkellyUltraServer:
             if request.body_exists:
                 data = await request.json()
 
+            self._log_request("stop", data if data else None)
+
             target = None
             if data.get("device_name"):
                 # Find device by name
@@ -609,13 +671,12 @@ class SkellyUltraServer:
                 if device:
                     target = device.mac
                 else:
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": f"Device '{data['device_name']}' not found",
-                        },
-                        status=404,
-                    )
+                    response_data = {
+                        "success": False,
+                        "error": f"Device '{data['device_name']}' not found",
+                    }
+                    self._log_response("stop", response_data)
+                    return web.json_response(response_data, status=404)
             elif data.get("mac"):
                 target = data["mac"]
             # If no target specified, stop all (target=None)
@@ -623,21 +684,23 @@ class SkellyUltraServer:
             _LOGGER.info("Received stop request for target: %s", target or "all")
             success = await self.audio_player.stop(target)
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "is_playing": self.audio_player.is_playing(),
-                    "sessions": self.audio_player.get_all_sessions(),
-                }
-            )
+            response_data = {
+                "success": success,
+                "is_playing": self.audio_player.is_playing(),
+                "sessions": self.audio_player.get_all_sessions(),
+            }
+            self._log_response("stop", response_data)
+            return web.json_response(response_data)
 
         except ValueError:
-            return web.json_response(
-                {"success": False, "error": "Invalid JSON"}, status=400
-            )
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("stop", response_data)
+            return web.json_response(response_data, status=400)
         except Exception as exc:
             _LOGGER.exception("Error in stop")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("stop", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_disconnect(self, request: web.Request) -> web.Response:
         """Handle POST /disconnect endpoint.
@@ -661,6 +724,8 @@ class SkellyUltraServer:
             if request.body_exists:
                 data = await request.json()
 
+            self._log_request("disconnect", data if data else None)
+
             mac = None
             if data.get("device_name"):
                 # Find device by name
@@ -668,13 +733,12 @@ class SkellyUltraServer:
                 if device:
                     mac = device.mac
                 else:
-                    return web.json_response(
-                        {
-                            "success": False,
-                            "error": f"Device '{data['device_name']}' not found",
-                        },
-                        status=404,
-                    )
+                    response_data = {
+                        "success": False,
+                        "error": f"Device '{data['device_name']}' not found",
+                    }
+                    self._log_response("disconnect", response_data)
+                    return web.json_response(response_data, status=404)
             elif data.get("mac"):
                 mac = data["mac"]
             # If no MAC specified, disconnect all (mac=None)
@@ -682,16 +746,18 @@ class SkellyUltraServer:
             _LOGGER.info("Received disconnect request for: %s", mac or "all devices")
             success = await self.bt_manager.disconnect(mac)
 
-            return web.json_response(
-                {
-                    "success": success,
-                    "connected": self.bt_manager.get_connected_device_mac() is not None,
-                }
-            )
+            response_data = {
+                "success": success,
+                "connected": self.bt_manager.get_connected_device_mac() is not None,
+            }
+            self._log_response("disconnect", response_data)
+            return web.json_response(response_data)
 
         except Exception as exc:
             _LOGGER.exception("Error in disconnect")
-            return web.json_response({"success": False, "error": str(exc)}, status=500)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("disconnect", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_status(self, request: web.Request) -> web.Response:
         """Handle GET /status endpoint.
@@ -711,35 +777,37 @@ class SkellyUltraServer:
             }
         }
         """
+        self._log_request("status", None)
+
         connected_devices = self.bt_manager.get_connected_devices()
         playback_sessions = self.audio_player.get_all_sessions()
 
-        return web.json_response(
-            {
-                "bluetooth": {
-                    "connected_count": len(connected_devices),
-                    "devices": [
-                        {"name": dev.name, "mac": dev.mac}
-                        for dev in connected_devices.values()
-                    ],
-                },
-                "audio": {
-                    "is_playing": self.audio_player.is_playing(),
-                    "active_sessions": len(playback_sessions),
-                    "sessions": [
-                        {
-                            "target": target_key,
-                            "file_path": file_path,
-                            "is_playing": is_playing,
-                        }
-                        for target_key, (
-                            file_path,
-                            is_playing,
-                        ) in playback_sessions.items()
-                    ],
-                },
-            }
-        )
+        response_data = {
+            "bluetooth": {
+                "connected_count": len(connected_devices),
+                "devices": [
+                    {"name": dev.name, "mac": dev.mac}
+                    for dev in connected_devices.values()
+                ],
+            },
+            "audio": {
+                "is_playing": self.audio_player.is_playing(),
+                "active_sessions": len(playback_sessions),
+                "sessions": [
+                    {
+                        "target": target_key,
+                        "file_path": file_path,
+                        "is_playing": is_playing,
+                    }
+                    for target_key, (
+                        file_path,
+                        is_playing,
+                    ) in playback_sessions.items()
+                ],
+            },
+        }
+        self._log_response("status", response_data)
+        return web.json_response(response_data)
 
     async def handle_health(self, request: web.Request) -> web.Response:
         """Handle GET /health endpoint.
@@ -751,7 +819,11 @@ class SkellyUltraServer:
             "status": "ok"
         }
         """
-        return web.json_response({"status": "ok"})
+        self._log_request("health", None)
+
+        response_data = {"status": "ok"}
+        self._log_response("health", response_data)
+        return web.json_response(response_data)
 
     async def start(self) -> None:
         """Start the server."""

@@ -26,6 +26,11 @@ async def main():
         help="Enable verbose (DEBUG) logging",
     )
     parser.add_argument(
+        "--debug-json",
+        action="store_true",
+        help="Enable debug logging of JSON requests and responses",
+    )
+    parser.add_argument(
         "--host",
         default="0.0.0.0",
         help="Host address to bind to (default: 0.0.0.0)",
@@ -42,7 +47,9 @@ async def main():
     log_level = logging.DEBUG if args.verbose else logging.INFO
     setup_colored_logging(level=log_level)
 
-    server = SkellyUltraServer(host=args.host, port=args.port)
+    server = SkellyUltraServer(
+        host=args.host, port=args.port, debug_json=args.debug_json
+    )
 
     print(f"Starting Skelly Ultra REST server on http://{args.host}:{args.port}")
     print("\nAvailable endpoints:")
