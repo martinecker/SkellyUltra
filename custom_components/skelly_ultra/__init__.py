@@ -62,28 +62,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not ok:
             raise ConfigEntryNotReady("Failed to connect to Skelly device")
 
-        # Start notifications before performing the initial refresh so responses
-        # to queries (which arrive via notifications) are delivered to the
-        # client's event queue. If starting notifications fails, we still attempt
-        # the initial refresh but it may time out.
-        try:
-            started = await adapter.start_notifications_with_retry()
-            if not started:
-                _LOGGER.warning(
-                    "Notifications could not be started before initial refresh; "
-                    "initial data fetch may time out"
-                )
-        except Exception:
-            _LOGGER.exception("Unexpected error while starting notifications")
+        # Start notifications and initial refresh in background to avoid blocking setup.
+        # Entities handle None data gracefully and will update once data arrives.
+        async def _initialize_device() -> None:
+            """Initialize device notifications and perform initial data fetch."""
+            # Start notifications before performing the initial refresh so responses
+            # to queries (which arrive via notifications) are delivered to the
+            # client's event queue. If starting notifications fails, the initial
+            # refresh may time out but will retry on next update cycle.
+            try:
+                started = await adapter.start_notifications_with_retry()
+                if not started:
+                    _LOGGER.warning(
+                        "Notifications could not be started; data fetch may fail"
+                    )
+            except Exception:
+                _LOGGER.exception("Unexpected error while starting notifications")
 
-        # Perform an initial refresh so the coordinator has data before entities
-        # are available. If this fails Home Assistant will retry setup later.
-        try:
-            await coordinator.async_config_entry_first_refresh()
-        except Exception as exc:
-            _LOGGER.exception("Initial data refresh failed")
-            # Let Home Assistant retry setup later
-            raise ConfigEntryNotReady("Initial data refresh failed") from exc
+            # Perform initial coordinator refresh
+            try:
+                await coordinator.async_config_entry_first_refresh()
+            except Exception:
+                _LOGGER.exception(
+                    "Initial data refresh failed, will retry on next update"
+                )
+
+        hass.async_create_task(_initialize_device())
     else:
         # Switch is off - pause coordinator immediately
         coordinator.pause_updates()

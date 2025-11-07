@@ -697,7 +697,13 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
 
         # Include playlist information
         attrs["total_files"] = len(self.coordinator.file_list)
-        attrs["file_order"] = self.coordinator.data.get("file_order", [])
+
+        # Safely get file_order from coordinator data
+        data = self.coordinator.data
+        if data:
+            attrs["file_order"] = data.get("file_order", [])
+        else:
+            attrs["file_order"] = []
 
         return attrs
 

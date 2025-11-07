@@ -49,7 +49,12 @@ async def async_setup_entry(
             SkellyStorageCapacitySensor(
                 coordinator, entry.entry_id, address, device_name
             ),
-            SkellyFileCountSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyFileCountReportedSensor(
+                coordinator, entry.entry_id, address, device_name
+            ),
+            SkellyFileCountReceivedSensor(
+                coordinator, entry.entry_id, address, device_name
+            ),
             SkellyFileOrderSensor(coordinator, entry.entry_id, address, device_name),
             SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
             SkellyPinCodeSensor(coordinator, entry.entry_id, address, device_name),
@@ -152,8 +157,8 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.data.get("capacity_kb")
 
 
-class SkellyFileCountSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the number of files on the device."""
+class SkellyFileCountReportedSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the number of files reported by the device."""
 
     _attr_has_entity_name = True
 
@@ -164,11 +169,11 @@ class SkellyFileCountSensor(CoordinatorEntity, SensorEntity):
         address: str | None,
         device_name: str | None = None,
     ) -> None:
-        """Initialize the file count sensor."""
+        """Initialize the file count reported sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "File Count"
-        self._attr_unique_id = f"{entry_id}_file_count"
+        self._attr_name = "File Count Reported"
+        self._attr_unique_id = f"{entry_id}_file_count_reported"
         if address:
             self._attr_device_info = DeviceInfo(
                 name=device_name, identifiers={(DOMAIN, address)}
@@ -176,10 +181,40 @@ class SkellyFileCountSensor(CoordinatorEntity, SensorEntity):
 
     @property
     def native_value(self):
-        """Return the file count from coordinator data."""
+        """Return the file count reported from coordinator data."""
         if self.coordinator.data is None:
             return None
-        return self.coordinator.data.get("file_count")
+        return self.coordinator.data.get("file_count_reported")
+
+
+class SkellyFileCountReceivedSensor(CoordinatorEntity, SensorEntity):
+    """Sensor exposing the number of files actually received from the device."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        address: str | None,
+        device_name: str | None = None,
+    ) -> None:
+        """Initialize the file count received sensor."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "File Count Received"
+        self._attr_unique_id = f"{entry_id}_file_count_received"
+        if address:
+            self._attr_device_info = DeviceInfo(
+                name=device_name, identifiers={(DOMAIN, address)}
+            )
+
+    @property
+    def native_value(self):
+        """Return the file count received from coordinator data."""
+        if self.coordinator.data is None:
+            return None
+        return self.coordinator.data.get("file_count_received")
 
 
 class SkellyFileOrderSensor(CoordinatorEntity, SensorEntity):

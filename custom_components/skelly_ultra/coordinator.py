@@ -44,6 +44,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._last_refresh_request = 0.0
         self._updates_paused = False
         self._file_list: list[Any] = []
+        self._initial_update_done = False
         _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def pause_updates(self) -> None:
@@ -73,12 +74,21 @@ class SkellyCoordinator(DataUpdateCoordinator):
         try:
             self._file_list = await self.adapter.client.get_file_list(timeout=10.0)
             _LOGGER.debug("Loaded %d files from device", len(self._file_list))
+            # Update the file_count_received in coordinator data
+            if self.data:
+                self.async_set_updated_data(
+                    {**self.data, "file_count_received": len(self._file_list)}
+                )
         except TimeoutError:
             _LOGGER.warning("Timeout loading file list from device")
             self._file_list = []
+            if self.data:
+                self.async_set_updated_data({**self.data, "file_count_received": 0})
         except Exception:
             _LOGGER.exception("Failed to load file list from device")
             self._file_list = []
+            if self.data:
+                self.async_set_updated_data({**self.data, "file_count_received": 0})
 
     @property
     def file_list(self) -> list[Any]:
@@ -133,7 +143,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Query device state with staggered delays to avoid overwhelming the device.
             # Each get_*() method sends its query and waits for the response.
             # We stagger the calls by 50ms each to prevent command flooding.
-            timeout_seconds = 10.0
+            timeout_seconds = 15.0
             try:
                 async with asyncio.timeout(timeout_seconds):
                     # Start tasks with delays between them (similar to JavaScript app pattern)
@@ -258,9 +268,15 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     # Clean up our state since we can't verify the connection
                     await self.adapter.disconnect_live_mode()
 
-            # Extract capacity_kb and file_count from CapacityEvent
+            # Extract capacity_kb and file_count_reported from CapacityEvent
             capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
-            file_count = getattr(cap, "file_count", None) if cap else None
+            file_count_reported = getattr(cap, "file_count", None) if cap else None
+
+            # Preserve existing file_count_received value if already set
+            # (it's only updated by async_refresh_file_list, not by regular polling)
+            existing_file_count_received = (
+                self.data.get("file_count_received") if self.data else None
+            )
 
             # Extract pin_code and show_mode from DeviceParamsEvent
             pin_code = (
@@ -281,7 +297,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "volume": vol,
                 "live_name": live_name,
                 "capacity_kb": capacity_kb,
-                "file_count": file_count,
+                "file_count_reported": file_count_reported,
+                "file_count_received": existing_file_count_received,  # Preserve existing value
                 # eye is expected to be an int (1-based) or None
                 "eye_icon": eye,
                 # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
@@ -329,6 +346,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 ],
             }
             _LOGGER.debug("Coordinator fetched data: %s", data)
+
+            # On initial update, also fetch the file list
+            if not self._initial_update_done:
+                _LOGGER.debug("Initial update - refreshing file list")
+                self._initial_update_done = True
+                # Schedule file list refresh as background task to not block coordinator update
+                self.hass.async_create_task(self.async_refresh_file_list())
         except Exception:
             _LOGGER.exception("Coordinator update failed")
             raise UpdateFailed("Failed to update Skelly data") from None
