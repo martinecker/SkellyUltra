@@ -9,8 +9,8 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
+import warnings
 
 from . import parser
 
@@ -68,7 +68,7 @@ class FileTransferManager:
     """
 
     # Protocol constants
-    MIN_CHUNK_SIZE = 50  # Minimum bytes per chunk
+    MIN_CHUNK_SIZE = 20  # Minimum bytes per chunk
     MAX_CHUNK_SIZE = 500  # Maximum bytes per chunk
     DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
     ATT_OVERHEAD = 3  # ATT protocol overhead bytes
@@ -106,14 +106,26 @@ class FileTransferManager:
                 self.MAX_CHUNK_SIZE,
             )
 
-        if client.device and hasattr(client.device, "mtu_size"):
-            mtu = client.device.mtu_size
-            # Account for ATT protocol overhead
-            chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
-            logger.info(
-                "Using MTU-based chunk size: %d bytes (MTU: %d)", chunk_size, mtu
-            )
-            return max(chunk_size, self.MIN_CHUNK_SIZE)
+        # Try to use MTU-based chunk size if available
+        if client.client and hasattr(client.client, "_mtu_size"):
+            try:
+                # Access the private _mtu_size attribute directly to check if MTU is set
+                # Suppress the Bleak warning about using default MTU
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore", message="Using default MTU value")
+                    mtu = client.client._mtu_size  # noqa: SLF001
+                if mtu and mtu > 0:
+                    # Account for ATT protocol overhead
+                    chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
+                    logger.info(
+                        "Using MTU-based chunk size: %d bytes (MTU: %d)",
+                        chunk_size,
+                        mtu,
+                    )
+                    return max(chunk_size, self.MIN_CHUNK_SIZE)
+            except (AttributeError, TypeError):
+                # MTU not available or not valid, fall through to default
+                pass
 
         logger.info("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
@@ -133,8 +145,8 @@ class FileTransferManager:
     async def send_file(
         self,
         client: SkellyClient,
-        file_path: str | Path,
-        filename: str | None = None,
+        file_data: bytes,
+        filename: str,
         progress_callback: Callable[[int, int], None] | None = None,
         override_chunk_size: int | None = None,
     ) -> None:
@@ -142,8 +154,8 @@ class FileTransferManager:
 
         Args:
             client: Connected SkellyClient instance
-            file_path: Path to file to send
-            filename: Target filename on device (uses source filename if None)
+            file_data: Raw file data as bytes
+            filename: Target filename on device
             progress_callback: Optional callback(sent_chunks, total_chunks)
             override_chunk_size: Optional user-specified chunk size (bypasses MTU calculation)
 
@@ -156,15 +168,6 @@ class FileTransferManager:
         async with self._lock:
             if self._state.in_progress:
                 raise RuntimeError("Transfer already in progress")
-
-            # Prepare file data
-            file_path = Path(file_path)
-            if not file_path.exists():
-                raise FileTransferError(f"File not found: {file_path}")
-
-            file_data = file_path.read_bytes()
-            if not filename:
-                filename = file_path.name
 
             # Initialize state
             self._state.in_progress = True

@@ -418,12 +418,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 local_file = file_path
 
             # Step 2: Process audio to required format (8kHz mono MP3)
+            # Run audio processing in executor to avoid blocking event loop
             _LOGGER.debug("Processing audio file: %s", local_file)
-            processed_file = AudioProcessor.process_file(local_file)
+            processed_file = await hass.async_add_executor_job(
+                AudioProcessor.process_file, local_file
+            )
             if str(processed_file) != local_file:
                 temp_files.append(str(processed_file))
 
-            # Step 3: Upload to device
+            # Step 3: Read file data using executor to avoid blocking
+            file_data = await hass.async_add_executor_job(
+                Path(processed_file).read_bytes
+            )
+
+            # Step 4: Upload to device
             _LOGGER.info(
                 "Uploading file to entry %s as %s",
                 entry_id,
@@ -431,7 +439,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
 
             await transfer_manager.send_file(
-                adapter.client, processed_file, target_filename, progress_callback
+                adapter.client, file_data, target_filename, progress_callback
             )
 
             _LOGGER.info(
