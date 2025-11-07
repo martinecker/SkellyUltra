@@ -143,7 +143,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Query device state with staggered delays to avoid overwhelming the device.
             # Each get_*() method sends its query and waits for the response.
             # We stagger the calls by 50ms each to prevent command flooding.
-            timeout_seconds = 15.0
+            # Use longer timeout for initial update to allow file list refresh to complete
+            timeout_seconds = 30.0 if not self._initial_update_done else 15.0
+            if not self._initial_update_done:
+                _LOGGER.debug(
+                    "Initial update - using extended timeout of %s seconds",
+                    timeout_seconds,
+                )
             try:
                 async with asyncio.timeout(timeout_seconds):
                     # Start tasks with delays between them (similar to JavaScript app pattern)
