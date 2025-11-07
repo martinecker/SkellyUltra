@@ -82,6 +82,32 @@
           "description": "Name to save the file as on the device (without extension). The .mp3 extension will be added automatically."
         }
       }
+    },
+    "delete_file": {
+      "name": "Delete file",
+      "description": "Delete a file from the Skelly device's internal storage. The file can be specified either by file_index and cluster (both required), or by filename. The service will refresh the file list before and after the delete operation.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the Skelly device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
+        "file_index": {
+          "name": "File index",
+          "description": "The 0-based index of the file to delete. Must be used together with cluster. Mutually exclusive with filename."
+        },
+        "cluster": {
+          "name": "Cluster",
+          "description": "The cluster value of the file to delete. Must be used together with file_index. Mutually exclusive with filename."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "The name of the file to delete (e.g., 'announcement.mp3'). The service will look up the corresponding file_index and cluster. Mutually exclusive with file_index and cluster."
+        }
+      }
     }
   }
 }
