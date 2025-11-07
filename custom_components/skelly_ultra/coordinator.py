@@ -70,25 +70,29 @@ class SkellyCoordinator(DataUpdateCoordinator):
         This method fetches the current file list from the device and stores
         it in the coordinator. It can be called by both entities and services
         that need the latest file list information.
+
+        Uses action_lock to prevent concurrent execution with coordinator updates.
         """
-        try:
-            self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
-            _LOGGER.debug("Loaded %d files from device", len(self._file_list))
-            # Update the file_count_received in coordinator data
-            if self.data:
-                self.async_set_updated_data(
-                    {**self.data, "file_count_received": len(self._file_list)}
-                )
-        except TimeoutError:
-            _LOGGER.warning("Timeout loading file list from device")
-            self._file_list = []
-            if self.data:
-                self.async_set_updated_data({**self.data, "file_count_received": 0})
-        except Exception:
-            _LOGGER.exception("Failed to load file list from device")
-            self._file_list = []
-            if self.data:
-                self.async_set_updated_data({**self.data, "file_count_received": 0})
+        async with self.action_lock:
+            _LOGGER.debug("Acquiring lock for file list refresh")
+            try:
+                self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
+                _LOGGER.debug("Loaded %d files from device", len(self._file_list))
+                # Update the file_count_received in coordinator data
+                if self.data:
+                    self.async_set_updated_data(
+                        {**self.data, "file_count_received": len(self._file_list)}
+                    )
+            except TimeoutError:
+                _LOGGER.warning("Timeout loading file list from device")
+                self._file_list = []
+                if self.data:
+                    self.async_set_updated_data({**self.data, "file_count_received": 0})
+            except Exception:
+                _LOGGER.exception("Failed to load file list from device")
+                self._file_list = []
+                if self.data:
+                    self.async_set_updated_data({**self.data, "file_count_received": 0})
 
     @property
     def file_list(self) -> list[Any]:
@@ -133,234 +137,240 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Return last known data or empty dict to avoid raising UpdateFailed
             return self.data if self.data else {}
 
-        _LOGGER.debug("Coordinator polling Skelly device for updates")
+        # Use action_lock to prevent concurrent execution with file list refresh
+        async with self.action_lock:
+            _LOGGER.debug("Coordinator polling Skelly device for updates")
 
-        try:
-            # Query device state with overall timeout.
-            # Clear event queue first to ensure we only get fresh responses.
-            self.adapter.client.drain_event_queue()
-
-            # Query device state with staggered delays to avoid overwhelming the device.
-            # Each get_*() method sends its query and waits for the response.
-            # We stagger the calls by 50ms each to prevent command flooding.
-            # Use longer timeout for initial update to allow file list refresh to complete
-            timeout_seconds = 30.0 if not self._initial_update_done else 15.0
-            if not self._initial_update_done:
-                _LOGGER.debug(
-                    "Initial update - using extended timeout of %s seconds",
-                    timeout_seconds,
-                )
             try:
-                async with asyncio.timeout(timeout_seconds):
-                    # Start tasks with delays between them (similar to JavaScript app pattern)
-                    live_mode_task = asyncio.create_task(
-                        self.adapter.client.get_live_mode(timeout=timeout_seconds)
-                    )
-                    await asyncio.sleep(0.05)  # 50ms delay
+                # Query device state with overall timeout.
+                # Clear event queue first to ensure we only get fresh responses.
+                self.adapter.client.drain_event_queue()
 
-                    device_params_task = asyncio.create_task(
-                        self.adapter.client.get_device_params(timeout=timeout_seconds)
+                # Query device state with staggered delays to avoid overwhelming the device.
+                # Each get_*() method sends its query and waits for the response.
+                # We stagger the calls by 50ms each to prevent command flooding.
+                # Use longer timeout for initial update to allow file list refresh to complete
+                timeout_seconds = 30.0 if not self._initial_update_done else 15.0
+                if not self._initial_update_done:
+                    _LOGGER.debug(
+                        "Initial update - using extended timeout of %s seconds",
+                        timeout_seconds,
                     )
-                    await asyncio.sleep(0.05)  # 50ms delay
+                try:
+                    async with asyncio.timeout(timeout_seconds):
+                        # Start tasks with delays between them (similar to JavaScript app pattern)
+                        live_mode_task = asyncio.create_task(
+                            self.adapter.client.get_live_mode(timeout=timeout_seconds)
+                        )
+                        await asyncio.sleep(0.05)  # 50ms delay
 
-                    vol_task = asyncio.create_task(
-                        self.adapter.client.get_volume(timeout=timeout_seconds)
+                        device_params_task = asyncio.create_task(
+                            self.adapter.client.get_device_params(
+                                timeout=timeout_seconds
+                            )
+                        )
+                        await asyncio.sleep(0.05)  # 50ms delay
+
+                        vol_task = asyncio.create_task(
+                            self.adapter.client.get_volume(timeout=timeout_seconds)
+                        )
+                        await asyncio.sleep(0.05)  # 50ms delay
+
+                        live_name_task = asyncio.create_task(
+                            self.adapter.client.get_live_name(timeout=timeout_seconds)
+                        )
+                        await asyncio.sleep(0.05)  # 50ms delay
+
+                        cap_task = asyncio.create_task(
+                            self.adapter.client.get_capacity(timeout=timeout_seconds)
+                        )
+                        await asyncio.sleep(0.05)  # 50ms delay
+
+                        file_order_task = asyncio.create_task(
+                            self.adapter.client.get_file_order(timeout=timeout_seconds)
+                        )
+
+                        # Wait for all responses
+                        (
+                            vol,
+                            live_name,
+                            cap,
+                            live_mode,
+                            file_order,
+                            device_params,
+                        ) = await asyncio.gather(
+                            vol_task,
+                            live_name_task,
+                            cap_task,
+                            live_mode_task,
+                            file_order_task,
+                            device_params_task,
+                        )
+                except TimeoutError as ex:
+                    _LOGGER.warning(
+                        "Coordinator update timed out after %s seconds", timeout_seconds
                     )
-                    await asyncio.sleep(0.05)  # 50ms delay
+                    raise UpdateFailed(
+                        f"Device polling timed out after {timeout_seconds}s"
+                    ) from ex
 
-                    live_name_task = asyncio.create_task(
-                        self.adapter.client.get_live_name(timeout=timeout_seconds)
-                    )
-                    await asyncio.sleep(0.05)  # 50ms delay
-
-                    cap_task = asyncio.create_task(
-                        self.adapter.client.get_capacity(timeout=timeout_seconds)
-                    )
-                    await asyncio.sleep(0.05)  # 50ms delay
-
-                    file_order_task = asyncio.create_task(
-                        self.adapter.client.get_file_order(timeout=timeout_seconds)
-                    )
-
-                    # Wait for all responses
-                    (
-                        vol,
-                        live_name,
-                        cap,
-                        live_mode,
-                        file_order,
-                        device_params,
-                    ) = await asyncio.gather(
-                        vol_task,
-                        live_name_task,
-                        cap_task,
-                        live_mode_task,
-                        file_order_task,
-                        device_params_task,
-                    )
-            except TimeoutError as ex:
-                _LOGGER.warning(
-                    "Coordinator update timed out after %s seconds", timeout_seconds
-                )
-                raise UpdateFailed(
-                    f"Device polling timed out after {timeout_seconds}s"
-                ) from ex
-
-            # Extract eye, action, and light info from the parsed live_mode event
-            eye = getattr(live_mode, "eye_icon", None)
-            action = getattr(live_mode, "action", None)
-            # live_mode.lights is a list of LightInfo objects
-            light0 = None
-            light1 = None
-            try:
-                lights_list = getattr(live_mode, "lights", []) or []
-                if len(lights_list) > 0:
-                    light0 = lights_list[0]
-                if len(lights_list) > 1:
-                    light1 = lights_list[1]
-            except Exception:
+                # Extract eye, action, and light info from the parsed live_mode event
+                eye = getattr(live_mode, "eye_icon", None)
+                action = getattr(live_mode, "action", None)
+                # live_mode.lights is a list of LightInfo objects
                 light0 = None
                 light1 = None
-
-            # Check REST server status if we think live mode is connected
-            expected_mac = self.adapter.client.live_mode_client_address
-            if expected_mac:
-                _LOGGER.debug(
-                    "Coordinator checking REST server for live mode device: %s",
-                    expected_mac,
-                )
                 try:
-                    # Query REST server to verify connection is still active
-                    rest_status = await self.adapter.client.get_audio_status_live_mode()
+                    lights_list = getattr(live_mode, "lights", []) or []
+                    if len(lights_list) > 0:
+                        light0 = lights_list[0]
+                    if len(lights_list) > 1:
+                        light1 = lights_list[1]
+                except Exception:
+                    light0 = None
+                    light1 = None
 
-                    # Check if the REST server reports any connected devices
-                    bluetooth_info = rest_status.get("bluetooth", {})
-                    connected_devices = bluetooth_info.get("devices", [])
-
+                # Check REST server status if we think live mode is connected
+                expected_mac = self.adapter.client.live_mode_client_address
+                if expected_mac:
                     _LOGGER.debug(
-                        "REST server reports %d connected devices: %s",
-                        len(connected_devices),
-                        connected_devices,
-                    )
-
-                    # Look for our expected MAC address in the connected devices
-                    # Use case-insensitive comparison since MAC addresses can vary in case
-                    expected_mac_lower = expected_mac.lower()
-                    mac_still_connected = any(
-                        device.get("mac", "").lower() == expected_mac_lower
-                        for device in connected_devices
-                    )
-
-                    if not mac_still_connected:
-                        _LOGGER.warning(
-                            "Live mode device %s is no longer connected to REST server, cleaning up",
-                            expected_mac,
-                        )
-                        # Disconnect on our side to sync state
-                        await self.adapter.disconnect_live_mode()
-                    else:
-                        _LOGGER.debug(
-                            "Live mode device %s is still connected to REST server",
-                            expected_mac,
-                        )
-
-                except Exception as ex:
-                    # REST server may be down or unreachable
-                    _LOGGER.warning(
-                        "Failed to check REST server status for live mode device %s: %s. Assuming disconnected",
+                        "Coordinator checking REST server for live mode device: %s",
                         expected_mac,
-                        ex,
                     )
-                    # Clean up our state since we can't verify the connection
-                    await self.adapter.disconnect_live_mode()
+                    try:
+                        # Query REST server to verify connection is still active
+                        rest_status = (
+                            await self.adapter.client.get_audio_status_live_mode()
+                        )
 
-            # Extract capacity_kb and file_count_reported from CapacityEvent
-            capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
-            file_count_reported = getattr(cap, "file_count", None) if cap else None
+                        # Check if the REST server reports any connected devices
+                        bluetooth_info = rest_status.get("bluetooth", {})
+                        connected_devices = bluetooth_info.get("devices", [])
 
-            # Preserve existing file_count_received value if already set
-            # (it's only updated by async_refresh_file_list, not by regular polling)
-            existing_file_count_received = (
-                self.data.get("file_count_received") if self.data else None
-            )
+                        _LOGGER.debug(
+                            "REST server reports %d connected devices: %s",
+                            len(connected_devices),
+                            connected_devices,
+                        )
 
-            # Extract pin_code and show_mode from DeviceParamsEvent
-            pin_code = (
-                getattr(device_params, "pin_code", None) if device_params else None
-            )
-            show_mode = (
-                getattr(device_params, "show_mode", None) if device_params else None
-            )
+                        # Look for our expected MAC address in the connected devices
+                        # Use case-insensitive comparison since MAC addresses can vary in case
+                        expected_mac_lower = expected_mac.lower()
+                        mac_still_connected = any(
+                            device.get("mac", "").lower() == expected_mac_lower
+                            for device in connected_devices
+                        )
 
-            # Check if device is in show mode (show_mode=1) on initial update
-            if show_mode == 1 and self.data is None:
-                _LOGGER.error(
-                    "Device is in SHOW MODE - This integration requires the device to be in normal mode. "
-                    "To switch out of show mode, hold the button on the Skelly device for about 10 seconds until it beeps."
+                        if not mac_still_connected:
+                            _LOGGER.warning(
+                                "Live mode device %s is no longer connected to REST server, cleaning up",
+                                expected_mac,
+                            )
+                            # Disconnect on our side to sync state
+                            await self.adapter.disconnect_live_mode()
+                        else:
+                            _LOGGER.debug(
+                                "Live mode device %s is still connected to REST server",
+                                expected_mac,
+                            )
+
+                    except Exception as ex:
+                        # REST server may be down or unreachable
+                        _LOGGER.warning(
+                            "Failed to check REST server status for live mode device %s: %s. Assuming disconnected",
+                            expected_mac,
+                            ex,
+                        )
+                        # Clean up our state since we can't verify the connection
+                        await self.adapter.disconnect_live_mode()
+
+                # Extract capacity_kb and file_count_reported from CapacityEvent
+                capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
+                file_count_reported = getattr(cap, "file_count", None) if cap else None
+
+                # Preserve existing file_count_received value if already set
+                # (it's only updated by async_refresh_file_list, not by regular polling)
+                existing_file_count_received = (
+                    self.data.get("file_count_received") if self.data else None
                 )
 
-            data = {
-                "volume": vol,
-                "live_name": live_name,
-                "capacity_kb": capacity_kb,
-                "file_count_reported": file_count_reported,
-                "file_count_received": existing_file_count_received,  # Preserve existing value
-                # eye is expected to be an int (1-based) or None
-                "eye_icon": eye,
-                # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
-                "action": action,
-                # file_order is a list of integers representing playback order
-                "file_order": file_order,
-                # pin_code is the Bluetooth pairing PIN (e.g., "1234")
-                "pin_code": pin_code,
-                # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
-                "lights": [
-                    {
-                        "brightness": int(getattr(light0, "brightness", 0))
-                        if light0 is not None
-                        else None,
-                        "rgb": tuple(getattr(light0, "rgb", (0, 0, 0)))
-                        if light0 is not None
-                        else None,
-                        "mode": int(getattr(light0, "mode", 1))
-                        if light0 is not None
-                        else None,
-                        "effect": int(getattr(light0, "effect", 0))
-                        if light0 is not None
-                        else None,
-                        "speed": int(getattr(light0, "speed", 0))
-                        if light0 is not None
-                        else None,
-                    },
-                    {
-                        "brightness": int(getattr(light1, "brightness", 0))
-                        if light1 is not None
-                        else None,
-                        "rgb": tuple(getattr(light1, "rgb", (0, 0, 0)))
-                        if light1 is not None
-                        else None,
-                        "mode": int(getattr(light1, "mode", 1))
-                        if light1 is not None
-                        else None,
-                        "effect": int(getattr(light1, "effect", 0))
-                        if light1 is not None
-                        else None,
-                        "speed": int(getattr(light1, "speed", 0))
-                        if light1 is not None
-                        else None,
-                    },
-                ],
-            }
-            _LOGGER.debug("Coordinator fetched data: %s", data)
+                # Extract pin_code and show_mode from DeviceParamsEvent
+                pin_code = (
+                    getattr(device_params, "pin_code", None) if device_params else None
+                )
+                show_mode = (
+                    getattr(device_params, "show_mode", None) if device_params else None
+                )
 
-            # On initial update, also fetch the file list
-            if not self._initial_update_done:
-                _LOGGER.debug("Initial update - refreshing file list")
-                self._initial_update_done = True
-                # Schedule file list refresh as background task to not block coordinator update
-                self.hass.async_create_task(self.async_refresh_file_list())
-        except Exception:
-            _LOGGER.exception("Coordinator update failed")
-            raise UpdateFailed("Failed to update Skelly data") from None
-        else:
-            return data
+                # Check if device is in show mode (show_mode=1) on initial update
+                if show_mode == 1 and self.data is None:
+                    _LOGGER.error(
+                        "Device is in SHOW MODE - This integration requires the device to be in normal mode. "
+                        "To switch out of show mode, hold the button on the Skelly device for about 10 seconds until it beeps."
+                    )
+
+                data = {
+                    "volume": vol,
+                    "live_name": live_name,
+                    "capacity_kb": capacity_kb,
+                    "file_count_reported": file_count_reported,
+                    "file_count_received": existing_file_count_received,  # Preserve existing value
+                    # eye is expected to be an int (1-based) or None
+                    "eye_icon": eye,
+                    # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
+                    "action": action,
+                    # file_order is a list of integers representing playback order
+                    "file_order": file_order,
+                    # pin_code is the Bluetooth pairing PIN (e.g., "1234")
+                    "pin_code": pin_code,
+                    # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
+                    "lights": [
+                        {
+                            "brightness": int(getattr(light0, "brightness", 0))
+                            if light0 is not None
+                            else None,
+                            "rgb": tuple(getattr(light0, "rgb", (0, 0, 0)))
+                            if light0 is not None
+                            else None,
+                            "mode": int(getattr(light0, "mode", 1))
+                            if light0 is not None
+                            else None,
+                            "effect": int(getattr(light0, "effect", 0))
+                            if light0 is not None
+                            else None,
+                            "speed": int(getattr(light0, "speed", 0))
+                            if light0 is not None
+                            else None,
+                        },
+                        {
+                            "brightness": int(getattr(light1, "brightness", 0))
+                            if light1 is not None
+                            else None,
+                            "rgb": tuple(getattr(light1, "rgb", (0, 0, 0)))
+                            if light1 is not None
+                            else None,
+                            "mode": int(getattr(light1, "mode", 1))
+                            if light1 is not None
+                            else None,
+                            "effect": int(getattr(light1, "effect", 0))
+                            if light1 is not None
+                            else None,
+                            "speed": int(getattr(light1, "speed", 0))
+                            if light1 is not None
+                            else None,
+                        },
+                    ],
+                }
+                _LOGGER.debug("Coordinator fetched data: %s", data)
+
+                # On initial update, also fetch the file list
+                if not self._initial_update_done:
+                    _LOGGER.debug("Initial update - refreshing file list")
+                    self._initial_update_done = True
+                    # Schedule file list refresh as background task to not block coordinator update
+                    self.hass.async_create_task(self.async_refresh_file_list())
+            except Exception:
+                _LOGGER.exception("Coordinator update failed")
+                raise UpdateFailed("Failed to update Skelly data") from None
+            else:
+                return data
