@@ -75,7 +75,10 @@ class FileTransferManager:
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 240.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
-    CHUNK_DELAY = 0.1  # seconds between chunks
+    CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
+    DROPPED_CHUNK_CHECK_DELAY = (
+        0.2  # seconds to wait after all chunks for dropped events
+    )
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
@@ -127,7 +130,7 @@ class FileTransferManager:
                 # MTU not available or not valid, fall through to default
                 pass
 
-        logger.info("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
+        logger.debug("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
 
     @property
@@ -357,7 +360,98 @@ class FileTransferManager:
             # Small delay to avoid overwhelming the device
             await asyncio.sleep(self.CHUNK_DELAY)
 
-        logger.debug("All %d chunks sent", chunk_count)
+        # After all chunks sent, wait for any delayed dropped chunk events
+        # The device may report dropped chunks slightly after we finish sending
+        logger.debug("All chunks sent, waiting for any delayed dropped chunk events...")
+        await asyncio.sleep(self.DROPPED_CHUNK_CHECK_DELAY)
+        await self._handle_chunk_dropped_events(client, file_data, chunk_size)
+
+        logger.debug("All %d chunks sent and verified", chunk_count)
+
+    async def _handle_chunk_dropped_events(
+        self,
+        client: SkellyClient,
+        file_data: bytes,
+        chunk_size: int,
+    ) -> None:
+        """Check for and handle ChunkDroppedEvent (BBC1) from device.
+
+        The device sends BBC1 when it detects a dropped chunk during transmission.
+        We retry sending the specific chunk indicated by the event's index.
+
+        This method polls the event queue and only processes ChunkDroppedEvents.
+        Other events are left in the queue for later processing (they will be
+        handled by _wait_for_event when we move to the next phase).
+
+        Args:
+            client: SkellyClient instance
+            file_data: Complete file data
+            chunk_size: Size of each chunk in bytes
+
+        Raises:
+            FileTransferCancelled: If cancelled during retry
+        """
+        retry_count = 0
+        max_retries = 100  # Prevent infinite loop
+
+        # Keep checking for dropped chunks until queue is empty or we hit max retries
+        while retry_count < max_retries:
+            try:
+                # Peek at the queue with a very short timeout
+                event = await asyncio.wait_for(client.events.get(), timeout=0.01)
+
+                if isinstance(event, parser.ChunkDroppedEvent):
+                    chunk_index = event.index
+                    retry_count += 1
+                    logger.warning(
+                        "Device reported dropped chunk at index %d, retrying (attempt %d)...",
+                        chunk_index,
+                        retry_count,
+                    )
+
+                    if self._state.cancelled:
+                        raise FileTransferCancelled(
+                            "Transfer cancelled during chunk retry"
+                        )
+
+                    # Get chunk data from cache
+                    if chunk_index not in self._chunk_cache:
+                        # If not in cache, calculate from file data
+                        offset = chunk_index * chunk_size
+                        chunk_data = file_data[offset : offset + chunk_size]
+                        logger.debug(
+                            "Chunk %d not in cache, recalculated from file data",
+                            chunk_index,
+                        )
+                    else:
+                        chunk_data = self._chunk_cache[chunk_index]
+
+                    # Resend the dropped chunk
+                    await client.send_data_chunk(chunk_index, chunk_data)
+                    logger.info(
+                        "Resent dropped chunk %d (%d bytes)",
+                        chunk_index,
+                        len(chunk_data),
+                    )
+
+                    # Small delay before checking for more
+                    await asyncio.sleep(self.CHUNK_DELAY)
+
+                    # Continue checking for more dropped chunks
+                    continue
+
+                # Not a ChunkDroppedEvent - put it back in the queue
+                # This event will be processed by _wait_for_event later
+                await client.events.put(event)
+                # Exit - we've hit a non-dropped-chunk event, meaning we're done
+                break
+
+            except TimeoutError:
+                # No events in queue, normal - we're done
+                break
+
+        if retry_count > 0:
+            logger.info("Handled %d dropped chunk(s)", retry_count)
 
     async def _wait_for_event(
         self,
