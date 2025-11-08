@@ -14,7 +14,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
@@ -53,44 +53,58 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Check if Connected switch is on (defaults to True)
     is_connected = entry.options.get("connected", True)
 
-    if is_connected:
-        # Connect to device only if switch is on
-        ok = await adapter.connect()
-        if not ok:
-            raise ConfigEntryNotReady("Failed to connect to Skelly device")
+    # Start connection and initialization in background to avoid blocking setup
+    # This allows the integration to load even if the device is not available
+    async def _initialize_device() -> None:
+        """Initialize device connection, notifications, and perform initial data fetch."""
+        if not is_connected:
+            # Switch is off - pause coordinator immediately
+            coordinator.pause_updates()
+            _LOGGER.info(
+                "Connected switch is off - skipping connection and pausing updates"
+            )
+            return
 
-        # Start notifications and initial refresh in background to avoid blocking setup.
-        # Entities handle None data gracefully and will update once data arrives.
-        async def _initialize_device() -> None:
-            """Initialize device notifications and perform initial data fetch."""
-            # Start notifications before performing the initial refresh so responses
-            # to queries (which arrive via notifications) are delivered to the
-            # client's event queue. If starting notifications fails, the initial
-            # refresh may time out but will retry on next update cycle.
-            try:
-                started = await adapter.start_notifications_with_retry()
-                if not started:
-                    _LOGGER.warning(
-                        "Notifications could not be started; data fetch may fail"
-                    )
-            except Exception:
-                _LOGGER.exception("Unexpected error while starting notifications")
-
-            # Perform initial coordinator refresh
-            try:
-                await coordinator.async_config_entry_first_refresh()
-            except Exception:
-                _LOGGER.exception(
-                    "Initial data refresh failed, will retry on next update"
+        # Attempt to connect to the device
+        try:
+            ok = await adapter.connect()
+            if not ok:
+                _LOGGER.warning(
+                    "Failed to connect to Skelly device during initialization, "
+                    "coordinator will retry on next update cycle"
                 )
+                return
+        except Exception:
+            _LOGGER.exception(
+                "Exception while connecting to Skelly device during initialization, "
+                "coordinator will retry on next update cycle"
+            )
+            return
 
-        hass.async_create_task(_initialize_device())
-    else:
-        # Switch is off - pause coordinator immediately
-        coordinator.pause_updates()
-        _LOGGER.info(
-            "Connected switch is off - skipping connection and pausing updates"
-        )
+        # Start notifications before performing the initial refresh so responses
+        # to queries (which arrive via notifications) are delivered to the
+        # client's event queue. If starting notifications fails, the initial
+        # refresh may time out but will retry on next update cycle.
+        try:
+            started = await adapter.start_notifications_with_retry()
+            if not started:
+                _LOGGER.warning(
+                    "Notifications could not be started; data fetch may fail"
+                )
+        except Exception:
+            _LOGGER.exception("Unexpected error while starting notifications")
+
+        # Perform initial coordinator refresh
+        # Use async_refresh instead of async_config_entry_first_refresh
+        # because the config entry is already loaded at this point
+        # Don't use async_request_refresh as it has a 2-second debounce delay
+        try:
+            await coordinator.async_refresh()
+        except Exception:
+            _LOGGER.exception("Initial data refresh failed, will retry on next update")
+
+    # Start initialization in background - don't block setup
+    hass.async_create_task(_initialize_device())
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "adapter": adapter,
@@ -417,44 +431,50 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise HomeAssistantError(f"File not found: {file_path}")
                 local_file = file_path
 
-            # Step 2: Process audio to required format (8kHz mono MP3)
-            # Run audio processing in executor to avoid blocking event loop
-            _LOGGER.debug("Processing audio file: %s", local_file)
-            processed_file = await hass.async_add_executor_job(
-                AudioProcessor.process_file, local_file
-            )
-            if str(processed_file) != local_file:
-                temp_files.append(str(processed_file))
-
-            # Step 3: Read file data using executor to avoid blocking
-            file_data = await hass.async_add_executor_job(
-                Path(processed_file).read_bytes
-            )
-
-            # Step 4: Upload to device
-            _LOGGER.info(
-                "Uploading file to entry %s as %s",
-                entry_id,
-                target_filename,
-            )
-
-            await transfer_manager.send_file(
-                adapter.client, file_data, target_filename, progress_callback
-            )
-
-            _LOGGER.info(
-                "Successfully sent file %s to entry %s",
-                target_filename,
-                entry_id,
-            )
-
-            # Update sensor to show completion
-            if transfer_sensor:
-                transfer_sensor.set_complete()
-
-            # Refresh the file list via coordinator
+            # Get coordinator for lock
             coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-            if coordinator:
+            if not coordinator:
+                raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+
+            # Acquire lock to prevent concurrent coordinator updates during file transfer
+            _LOGGER.debug("Acquiring lock for file transfer")
+            async with coordinator.action_lock:
+                # Step 2: Process audio to required format (8kHz mono MP3)
+                # Run audio processing in executor to avoid blocking event loop
+                _LOGGER.debug("Processing audio file: %s", local_file)
+                processed_file = await hass.async_add_executor_job(
+                    AudioProcessor.process_file, local_file
+                )
+                if str(processed_file) != local_file:
+                    temp_files.append(str(processed_file))
+
+                # Step 3: Read file data using executor to avoid blocking
+                file_data = await hass.async_add_executor_job(
+                    Path(processed_file).read_bytes
+                )
+
+                # Step 4: Upload to device
+                _LOGGER.info(
+                    "Uploading file to entry %s as %s",
+                    entry_id,
+                    target_filename,
+                )
+
+                await transfer_manager.send_file(
+                    adapter.client, file_data, target_filename, progress_callback
+                )
+
+                _LOGGER.info(
+                    "Successfully sent file %s to entry %s",
+                    target_filename,
+                    entry_id,
+                )
+
+                # Update sensor to show completion
+                if transfer_sensor:
+                    transfer_sensor.set_complete()
+
+                # Refresh the file list via coordinator
                 _LOGGER.debug("Refreshing file list after successful upload")
                 await coordinator.async_refresh_file_list()
 
@@ -554,89 +574,94 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
 
         try:
-            # Step 1: Refresh file list to ensure accurate info
-            _LOGGER.info("Refreshing file list before delete for entry %s", entry_id)
-            await coordinator.async_refresh_file_list()
+            # Acquire lock to prevent concurrent coordinator updates during file deletion
+            _LOGGER.debug("Acquiring lock for file deletion")
+            async with coordinator.action_lock:
+                # Step 1: Refresh file list to ensure accurate info
+                _LOGGER.info(
+                    "Refreshing file list before delete for entry %s", entry_id
+                )
+                await coordinator.async_refresh_file_list()
 
-            # Step 2: If filename provided, look up file_index and cluster
-            if filename:
-                file_list = coordinator.file_list
-                matching_file = None
+                # Step 2: If filename provided, look up file_index and cluster
+                if filename:
+                    file_list = coordinator.file_list
+                    matching_file = None
 
-                for file_info in file_list:
-                    if file_info.name == filename:
-                        matching_file = file_info
-                        break
+                    for file_info in file_list:
+                        if file_info.name == filename:
+                            matching_file = file_info
+                            break
 
-                if not matching_file:
-                    raise HomeAssistantError(
-                        f"File '{filename}' not found in device file list"
+                    if not matching_file:
+                        raise HomeAssistantError(
+                            f"File '{filename}' not found in device file list"
+                        )
+
+                    file_index = matching_file.file_index
+                    cluster = matching_file.cluster
+                    _LOGGER.info(
+                        "Resolved filename '%s' to file_index=%d, cluster=%d",
+                        filename,
+                        file_index,
+                        cluster,
+                    )
+                else:
+                    # Validate that the file_index and cluster exist in the file list
+                    # and get the filename for logging
+                    file_list = coordinator.file_list
+                    matching_file = None
+
+                    for file_info in file_list:
+                        if (
+                            file_info.file_index == file_index
+                            and file_info.cluster == cluster
+                        ):
+                            matching_file = file_info
+                            break
+
+                    if not matching_file:
+                        raise HomeAssistantError(
+                            f"File with index {file_index} and cluster {cluster} not found in device file list"
+                        )
+
+                    # Get filename for logging
+                    filename = matching_file.name
+                    _LOGGER.info(
+                        "Resolved file_index=%d, cluster=%d to filename '%s'",
+                        file_index,
+                        cluster,
+                        filename,
                     )
 
-                file_index = matching_file.file_index
-                cluster = matching_file.cluster
+                # Step 3: Send delete command and wait for confirmation
                 _LOGGER.info(
-                    "Resolved filename '%s' to file_index=%d, cluster=%d",
+                    "Deleting file '%s' (index=%d, cluster=%d) for entry %s",
+                    filename,
+                    file_index,
+                    cluster,
+                    entry_id,
+                )
+
+                success = await adapter.client.delete_file_with_confirmation(
+                    file_index, cluster, timeout=10.0
+                )
+
+                if not success:
+                    raise HomeAssistantError(
+                        f"Device reported delete failed for file index {file_index}"
+                    )
+
+                _LOGGER.info(
+                    "Successfully deleted file '%s' (index=%d, cluster=%d)",
                     filename,
                     file_index,
                     cluster,
                 )
-            else:
-                # Validate that the file_index and cluster exist in the file list
-                # and get the filename for logging
-                file_list = coordinator.file_list
-                matching_file = None
 
-                for file_info in file_list:
-                    if (
-                        file_info.file_index == file_index
-                        and file_info.cluster == cluster
-                    ):
-                        matching_file = file_info
-                        break
-
-                if not matching_file:
-                    raise HomeAssistantError(
-                        f"File with index {file_index} and cluster {cluster} not found in device file list"
-                    )
-
-                # Get filename for logging
-                filename = matching_file.name
-                _LOGGER.info(
-                    "Resolved file_index=%d, cluster=%d to filename '%s'",
-                    file_index,
-                    cluster,
-                    filename,
-                )
-
-            # Step 3: Send delete command and wait for confirmation
-            _LOGGER.info(
-                "Deleting file '%s' (index=%d, cluster=%d) for entry %s",
-                filename,
-                file_index,
-                cluster,
-                entry_id,
-            )
-
-            success = await adapter.client.delete_file_with_confirmation(
-                file_index, cluster, timeout=10.0
-            )
-
-            if not success:
-                raise HomeAssistantError(
-                    f"Device reported delete failed for file index {file_index}"
-                )
-
-            _LOGGER.info(
-                "Successfully deleted file '%s' (index=%d, cluster=%d)",
-                filename,
-                file_index,
-                cluster,
-            )
-
-            # Step 4: Refresh file list to reflect the deletion
-            _LOGGER.info("Refreshing file list after successful delete")
-            await coordinator.async_refresh_file_list()
+                # Step 4: Refresh file list to reflect the deletion
+                _LOGGER.info("Refreshing file list after successful delete")
+                await coordinator.async_refresh_file_list()
 
         except TimeoutError:
             raise HomeAssistantError(

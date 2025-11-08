@@ -42,6 +42,15 @@ class SkellyClient:
     ) -> None:
         self._parsed_handler = handler
 
+    @property
+    def is_connected(self) -> bool:
+        """Check if the BLE client is currently connected.
+
+        Returns:
+            True if the underlying BleakClient is connected, False otherwise.
+        """
+        return self._client is not None and getattr(self._client, "is_connected", False)
+
     async def connect(
         self,
         timeout: float = 10.0,
