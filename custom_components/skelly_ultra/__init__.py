@@ -460,8 +460,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     target_filename,
                 )
 
+                # Check if chunk size override is enabled
+                override_chunk_size = None
+                if coordinator.data:
+                    override_enabled = coordinator.data.get(
+                        "override_chunk_size", False
+                    )
+                    if override_enabled:
+                        override_chunk_size = coordinator.data.get(
+                            "chunk_size_override"
+                        )
+                        _LOGGER.debug(
+                            "Using chunk size override: %d bytes", override_chunk_size
+                        )
+
                 await transfer_manager.send_file(
-                    adapter.client, file_data, target_filename, progress_callback
+                    adapter.client,
+                    file_data,
+                    target_filename,
+                    progress_callback,
+                    override_chunk_size,
                 )
 
                 _LOGGER.info(

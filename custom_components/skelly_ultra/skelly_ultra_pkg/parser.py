@@ -60,6 +60,17 @@ class ChunkDroppedEvent:
 @dataclass
 class TransferEndEvent:
     failed: int
+    last_chunk_index: int = 0  # Last successfully received chunk index (for retry)
+
+
+@dataclass
+class TransferCancelEvent:
+    failed: int
+
+
+@dataclass
+class TransferConfirmEvent:
+    failed: int
 
 
 @dataclass
@@ -143,6 +154,8 @@ def parse_notification(
     | StartTransferEvent
     | ChunkDroppedEvent
     | TransferEndEvent
+    | TransferCancelEvent
+    | TransferConfirmEvent
     | ResumeWriteEvent
     | PlaybackEvent
     | DeleteFileEvent
@@ -233,15 +246,19 @@ def parse_notification(
 
     if hexstr.startswith("BBC2"):
         failed = int(hexstr[4:6], 16)
-        return TransferEndEvent(failed=failed)
+        # Extract last successful chunk index if present (bytes 6-10)
+        last_chunk_index = 0
+        if len(hexstr) >= 10:
+            last_chunk_index = int(hexstr[6:10], 16)
+        return TransferEndEvent(failed=failed, last_chunk_index=last_chunk_index)
 
     if hexstr.startswith("BBC3"):
         failed = int(hexstr[4:6], 16)
-        return ResumeWriteEvent(written=failed)
+        return TransferConfirmEvent(failed=failed)
 
     if hexstr.startswith("BBC4"):
         failed = int(hexstr[4:6], 16)
-        return TransferEndEvent(failed=failed)
+        return TransferCancelEvent(failed=failed)
 
     if hexstr.startswith("BBC5"):
         written = int(hexstr[4:12], 16)

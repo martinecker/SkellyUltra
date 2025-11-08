@@ -9,7 +9,7 @@ import asyncio
 from collections.abc import Callable
 from dataclasses import dataclass
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 import warnings
 
 from . import parser
@@ -73,12 +73,9 @@ class FileTransferManager:
     DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
     ATT_OVERHEAD = 3  # ATT protocol overhead bytes
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
-    TIMEOUT_END = 240.0  # seconds to wait for BBC2 (long for large files)
+    TIMEOUT_END = 60.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
     CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
-    DROPPED_CHUNK_CHECK_DELAY = (
-        0.2  # seconds to wait after all chunks for dropped events
-    )
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
@@ -223,6 +220,8 @@ class FileTransferManager:
         filename: str,
         progress_callback: Callable[[int, int], None] | None,
         override_chunk_size: int | None = None,
+        retry_count: int = 0,
+        retry_chunk_size: int | None = None,
     ) -> None:
         """Execute the file transfer protocol.
 
@@ -232,14 +231,27 @@ class FileTransferManager:
             filename: Target filename on device
             progress_callback: Optional progress callback
             override_chunk_size: Optional user-specified chunk size
+            retry_count: Internal retry counter for smaller chunk sizes
+            retry_chunk_size: Chunk size from previous retry (for progressive reduction)
 
         Raises:
             FileTransferCancelled: If cancelled during transfer
             FileTransferTimeout: If device doesn't respond
             FileTransferError: On protocol errors
         """
-        # Determine optimal chunk size based on BLE MTU or user override
-        chunk_size = self.get_chunk_size(client, override_chunk_size)
+        # On retry, use half the previous chunk size
+        if retry_count > 0 and retry_chunk_size is not None:
+            chunk_size = max(self.MIN_CHUNK_SIZE, retry_chunk_size // 2)
+            logger.warning(
+                "Retrying transfer with reduced chunk size: %d bytes (attempt %d, was %d)",
+                chunk_size,
+                retry_count + 1,
+                retry_chunk_size,
+            )
+        else:
+            # First attempt - determine optimal chunk size based on BLE MTU or user override
+            chunk_size = self.get_chunk_size(client, override_chunk_size)
+
         self._state.chunk_size = chunk_size
 
         size = len(file_data)
@@ -275,6 +287,13 @@ class FileTransferManager:
             )
             self._state.sent_chunks = start_index
 
+        # Pre-cache all chunks before sending (needed for retry if BBC2 arrives early)
+        logger.debug("Pre-caching all %d chunks for potential retry...", chunk_count)
+        for idx in range(chunk_count):
+            offset = idx * chunk_size
+            chunk_data = file_data[offset : offset + chunk_size]
+            self._chunk_cache[idx] = chunk_data
+
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(
             client, file_data, start_index, chunk_count, chunk_size, progress_callback
@@ -286,16 +305,55 @@ class FileTransferManager:
             client, parser.TransferEndEvent, self.TIMEOUT_END, "BBC2"
         )
 
+        # Handle failed transfer - restart with smaller chunks
         if end_event.failed != 0:
             logger.warning(
-                "Device reported transfer end with failed=%d", end_event.failed
+                "Device reported transfer failed (failed=%d, last_chunk_index=%d)",
+                end_event.failed,
+                end_event.last_chunk_index,
             )
-            # Device may want us to retry some chunks
-            # In the JavaScript implementation, it re-sends cached chunks
-            # For now, we'll just report the error
-            # TODO: Implement chunk retry based on device feedback
-            raise FileTransferError(
-                f"Device reported incomplete transfer (failed={end_event.failed})"
+
+            # Log any ChunkDroppedEvents for debugging, but don't act on them
+            await asyncio.sleep(0.2)  # Wait for any pending events
+            while not client.events.empty():
+                try:
+                    event = client.events.get_nowait()
+                    if isinstance(event, parser.ChunkDroppedEvent):
+                        logger.info(
+                            "ChunkDroppedEvent reported for chunk %d (informational only)",
+                            event.index,
+                        )
+                    else:
+                        # Put non-ChunkDropped events back
+                        await client.events.put(event)
+                        break
+                except asyncio.QueueEmpty:
+                    break
+
+            # Restart transfer with smaller chunk size (max 2 retries)
+            if retry_count >= 2:
+                raise FileTransferError(
+                    "Transfer failed after 3 attempts with progressively smaller chunks"
+                )
+
+            logger.warning(
+                "Transfer failed, restarting with smaller chunk size (retry %d/2)...",
+                retry_count + 1,
+            )
+            # Cancel current transfer and restart
+            await client.cancel_send()
+            await asyncio.sleep(1.0)  # Give device time to reset
+
+            # Recursive retry with smaller chunks - pass current chunk_size for progressive halving
+            # Don't pass override_chunk_size to retry - we want to use the calculated smaller size
+            return await self._do_transfer(
+                client,
+                file_data,
+                filename,
+                progress_callback,
+                None,  # Clear override on retry - use retry_chunk_size instead
+                retry_count + 1,
+                chunk_size,  # Pass current size so next retry halves it
             )
 
         # Phase 4: Confirm file (C3)
@@ -304,14 +362,14 @@ class FileTransferManager:
             client, parser.ResumeWriteEvent, self.TIMEOUT_CONFIRM, "BBC3"
         )
 
-        # BBC3 parser returns ResumeWriteEvent with 'written' field
-        # The field actually contains the 'failed' status for BBC3
+        # BBC3 parser returns TransferConfirmEvent with 'failed' field
         if confirm_event.written != 0:
             raise FileTransferError(
-                f"Device failed final confirmation (failed={confirm_event.written})"
+                f"Device failed final confirmation (failed={confirm_event.failed})"
             )
 
         logger.info("File transfer confirmed by device: %s", filename)
+        return None
 
     async def _send_chunks(
         self,
@@ -334,17 +392,43 @@ class FileTransferManager:
 
         Raises:
             FileTransferCancelled: If cancelled during send
+            FileTransferError: If BBC2 (TransferEndEvent) received early with failed=1
         """
         for idx in range(start_index, chunk_count):
             if self._state.cancelled:
                 raise FileTransferCancelled("Transfer cancelled by user")
 
-            # Calculate chunk data
-            offset = idx * chunk_size
-            chunk_data = file_data[offset : offset + chunk_size]
+            # Check for early BBC2 (TransferEndEvent) in the queue
+            # Device may send this during chunk transmission if it detects problems
+            if not client.events.empty():
+                try:
+                    # Peek at next event without blocking
+                    event = client.events.get_nowait()
+                    if isinstance(event, parser.TransferEndEvent):
+                        logger.warning(
+                            "Received early BBC2 during chunk %d (failed=%d, last_chunk=%d)",
+                            idx,
+                            event.failed,
+                            event.last_chunk_index,
+                        )
+                        # Put it back for later handling in Phase 3
+                        await client.events.put(event)
+                        # Stop sending more chunks - we'll handle retry in Phase 3
+                        logger.info(
+                            "Stopping chunk transmission at %d due to early BBC2", idx
+                        )
+                        return
+                    # Not a TransferEndEvent, put it back
+                    await client.events.put(event)
+                except asyncio.QueueEmpty:
+                    pass
 
-            # Cache chunk for potential retry
-            self._chunk_cache[idx] = chunk_data
+            # Get chunk from cache (pre-cached before sending started)
+            chunk_data = self._chunk_cache.get(idx)
+            if not chunk_data:
+                # Fallback: calculate from file data if not in cache
+                offset = idx * chunk_size
+                chunk_data = file_data[offset : offset + chunk_size]
 
             # Send chunk
             await client.send_data_chunk(idx, chunk_data)
@@ -360,98 +444,7 @@ class FileTransferManager:
             # Small delay to avoid overwhelming the device
             await asyncio.sleep(self.CHUNK_DELAY)
 
-        # After all chunks sent, wait for any delayed dropped chunk events
-        # The device may report dropped chunks slightly after we finish sending
-        logger.debug("All chunks sent, waiting for any delayed dropped chunk events...")
-        await asyncio.sleep(self.DROPPED_CHUNK_CHECK_DELAY)
-        await self._handle_chunk_dropped_events(client, file_data, chunk_size)
-
-        logger.debug("All %d chunks sent and verified", chunk_count)
-
-    async def _handle_chunk_dropped_events(
-        self,
-        client: SkellyClient,
-        file_data: bytes,
-        chunk_size: int,
-    ) -> None:
-        """Check for and handle ChunkDroppedEvent (BBC1) from device.
-
-        The device sends BBC1 when it detects a dropped chunk during transmission.
-        We retry sending the specific chunk indicated by the event's index.
-
-        This method polls the event queue and only processes ChunkDroppedEvents.
-        Other events are left in the queue for later processing (they will be
-        handled by _wait_for_event when we move to the next phase).
-
-        Args:
-            client: SkellyClient instance
-            file_data: Complete file data
-            chunk_size: Size of each chunk in bytes
-
-        Raises:
-            FileTransferCancelled: If cancelled during retry
-        """
-        retry_count = 0
-        max_retries = 100  # Prevent infinite loop
-
-        # Keep checking for dropped chunks until queue is empty or we hit max retries
-        while retry_count < max_retries:
-            try:
-                # Peek at the queue with a very short timeout
-                event = await asyncio.wait_for(client.events.get(), timeout=0.01)
-
-                if isinstance(event, parser.ChunkDroppedEvent):
-                    chunk_index = event.index
-                    retry_count += 1
-                    logger.warning(
-                        "Device reported dropped chunk at index %d, retrying (attempt %d)...",
-                        chunk_index,
-                        retry_count,
-                    )
-
-                    if self._state.cancelled:
-                        raise FileTransferCancelled(
-                            "Transfer cancelled during chunk retry"
-                        )
-
-                    # Get chunk data from cache
-                    if chunk_index not in self._chunk_cache:
-                        # If not in cache, calculate from file data
-                        offset = chunk_index * chunk_size
-                        chunk_data = file_data[offset : offset + chunk_size]
-                        logger.debug(
-                            "Chunk %d not in cache, recalculated from file data",
-                            chunk_index,
-                        )
-                    else:
-                        chunk_data = self._chunk_cache[chunk_index]
-
-                    # Resend the dropped chunk
-                    await client.send_data_chunk(chunk_index, chunk_data)
-                    logger.info(
-                        "Resent dropped chunk %d (%d bytes)",
-                        chunk_index,
-                        len(chunk_data),
-                    )
-
-                    # Small delay before checking for more
-                    await asyncio.sleep(self.CHUNK_DELAY)
-
-                    # Continue checking for more dropped chunks
-                    continue
-
-                # Not a ChunkDroppedEvent - put it back in the queue
-                # This event will be processed by _wait_for_event later
-                await client.events.put(event)
-                # Exit - we've hit a non-dropped-chunk event, meaning we're done
-                break
-
-            except TimeoutError:
-                # No events in queue, normal - we're done
-                break
-
-        if retry_count > 0:
-            logger.info("Handled %d dropped chunk(s)", retry_count)
+        logger.debug("All %d chunks sent", chunk_count)
 
     async def _wait_for_event(
         self,
@@ -459,7 +452,7 @@ class FileTransferManager:
         event_type: type,
         timeout: float,
         event_name: str,
-    ) -> any:
+    ) -> Any:
         """Wait for specific event type from device.
 
         Args:
