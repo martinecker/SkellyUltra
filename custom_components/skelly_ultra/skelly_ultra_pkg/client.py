@@ -19,10 +19,12 @@ class SkellyClient:
         address: str | None = None,
         name_filter: str = "Animated Skelly",
         server_url: str = "http://localhost:8765",
+        use_ble_proxy: bool = False,
     ) -> None:
         self.address = address
         self.name_filter = name_filter
         self.server_url = server_url
+        self.use_ble_proxy = use_ble_proxy
         self._client: BleakClient | None = None
         self._live_mode_client_address: str | None = None
         self._notification_handler: Callable[[Any, bytes], None] = (
@@ -31,6 +33,9 @@ class SkellyClient:
         self._parsed_handler: Callable[[Any, Any], None] | None = None
         self.events: asyncio.Queue = asyncio.Queue()
         self._rest_session: aiohttp.ClientSession | None = None
+        # BLE proxy mode tracking
+        self._ble_session_id: str | None = None
+        self._polling_task: asyncio.Task | None = None
 
     def register_notification_handler(
         self, handler: Callable[[Any, bytes], None]
@@ -48,7 +53,10 @@ class SkellyClient:
 
         Returns:
             True if the underlying BleakClient is connected, False otherwise.
+            In proxy mode, returns True if a BLE session exists.
         """
+        if self.use_ble_proxy:
+            return self._ble_session_id is not None
         return self._client is not None and getattr(self._client, "is_connected", False)
 
     async def connect(
@@ -61,11 +69,16 @@ class SkellyClient:
             client: optional already-constructed BleakClient (connected or not).
 
         Behavior:
+            - If use_ble_proxy is True, connects via REST server proxy.
             - If `client` is provided and is connected, use it and optionally start notifications.
             - If `client` is provided but not connected, attempt to connect it.
             - If `self.address` is set and no client passed, find device by address.
             - Otherwise, perform discovery using BleakScanner and pick by `name_filter`.
         """
+        # Use BLE proxy mode if enabled
+        if self.use_ble_proxy:
+            return await self._connect_via_proxy(timeout=timeout)
+
         device = None
 
         # If an explicit BleakClient was provided, prefer it.
@@ -144,6 +157,39 @@ class SkellyClient:
             logger.exception("Failed to start notifications")
 
     async def disconnect(self) -> None:
+        # Stop polling task if running
+        if self._polling_task and not self._polling_task.done():
+            self._polling_task.cancel()
+            try:
+                await self._polling_task
+            except asyncio.CancelledError:
+                pass
+            self._polling_task = None
+
+        # Disconnect BLE proxy session if active
+        if self.use_ble_proxy and self._ble_session_id:
+            try:
+                session = self._get_rest_session()
+                async with session.post(
+                    f"{self.server_url}/ble/disconnect",
+                    json={"session_id": self._ble_session_id},
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp:
+                    data = await resp.json()
+                    if data.get("success"):
+                        logger.info(
+                            "Disconnected BLE proxy session %s", self._ble_session_id
+                        )
+                    else:
+                        logger.warning(
+                            "BLE proxy disconnect reported failure: %s", data
+                        )
+            except Exception:
+                logger.exception("Failed to disconnect BLE proxy session")
+            finally:
+                self._ble_session_id = None
+
+        # Disconnect direct BLE client if active
         if self._client:
             try:
                 await self._client.stop_notify(commands.NOTIFY_UUID)
@@ -329,15 +375,44 @@ class SkellyClient:
         return self._live_mode_client_address
 
     async def send_command(self, cmd_bytes: bytes) -> None:
-        if not self._client:
+        if not self.is_connected:
             raise RuntimeError("Not connected")
+
         # Log raw outgoing bytes as a space-separated hex string for debugging
         try:
             raw_hex = " ".join(f"{b:02X}" for b in cmd_bytes)
         except Exception:
             raw_hex = cmd_bytes.hex().upper()
         logger.debug("[RAW SEND] (%d bytes): %s", len(cmd_bytes), raw_hex)
-        await self._client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
+
+        # Route via BLE proxy if enabled
+        if self.use_ble_proxy:
+            if not self._ble_session_id:
+                raise RuntimeError("BLE proxy session not established")
+
+            try:
+                session = self._get_rest_session()
+                async with session.post(
+                    f"{self.server_url}/ble/send_command",
+                    json={
+                        "session_id": self._ble_session_id,
+                        "command": cmd_bytes.hex(),
+                    },
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp:
+                    data = await resp.json()
+                    if not data.get("success"):
+                        raise RuntimeError(
+                            f"BLE proxy send failed: {data.get('error', 'unknown')}"
+                        )
+            except aiohttp.ClientError as err:
+                logger.exception("BLE proxy communication error during send_command")
+                raise RuntimeError(f"BLE proxy communication error: {err}") from err
+        else:
+            # Direct BLE write
+            if not self._client:
+                raise RuntimeError("BLE client not connected")
+            await self._client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
 
     # convenience wrappers
     async def enable_classic_bt(self) -> None:
@@ -936,6 +1011,148 @@ class SkellyClient:
         except Exception:
             logger.exception("Unexpected error during REST server communication")
             return None
+
+    async def _connect_via_proxy(self, timeout: float = 10.0) -> bool:
+        """Connect to BLE device via REST server proxy.
+
+        Args:
+            timeout: Connection timeout in seconds.
+
+        Returns:
+            True if connection successful, False otherwise.
+        """
+        if not self.address or self.address == "None":
+            logger.error("BLE proxy mode requires a valid device address")
+            return False
+
+        try:
+            session = self._get_rest_session()
+            async with session.post(
+                f"{self.server_url}/ble/connect",
+                json={"address": self.address},
+                timeout=aiohttp.ClientTimeout(total=timeout + 5.0),
+            ) as resp:
+                data = await resp.json()
+
+                if not data.get("success"):
+                    logger.error(
+                        "BLE proxy connection failed: %s",
+                        data.get("error", "unknown error"),
+                    )
+                    return False
+
+                self._ble_session_id = data["session_id"]
+                logger.info(
+                    "Connected to BLE device %s via proxy, session: %s",
+                    self.address,
+                    self._ble_session_id,
+                )
+
+                # Start notification polling loop
+                self._polling_task = asyncio.create_task(self._notification_poll_loop())
+                return True
+
+        except aiohttp.ClientError as err:
+            logger.error("BLE proxy server communication error: %s", err)
+            return False
+        except Exception:
+            logger.exception("Unexpected error connecting via BLE proxy")
+            return False
+
+    async def _notification_poll_loop(self) -> None:
+        """Background task that polls for BLE notifications via REST API.
+
+        This task runs continuously while connected in proxy mode, fetching
+        raw notifications from the server and processing them locally through
+        the same parser and event queue as direct BLE mode.
+        """
+        logger.info("Starting BLE notification polling loop")
+
+        while self._ble_session_id:
+            try:
+                session = self._get_rest_session()
+                async with session.get(
+                    f"{self.server_url}/ble/notifications",
+                    params={
+                        "session_id": self._ble_session_id,
+                        "timeout": 30,  # Long-poll timeout
+                    },
+                    timeout=aiohttp.ClientTimeout(total=35.0),
+                ) as resp:
+                    data = await resp.json()
+
+                    if not data.get("success"):
+                        error = data.get("error", "unknown")
+                        if "not found" in error.lower():
+                            logger.error("BLE proxy session lost: %s", error)
+                            self._ble_session_id = None
+                            break
+                        logger.warning("BLE proxy notification poll failed: %s", error)
+                        await asyncio.sleep(1.0)  # Brief pause before retry
+                        continue
+
+                    # Process any notifications received
+                    notifications = data.get("notifications", [])
+                    for notif in notifications:
+                        try:
+                            # Convert hex string back to bytes
+                            raw_data = bytes.fromhex(notif["data"])
+                            sender = notif["sender"]
+
+                            # Log raw incoming bytes
+                            try:
+                                raw_hex = " ".join(f"{b:02X}" for b in raw_data)
+                            except Exception:
+                                raw_hex = raw_data.hex().upper()
+                            logger.debug(
+                                "[RAW RECV] (%d bytes) from %s: %s",
+                                len(raw_data),
+                                sender,
+                                raw_hex,
+                            )
+
+                            # Call notification handler (if registered)
+                            if self._notification_handler:
+                                try:
+                                    self._notification_handler(sender, raw_data)
+                                except Exception:
+                                    pass
+
+                            # Parse and queue event
+                            try:
+                                parsed = parser.parse_notification(sender, raw_data)
+                                if parsed is not None:
+                                    try:
+                                        self.events.put_nowait(parsed)
+                                        logger.debug("Parsed event queued: %s", parsed)
+                                    except asyncio.QueueFull:
+                                        pass
+                                    if self._parsed_handler:
+                                        try:
+                                            self._parsed_handler(sender, parsed)
+                                        except Exception:
+                                            pass
+                            except Exception:
+                                pass
+
+                        except Exception:
+                            logger.exception("Error processing notification from proxy")
+
+            except asyncio.TimeoutError:
+                # Long-poll timeout is expected, just retry
+                logger.debug("BLE notification poll timeout, retrying")
+                continue
+            except asyncio.CancelledError:
+                logger.info("BLE notification polling loop cancelled")
+                raise
+            except aiohttp.ClientError:
+                logger.exception("BLE proxy communication error during polling")
+                await asyncio.sleep(2.0)  # Pause before retry
+            except Exception:
+                logger.exception("Unexpected error in BLE notification polling loop")
+                await asyncio.sleep(2.0)  # Pause before retry
+
+        logger.info("BLE notification polling loop stopped")
 
     async def connect_live_mode(
         self, timeout: float = 40.0, bt_pin: str = "1234"

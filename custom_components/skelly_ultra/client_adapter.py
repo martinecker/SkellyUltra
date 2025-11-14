@@ -35,16 +35,20 @@ class SkellyClientAdapter:
         hass: HomeAssistant,
         address: str | None = None,
         server_url: str = "http://localhost:8765",
+        use_ble_proxy: bool = False,
     ) -> None:
         """Initialize the adapter.
 
         hass: the Home Assistant core object
         address: optional BLE address for the Skelly device
         server_url: URL of the REST server for live mode features
+        use_ble_proxy: if True, use REST server for BLE communication instead of direct connection
         """
         self.hass = hass
         self.address = address
-        self._client = SkellyClient(address=address, server_url=server_url)
+        self._client = SkellyClient(
+            address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
+        )
         self._live_mode_callbacks: list = []
 
     def register_live_mode_callback(self, callback) -> None:
