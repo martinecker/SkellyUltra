@@ -142,10 +142,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
             _LOGGER.debug("Coordinator polling Skelly device for updates")
 
             try:
-                # Query device state with overall timeout.
-                # Clear event queue first to ensure we only get fresh responses.
-                self.adapter.client.drain_event_queue()
-
                 # Query device state with staggered delays to avoid overwhelming the device.
                 # Each get_*() method sends its query and waits for the response.
                 # We stagger the calls by 50ms each to prevent command flooding.
