@@ -22,6 +22,7 @@ CMD_QUERY_CAPACITY = "AAD2"
 
 # Media Control Commands (F series - FA to FE)
 CMD_SET_VOLUME = "AAFA"
+CMD_SET_PIN_AND_NAME = "AAFB"
 CMD_PLAY_PAUSE = "AAFC"  # Payload: 01=play, 00=pause
 CMD_ENABLE_CLASSIC_BT = "AAFD"
 CMD_SET_MUSIC_MODE = "AAFE"
@@ -43,9 +44,11 @@ CMD_SEND_DATA_CHUNK = "AAC1"
 CMD_END_SEND_DATA = "AAC2"
 CMD_CONFIRM_FILE = "AAC3"
 CMD_CANCEL_SEND = "AAC4"
+CMD_RESUME_SEND = "AAC5"
 CMD_PLAY_STOP_FILE = "AAC6"  # Payload last byte: 01=play, 00=stop
 CMD_DELETE_FILE = "AAC7"
 CMD_FORMAT = "AAC8"  # Not currently implemented in commands.py
+CMD_SET_FILE_ORDER = "AAC9"
 
 # ============================================================================
 # RESPONSE PREFIXES (received FROM device)
@@ -94,6 +97,7 @@ COMMAND_TAGS = {
     CMD_QUERY_CAPACITY: "query_capacity",
     # Media control commands
     CMD_SET_VOLUME: "set_volume",
+    CMD_SET_PIN_AND_NAME: "set_pin_and_name",
     CMD_PLAY_PAUSE: "play_pause",
     CMD_ENABLE_CLASSIC_BT: "enable_classic_bt",
     CMD_SET_MUSIC_MODE: "set_music_mode",
@@ -112,9 +116,11 @@ COMMAND_TAGS = {
     CMD_END_SEND_DATA: "end_send_data",
     CMD_CONFIRM_FILE: "confirm_file",
     CMD_CANCEL_SEND: "cancel_send",
+    CMD_RESUME_SEND: "resume_send",
     CMD_PLAY_STOP_FILE: "play_stop_file",
     CMD_DELETE_FILE: "delete_file",
     CMD_FORMAT: "format",
+    CMD_SET_FILE_ORDER: "set_file_order",
 }
 
 RESPONSE_PREFIXES = {
