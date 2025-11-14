@@ -302,6 +302,7 @@ bluetoothctl
 - [GET /health](#-get-health) - Health check
 
 #### BLE Proxy Endpoints (Remote BLE Control)
+- [GET /ble/scan_devices](#-get-blescan_devices) - Scan for nearby BLE devices
 - [POST /ble/connect](#-post-bleconnect) - Connect to BLE device and create session
 - [POST /ble/send_command](#-post-blesend_command) - Send raw command bytes to BLE device
 - [GET /ble/notifications](#-get-blenotifications) - Long-poll for raw BLE notifications
@@ -710,6 +711,80 @@ Simple health check endpoint.
 These endpoints enable remote BLE communication, allowing clients without BLE hardware to control Skelly Ultra devices through this server. The server acts as a BLE proxy, forwarding raw command bytes and buffering raw notification bytes.
 
 **Use Case:** Run this server on a machine with BLE hardware (e.g., Raspberry Pi), and control devices from Home Assistant running in a container or on a different machine.
+
+### 🔍 GET /ble/scan_devices
+**Scan for nearby BLE devices.**
+
+Discovers Bluetooth Low Energy devices within range. Useful for finding device MAC addresses or verifying devices are visible to the server.
+
+**Query Parameters:**
+- `name_filter` (optional): Filter devices by name (case-insensitive substring match)
+- `timeout` (optional): Scan duration in seconds. Default: 10.0
+
+**Response (success):**
+```json
+{
+    "success": true,
+    "devices": [
+        {
+            "name": "Animated Skelly",
+            "address": "F5:A1:BC:26:B0:86",
+            "rssi": -45
+        },
+        {
+            "name": "Another BLE Device",
+            "address": "AA:BB:CC:DD:EE:FF",
+            "rssi": -67
+        }
+    ],
+    "count": 2
+}
+```
+
+**Response (failure):**
+```json
+{
+    "success": false,
+    "error": "Scan error message"
+}
+```
+
+**Status Codes:**
+- `200`: Scan successful
+- `400`: Invalid parameters
+- `500`: Internal server error
+
+**Example:**
+```bash
+# Scan for all BLE devices (10 second scan)
+curl "http://localhost:8765/ble/scan_devices"
+
+# Scan for devices with "Skelly" in the name
+curl "http://localhost:8765/ble/scan_devices?name_filter=Skelly"
+
+# Quick 5-second scan
+curl "http://localhost:8765/ble/scan_devices?timeout=5.0"
+
+# Scan for devices matching "Animated" with custom timeout
+curl "http://localhost:8765/ble/scan_devices?name_filter=Animated&timeout=15.0"
+
+# Pretty print with jq
+curl -s "http://localhost:8765/ble/scan_devices?name_filter=Skelly" | jq
+```
+
+**Notes:**
+- Devices must be powered on and advertising to be discovered
+- RSSI (signal strength) indicates proximity (-30 is very close, -90 is far)
+- Longer timeouts may discover more devices but take more time
+- Use `name_filter` to reduce results and speed up discovery
+- Returns empty list if no devices match the filter
+
+**Use Cases:**
+- Find your Skelly's MAC address if unknown
+- Verify Skelly is advertising and visible to the server
+- Debug BLE connectivity issues
+- Discover multiple Skelly devices in range
+- Monitor BLE device availability
 
 ### 🔗 POST /ble/connect
 **Connect to a BLE device and create a proxy session.**

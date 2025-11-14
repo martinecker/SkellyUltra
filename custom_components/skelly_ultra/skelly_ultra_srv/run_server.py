@@ -77,6 +77,9 @@ async def main():
         "  POST /stop             - Stop playback (optional mac/device_name, defaults to all)"
     )
     print("\n  BLE Proxy (Remote BLE Control):")
+    print(
+        "  GET  /ble/scan_devices - Scan for nearby BLE devices (optional ?name_filter= and ?timeout=)"
+    )
     print("  POST /ble/connect      - Connect to BLE device and create session")
     print("  POST /ble/send_command - Send raw command bytes to BLE device")
     print("  GET  /ble/notifications - Long-poll for raw BLE notifications")

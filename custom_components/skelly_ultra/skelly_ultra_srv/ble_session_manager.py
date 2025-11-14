@@ -111,6 +111,43 @@ class BLESessionManager:
             except Exception:
                 _LOGGER.exception("Error disconnecting session %s", session_id)
 
+    async def scan_devices(
+        self, name_filter: str | None = None, timeout: float = 10.0
+    ) -> list[dict[str, str]]:
+        """Scan for nearby BLE devices.
+
+        Args:
+            name_filter: Optional name filter (case-insensitive substring match)
+            timeout: Scan duration in seconds
+
+        Returns:
+            List of discovered devices with name and address
+        """
+        _LOGGER.info("Scanning for BLE devices (timeout: %.1fs)", timeout)
+        devices = await BleakScanner.discover(timeout=timeout)
+
+        results = []
+        for device in devices:
+            # Apply name filter if provided
+            if name_filter:
+                if not device.name or name_filter.lower() not in device.name.lower():
+                    continue
+
+            results.append(
+                {
+                    "name": device.name or "Unknown",
+                    "address": device.address,
+                    "rssi": device.rssi if hasattr(device, "rssi") else None,
+                }
+            )
+
+        _LOGGER.info(
+            "Found %d BLE device(s)%s",
+            len(results),
+            f" matching '{name_filter}'" if name_filter else "",
+        )
+        return results
+
     async def _cleanup_loop(self) -> None:
         """Background task to cleanup idle sessions."""
         while True:
@@ -126,9 +163,7 @@ class BLESessionManager:
                         idle_sessions.append(session_id)
 
                 for session_id in idle_sessions:
-                    _LOGGER.info(
-                        "Cleaning up idle BLE session %s", session_id
-                    )
+                    _LOGGER.info("Cleaning up idle BLE session %s", session_id)
                     try:
                         await self.disconnect_session(session_id)
                     except Exception:
@@ -161,9 +196,7 @@ class BLESessionManager:
 
         if address:
             _LOGGER.info("Searching for BLE device by address: %s", address)
-            device = await BleakScanner.find_device_by_address(
-                address, timeout=timeout
-            )
+            device = await BleakScanner.find_device_by_address(address, timeout=timeout)
         else:
             _LOGGER.info("Discovering BLE devices matching: %s", name_filter)
             devices = await BleakScanner.discover(timeout=timeout)
@@ -171,9 +204,7 @@ class BLESessionManager:
                 if d.name and name_filter.lower() in d.name.lower():
                     device = d
                     discovered_address = d.address
-                    _LOGGER.info(
-                        "Found matching device: %s at %s", d.name, d.address
-                    )
+                    _LOGGER.info("Found matching device: %s at %s", d.name, d.address)
                     break
 
         if not device:
@@ -214,9 +245,7 @@ class BLESessionManager:
         # Start notifications on the characteristic
         try:
             await client.start_notify(NOTIFY_UUID, notification_callback)
-            _LOGGER.info(
-                "Started notifications for BLE session %s", session_id
-            )
+            _LOGGER.info("Started notifications for BLE session %s", session_id)
         except Exception as exc:
             _LOGGER.error("Failed to start notifications: %s", exc)
             try:
@@ -424,6 +453,5 @@ class BLESessionManager:
             List of session info dicts
         """
         return [
-            self.get_session_info(session_id)
-            for session_id in self._sessions.keys()
+            self.get_session_info(session_id) for session_id in self._sessions.keys()
         ]

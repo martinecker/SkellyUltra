@@ -83,6 +83,7 @@ class SkellyUltraServer:
         self.app.router.add_get("/health", self.handle_health)
 
         # BLE proxy endpoints
+        self.app.router.add_get("/ble/scan_devices", self.handle_ble_scan_devices)
         self.app.router.add_post("/ble/connect", self.handle_ble_connect)
         self.app.router.add_post("/ble/send_command", self.handle_ble_send_command)
         self.app.router.add_get("/ble/notifications", self.handle_ble_notifications)
@@ -835,6 +836,58 @@ class SkellyUltraServer:
         response_data = {"status": "ok"}
         self._log_response("health", response_data)
         return web.json_response(response_data)
+
+    async def handle_ble_scan_devices(self, request: web.Request) -> web.Response:
+        """Handle GET /ble/scan_devices endpoint.
+
+        Query parameters:
+            name_filter: Optional name filter (case-insensitive substring match)
+            timeout: Scan duration in seconds (default: 10.0)
+
+        Returns:
+        {
+            "success": true/false,
+            "devices": [
+                {
+                    "name": "Device Name",
+                    "address": "AA:BB:CC:DD:EE:FF",
+                    "rssi": -50
+                },
+                ...
+            ],
+            "error": "error message if failed"
+        }
+        """
+        try:
+            # Get query parameters
+            name_filter = request.query.get("name_filter")
+            timeout = float(request.query.get("timeout", "10.0"))
+
+            self._log_request(
+                "ble/scan_devices", {"name_filter": name_filter, "timeout": timeout}
+            )
+
+            devices = await self.ble_manager.scan_devices(
+                name_filter=name_filter, timeout=timeout
+            )
+
+            response_data = {
+                "success": True,
+                "devices": devices,
+                "count": len(devices),
+            }
+            self._log_response("ble/scan_devices", response_data)
+            return web.json_response(response_data)
+
+        except ValueError as exc:
+            response_data = {"success": False, "error": f"Invalid parameter: {exc}"}
+            self._log_response("ble/scan_devices", response_data)
+            return web.json_response(response_data, status=400)
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE scan")
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/scan_devices", response_data)
+            return web.json_response(response_data, status=500)
 
     async def handle_ble_connect(self, request: web.Request) -> web.Response:
         """Handle POST /ble/connect endpoint.
