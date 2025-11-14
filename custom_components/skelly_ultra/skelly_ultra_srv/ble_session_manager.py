@@ -15,8 +15,8 @@ from bleak.backends.scanner import AdvertisementData
 _LOGGER = logging.getLogger(__name__)
 
 # Skelly Ultra BLE UUIDs
-NOTIFY_UUID = "0000ffe1-0000-1000-8000-00805f9b34fb"
-WRITE_UUID = "0000ffe2-0000-1000-8000-00805f9b34fb"
+WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
+NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
 
 
 @dataclass
@@ -27,6 +27,15 @@ class RawNotification:
     timestamp: str
     sender: str  # UUID of characteristic
     data: bytes  # Raw notification bytes
+
+
+@dataclass
+class CachedDevice:
+    """Cached BLE device with last seen timestamp."""
+
+    device: BLEDevice
+    rssi: int
+    last_seen: datetime
 
 
 class BLESession:
@@ -90,14 +99,33 @@ class BLESessionManager:
         """Initialize session manager."""
         self._sessions: dict[str, BLESession] = {}
         self._cleanup_task: asyncio.Task | None = None
+        self._scanner_task: asyncio.Task | None = None
+        self._scanner: BleakScanner | None = None
+        self._scanner_paused = False
+        self._device_cache: dict[
+            str, CachedDevice
+        ] = {}  # Cache scanned devices with timestamps
+        self._device_cache_timeout = 120  # Remove devices not seen in 2 minutes
 
     async def start(self) -> None:
-        """Start the session manager and cleanup task."""
+        """Start the session manager and background tasks."""
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
+        if self._scanner_task is None:
+            self._scanner_task = asyncio.create_task(self._background_scanner())
+            _LOGGER.info("Started background BLE scanner")
 
     async def stop(self) -> None:
         """Stop the session manager and disconnect all sessions."""
+        if self._scanner_task:
+            self._scanner_task.cancel()
+            try:
+                await self._scanner_task
+            except asyncio.CancelledError:
+                pass
+            self._scanner_task = None
+            _LOGGER.info("Stopped background BLE scanner")
+
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
@@ -113,36 +141,96 @@ class BLESessionManager:
             except Exception:
                 _LOGGER.exception("Error disconnecting session %s", session_id)
 
-    async def scan_devices(
-        self, name_filter: str | None = None, timeout: float = 10.0
-    ) -> list[dict[str, str]]:
-        """Scan for nearby BLE devices.
+    async def _pause_scanner(self) -> None:
+        """Pause the background scanner temporarily."""
+        if self._scanner and not self._scanner_paused:
+            _LOGGER.info("Pausing background BLE scanner")
+            await self._scanner.stop()
+            self._scanner_paused = True
 
-        Args:
-            name_filter: Optional name filter (case-insensitive substring match)
-            timeout: Scan duration in seconds
+    async def _resume_scanner(self) -> None:
+        """Resume the background scanner."""
+        if self._scanner and self._scanner_paused:
+            _LOGGER.info("Resuming background BLE scanner")
+            await self._scanner.start()
+            self._scanner_paused = False
 
-        Returns:
-            List of discovered devices with name and address
-        """
-        _LOGGER.info("Scanning for BLE devices (timeout: %.1fs)", timeout)
-
-        # Use callback-based scanning to get advertisement data with RSSI
-        discovered: dict[str, tuple[BLEDevice, AdvertisementData]] = {}
+    async def _background_scanner(self) -> None:
+        """Continuously scan for BLE devices and update cache."""
 
         def detection_callback(
             device: BLEDevice, advertisement_data: AdvertisementData
         ) -> None:
-            """Handle device detection."""
-            discovered[device.address] = (device, advertisement_data)
+            """Handle device detection during background scan."""
+            self._device_cache[device.address] = CachedDevice(
+                device=device,
+                rssi=advertisement_data.rssi,
+                last_seen=datetime.now(UTC),
+            )
 
-        scanner = BleakScanner(detection_callback=detection_callback)
-        await scanner.start()
-        await asyncio.sleep(timeout)
-        await scanner.stop()
+        self._scanner = BleakScanner(detection_callback=detection_callback)
+
+        try:
+            await self._scanner.start()
+            _LOGGER.info("Background BLE scanner started")
+
+            while True:
+                # Clean up old devices from cache every 30 seconds
+                await asyncio.sleep(30)
+
+                now = datetime.now(UTC)
+                expired_devices = []
+                for address, cached in self._device_cache.items():
+                    age = (now - cached.last_seen).total_seconds()
+                    if age > self._device_cache_timeout:
+                        expired_devices.append(address)
+
+                for address in expired_devices:
+                    device_name = self._device_cache[address].device.name or "Unknown"
+                    del self._device_cache[address]
+                    _LOGGER.debug(
+                        "Removed stale device from cache: %s (%s)",
+                        device_name,
+                        address,
+                    )
+
+                if expired_devices:
+                    _LOGGER.info(
+                        "Cleaned %d stale device(s) from cache. Current cache size: %d",
+                        len(expired_devices),
+                        len(self._device_cache),
+                    )
+        except asyncio.CancelledError:
+            if self._scanner:
+                await self._scanner.stop()
+            _LOGGER.info("Background BLE scanner stopped")
+            raise
+        except Exception:
+            _LOGGER.exception("Error in background BLE scanner")
+            if self._scanner:
+                await self._scanner.stop()
+            raise
+
+    async def scan_devices(
+        self, name_filter: str | None = None, timeout: float = 10.0
+    ) -> list[dict[str, str]]:
+        """Get currently cached BLE devices.
+
+        Args:
+            name_filter: Optional name filter (case-insensitive substring match)
+            timeout: Unused (kept for API compatibility)
+
+        Returns:
+            List of cached devices with name, address, and RSSI
+        """
+        _LOGGER.info(
+            "Returning cached BLE devices (cache size: %d)", len(self._device_cache)
+        )
 
         results = []
-        for device, adv_data in discovered.values():
+        for cached in self._device_cache.values():
+            device = cached.device
+
             # Apply name filter if provided
             if name_filter:
                 if not device.name or name_filter.lower() not in device.name.lower():
@@ -152,12 +240,12 @@ class BLESessionManager:
                 {
                     "name": device.name or "Unknown",
                     "address": device.address,
-                    "rssi": adv_data.rssi,
+                    "rssi": cached.rssi,
                 }
             )
 
         _LOGGER.info(
-            "Found %d BLE device(s)%s",
+            "Found %d BLE device(s)%s in cache",
             len(results),
             f" matching '{name_filter}'" if name_filter else "",
         )
@@ -205,34 +293,75 @@ class BLESessionManager:
         Raises:
             RuntimeError: If device not found or connection fails
         """
-        # Discover device
-        device = None
-        discovered_address = address
+        # Discover device or use provided address
+        device: BLEDevice | None = None
 
         if address:
-            _LOGGER.info("Searching for BLE device by address: %s", address)
-            device = await BleakScanner.find_device_by_address(address, timeout=timeout)
+            # Try to use cached device from background scanner
+            cached = self._device_cache.get(address)
+            if cached:
+                device = cached.device
+                _LOGGER.info("Using cached BLE device for address: %s", address)
+            else:
+                # Not in cache - try to find it via scan
+                _LOGGER.warning(
+                    "Device not in cache (background scanner may not have seen it yet), "
+                    "scanning for address: %s",
+                    address,
+                )
+                device = await BleakScanner.find_device_by_address(
+                    address, timeout=timeout
+                )
+                if device:
+                    # Cache with unknown RSSI since we used find_device_by_address
+                    self._device_cache[address] = CachedDevice(
+                        device=device,
+                        rssi=-100,  # Unknown RSSI
+                        last_seen=datetime.now(UTC),
+                    )
+                else:
+                    raise RuntimeError(f"Device not found: {address}")
         else:
-            _LOGGER.info("Discovering BLE devices matching: %s", name_filter)
+            # Discover device by name (fallback - shouldn't normally be used)
+            _LOGGER.warning(
+                "Discovering BLE devices by name (this is a fallback path): %s",
+                name_filter,
+            )
             devices = await BleakScanner.discover(timeout=timeout)
             for d in devices:
                 if d.name and name_filter.lower() in d.name.lower():
                     device = d
-                    discovered_address = d.address
+                    self._device_cache[d.address] = CachedDevice(
+                        device=d,
+                        rssi=-100,  # Unknown RSSI from discover()
+                        last_seen=datetime.now(UTC),
+                    )
                     _LOGGER.info("Found matching device: %s at %s", d.name, d.address)
                     break
 
-        if not device:
-            raise RuntimeError(f"Device not found: {address or name_filter}")
+            if not device:
+                raise RuntimeError(f"Device not found: {name_filter}")
 
-        # Create BleakClient and connect
-        _LOGGER.info("Connecting to BLE device: %s", discovered_address)
-        client = BleakClient(device)
+        # At this point, device is guaranteed to be set (or exception raised)
+        discovered_address = device.address
+
+        # Pause background scanner to avoid connection conflicts
+        await self._pause_scanner()
+
         try:
-            await client.connect()
-        except Exception as exc:
-            _LOGGER.error("Failed to connect to BLE device: %s", exc)
-            raise RuntimeError(f"Failed to connect to BLE device: {exc}") from exc
+            # Create BleakClient with BLEDevice object
+            _LOGGER.info("Connecting to BLE device: %s", discovered_address)
+            client = BleakClient(device, timeout=timeout)
+            try:
+                await client.connect()
+            except Exception as exc:
+                _LOGGER.error("Failed to connect to BLE device: %s", exc)
+                await self._resume_scanner()
+                raise RuntimeError(f"Failed to connect to BLE device: {exc}") from exc
+        except Exception:
+            # Resume scanner on any error
+            await self._resume_scanner()
+            raise
 
         # Create session
         session_id = f"sess-{uuid.uuid4().hex[:8]}"
@@ -267,12 +396,17 @@ class BLESessionManager:
                 await client.disconnect()
             except Exception:
                 pass
+            await self._resume_scanner()
             raise RuntimeError(f"Failed to start notifications: {exc}") from exc
 
         self._sessions[session_id] = session
         _LOGGER.info(
             "Created BLE session %s for device %s", session_id, discovered_address
         )
+
+        # Resume scanner now that connection is established
+        await self._resume_scanner()
+
         return session_id, discovered_address
 
     async def send_command(self, session_id: str, cmd_bytes: bytes) -> None:
