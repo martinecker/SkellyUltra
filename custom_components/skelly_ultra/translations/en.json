@@ -4,7 +4,8 @@
       "bluetooth_integration_required": "Bluetooth integration is required to configure Skelly Ultra",
       "no_devices_found": "No devices found",
       "rest_server_unreachable": "Cannot connect to Skelly Ultra REST server. Please ensure the server is running at the specified URL.",
-      "rest_server_error": "REST server returned an error. Please check the server is running correctly."
+      "rest_server_error": "REST server returned an error. Please check the server is running correctly.",
+      "address_required": "Device address is required in manual mode"
     },
     "step": {
       "user": {
@@ -18,7 +19,8 @@
         },
         "data_description": {
           "use_ble_proxy": "Enable this to connect via REST server instead of direct BLE (useful for remote access or systems without BLE hardware)",
-          "address": "MAC address of the Skelly device (required in proxy mode, optional in manual mode)",
+          "mode": "Choose 'scan' to discover nearby devices, or 'manual' to enter the address directly",
+          "address": "MAC address of the Skelly device (required in manual mode, optional when scanning)",
           "server_url": "URL of the Skelly Ultra REST server. Required for proxy mode and live mode features (default: http://localhost:8765)"
         }
       },
