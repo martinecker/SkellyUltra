@@ -381,7 +381,7 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 ```json
 {
     "success": false,
-    "error": "Pairing requires root privileges. Device AA:BB:CC:DD:EE:FF is not paired. Run this server as root (e.g., sudo python server.py) or manually pair the device first: bluetoothctl -> pair AA:BB:CC:DD:EE:FF -> enter PIN: 1234"
+    "error": "error message indicating pairing failure"
 }
 ```
 
@@ -682,8 +682,8 @@ Simple health check endpoint.
 
 ### � Pair and trust device (automated):
 ```bash
-# Start server as root
-sudo python3 run_server.py
+# Start server
+python3 run_server.py
 
 # Pair device with PIN
 curl -X POST http://localhost:8765/pair_and_trust \
