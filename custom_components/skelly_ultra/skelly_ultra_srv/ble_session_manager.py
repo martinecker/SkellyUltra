@@ -9,6 +9,8 @@ import logging
 import uuid
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.device import BLEDevice
+from bleak.backends.scanner import AdvertisementData
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -124,10 +126,23 @@ class BLESessionManager:
             List of discovered devices with name and address
         """
         _LOGGER.info("Scanning for BLE devices (timeout: %.1fs)", timeout)
-        devices = await BleakScanner.discover(timeout=timeout)
+
+        # Use callback-based scanning to get advertisement data with RSSI
+        discovered: dict[str, tuple[BLEDevice, AdvertisementData]] = {}
+
+        def detection_callback(
+            device: BLEDevice, advertisement_data: AdvertisementData
+        ) -> None:
+            """Handle device detection."""
+            discovered[device.address] = (device, advertisement_data)
+
+        scanner = BleakScanner(detection_callback=detection_callback)
+        await scanner.start()
+        await asyncio.sleep(timeout)
+        await scanner.stop()
 
         results = []
-        for device in devices:
+        for device, adv_data in discovered.values():
             # Apply name filter if provided
             if name_filter:
                 if not device.name or name_filter.lower() not in device.name.lower():
@@ -137,7 +152,7 @@ class BLESessionManager:
                 {
                     "name": device.name or "Unknown",
                     "address": device.address,
-                    "rssi": device.rssi if hasattr(device, "rssi") else None,
+                    "rssi": adv_data.rssi,
                 }
             )
 
