@@ -371,8 +371,8 @@ class SkellyClient:
     async def query_device_params(self) -> None:
         await self.send_command(commands.query_device_params())
 
-    async def query_file_infos(self) -> None:
-        await self.send_command(commands.query_file_infos())
+    async def query_file_list(self) -> None:
+        await self.send_command(commands.query_file_list())
 
     async def set_volume(self, vol: int) -> None:
         await self.send_command(commands.set_volume(vol))
@@ -498,7 +498,7 @@ class SkellyClient:
         Raises:
             TimeoutError: If not all events are received within the timeout period
         """
-        await self.send_command(commands.query_file_list())
+        await self.query_file_list()
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
