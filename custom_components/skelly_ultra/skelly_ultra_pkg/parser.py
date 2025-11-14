@@ -4,6 +4,8 @@ Pure parsing functions that convert BLE notification bytes into typed events.
 """
 
 from dataclasses import dataclass
+
+from . import constants as const
 from typing import Any
 import logging
 
@@ -169,12 +171,12 @@ def parse_notification(
 ):
     hexstr = data.hex().upper()
 
-    if hexstr.startswith("FEDC"):
+    if hexstr.startswith(const.RESP_KEEP_ALIVE):
         # Keep alive message - strip the FEDC prefix and return the payload
         payload = data[2:]  # Skip first 2 bytes (FEDC)
         return KeepAliveEvent(payload=payload)
 
-    if hexstr.startswith("BBE1"):
+    if hexstr.startswith(const.RESP_LIVE_MODE):
         action = int(hexstr[4:6], 16)
         lights: list[LightInfo] = []
         light_data = hexstr[6:90]
@@ -205,17 +207,17 @@ def parse_notification(
             lights=lights,
         )
 
-    if hexstr.startswith("BBE5"):
+    if hexstr.startswith(const.RESP_VOLUME):
         volume = int(hexstr[4:6], 16)
         return VolumeEvent(volume=volume)
 
-    if hexstr.startswith("BBE6"):
+    if hexstr.startswith(const.RESP_LIVE_NAME):
         length = int(hexstr[4:6], 16)
         name_hex = hexstr[6 : 6 + length * 2]
         name = get_ascii(name_hex)
         return LiveNameEvent(name=name)
 
-    if hexstr.startswith("BBE0"):
+    if hexstr.startswith(const.RESP_DEVICE_PARAMS):
         channels = [int(hexstr[i : i + 2], 16) for i in range(4, 16, 2)]
         pin_code = get_ascii(hexstr[16:24])
         wifi_password = get_ascii(hexstr[24:40])
@@ -230,21 +232,21 @@ def parse_notification(
             name=name,
         )
 
-    if hexstr.startswith("BBFD"):
+    if hexstr.startswith(const.RESP_ENABLE_CLASSIC_BT):
         status = int(hexstr[4:6])
         return EnableClassicBTEvent(status=status)
 
-    if hexstr.startswith("BBC0"):
+    if hexstr.startswith(const.RESP_START_TRANSFER):
         failed = int(hexstr[4:6], 16)
         written = int(hexstr[6:14], 16)
         return StartTransferEvent(failed=failed, written=written)
 
-    if hexstr.startswith("BBC1"):
+    if hexstr.startswith(const.RESP_CHUNK_DROPPED):
         dropped = int(hexstr[4:6], 16)
         index = int(hexstr[6:10], 16)
         return ChunkDroppedEvent(dropped=dropped, index=index)
 
-    if hexstr.startswith("BBC2"):
+    if hexstr.startswith(const.RESP_TRANSFER_END):
         failed = int(hexstr[4:6], 16)
         # Extract last successful chunk index if present (bytes 6-10)
         last_chunk_index = 0
@@ -252,19 +254,19 @@ def parse_notification(
             last_chunk_index = int(hexstr[6:10], 16)
         return TransferEndEvent(failed=failed, last_chunk_index=last_chunk_index)
 
-    if hexstr.startswith("BBC3"):
+    if hexstr.startswith(const.RESP_TRANSFER_CONFIRM):
         failed = int(hexstr[4:6], 16)
         return TransferConfirmEvent(failed=failed)
 
-    if hexstr.startswith("BBC4"):
+    if hexstr.startswith(const.RESP_TRANSFER_CANCEL):
         failed = int(hexstr[4:6], 16)
         return TransferCancelEvent(failed=failed)
 
-    if hexstr.startswith("BBC5"):
+    if hexstr.startswith(const.RESP_RESUME_WRITE):
         written = int(hexstr[4:12], 16)
         return ResumeWriteEvent(written=written)
 
-    if hexstr.startswith("BBC6"):
+    if hexstr.startswith(const.RESP_PLAYBACK):
         file_index = int(hexstr[4:8], 16)
         playing = int(hexstr[8:10], 16)
         duration = int(hexstr[10:14], 16)
@@ -272,15 +274,15 @@ def parse_notification(
             file_index=file_index, playing=bool(playing), duration=duration
         )
 
-    if hexstr.startswith("BBC7"):
+    if hexstr.startswith(const.RESP_DELETE_FILE):
         success = int(hexstr[4:6], 16)
         return DeleteFileEvent(success=(success == 0))
 
-    if hexstr.startswith("BBC8"):
+    if hexstr.startswith(const.RESP_FORMAT):
         success = int(hexstr[4:6], 16)
         return FormatEvent(success=success)
 
-    if hexstr.startswith("BBD2"):
+    if hexstr.startswith(const.RESP_CAPACITY):
         capacity = int(hexstr[4:12], 16)
         file_count = int(hexstr[12:14], 16)
         action_mode = int(hexstr[14:16], 16)
@@ -289,7 +291,7 @@ def parse_notification(
             capacity_kb=capacity, file_count=file_count, mode_str=mode_str
         )
 
-    if hexstr.startswith("BBD1"):
+    if hexstr.startswith(const.RESP_FILE_ORDER):
         count = int(hexstr[4:6], 16)
         data_str = hexstr[6:]
         if len(data_str) < count * 4:
@@ -297,7 +299,7 @@ def parse_notification(
         file_indices = [int(data_str[i * 4 : i * 4 + 4], 16) for i in range(count)]
         return FileOrderEvent(file_indices=file_indices)
 
-    if hexstr.startswith("BBD0"):
+    if hexstr.startswith(const.RESP_FILE_INFO):
         file_index = int(hexstr[4:8], 16)
         cluster = int(hexstr[8:16], 16)
         total_files = int(hexstr[16:20], 16)

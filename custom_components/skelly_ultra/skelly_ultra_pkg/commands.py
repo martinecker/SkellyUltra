@@ -3,6 +3,8 @@
 All functions are pure and return bytes for BLE writes.
 """
 
+from . import constants as const
+
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
 
@@ -31,7 +33,7 @@ def int_to_hex(n: int, byte_len: int) -> str:
 
 
 def build_cmd(tag: str, payload: str = "00") -> bytes:
-    base_str = "AA" + tag + payload
+    base_str = tag + payload
     if len(payload) < 16:
         padding = "0" * (16 - len(payload))
         base_str += padding
@@ -41,60 +43,60 @@ def build_cmd(tag: str, payload: str = "00") -> bytes:
 
 # Query Commands
 def query_device_params() -> bytes:
-    return build_cmd("E0")
+    return build_cmd(const.CMD_QUERY_DEVICE_PARAMS)
 
 
 def query_live_mode() -> bytes:
-    return build_cmd("E1")
+    return build_cmd(const.CMD_QUERY_LIVE_MODE)
 
 
 def query_volume() -> bytes:
-    return build_cmd("E5")
+    return build_cmd(const.CMD_QUERY_VOLUME)
 
 
 def query_live_name() -> bytes:
-    return build_cmd("E6")
+    return build_cmd(const.CMD_QUERY_LIVE_NAME)
 
 
 def query_version() -> bytes:
-    return build_cmd("EE")
+    return build_cmd(const.CMD_QUERY_VERSION)
 
 
 def query_file_list() -> bytes:
-    return build_cmd("D0")
+    return build_cmd(const.CMD_QUERY_FILE_LIST)
 
 
 def query_file_order() -> bytes:
-    return build_cmd("D1")
+    return build_cmd(const.CMD_QUERY_FILE_ORDER)
 
 
 def query_capacity() -> bytes:
-    return build_cmd("D2")
+    return build_cmd(const.CMD_QUERY_CAPACITY)
 
 
 # Media Controls
 def set_volume(vol: int) -> bytes:
     if not 0 <= vol <= 255:
         raise ValueError(f"Volume must be between 0 and 255, got {vol}")
-    return build_cmd("FA", int_to_hex(vol, 1))
+    return build_cmd(const.CMD_SET_VOLUME, int_to_hex(vol, 1))
 
 
 def play() -> bytes:
-    return build_cmd("FC", "01")
+    return build_cmd(const.CMD_PLAY_PAUSE, "01")
 
 
 def pause() -> bytes:
-    return build_cmd("FC", "00")
+    return build_cmd(const.CMD_PLAY_PAUSE, "00")
 
 
 def enable_classic_bt() -> bytes:
-    return build_cmd("FD", "01")
+    return build_cmd(const.CMD_ENABLE_CLASSIC_BT, "01")
 
 
 def set_music_mode(mode: int) -> bytes:
     if not 0 <= mode <= 255:
         raise ValueError(f"Music mode must be between 0 and 255, got {mode}")
-    return build_cmd("FE", int_to_hex(mode, 1))
+    return build_cmd(const.CMD_SET_MUSIC_MODE, int_to_hex(mode, 1))
 
 
 # Light Controls. If channel == -1 all lights are affected. Otherwise channel is 0-5, but Skelly Ultra only uses 0 and 1.
@@ -119,7 +121,7 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
         + int_to_hex(cluster, 4)
         + (name_len + "5C55" + name_utf16 if name else name_len)
     )
-    return build_cmd("F2", payload)
+    return build_cmd(const.CMD_SET_LIGHT_MODE, payload)
 
 
 def set_light_brightness(
@@ -140,7 +142,7 @@ def set_light_brightness(
         + int_to_hex(cluster, 4)
         + (name_len + "5C55" + name_utf16 if name else name_len)
     )
-    return build_cmd("F3", payload)
+    return build_cmd(const.CMD_SET_LIGHT_BRIGHTNESS, payload)
 
 
 def set_light_rgb(
@@ -170,7 +172,7 @@ def set_light_rgb(
         + int_to_hex(cluster, 4)
     )
     payload += (name_len + "5C55" + name_utf16) if name else name_len
-    return build_cmd("F4", payload)
+    return build_cmd(const.CMD_SET_LIGHT_RGB, payload)
 
 
 def set_light_speed(
@@ -191,13 +193,15 @@ def set_light_speed(
         + int_to_hex(cluster, 4)
         + (name_len + "5C55" + name_utf16 if name else name_len)
     )
-    return build_cmd("F6", payload)
+    return build_cmd(const.CMD_SET_LIGHT_SPEED, payload)
 
 
 def select_rgb_channel(channel: int) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
-    return build_cmd("F5", "FF" if channel == -1 else int_to_hex(channel, 1))
+    return build_cmd(
+        const.CMD_SELECT_RGB_CHANNEL, "FF" if channel == -1 else int_to_hex(channel, 1)
+    )
 
 
 def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
@@ -215,7 +219,7 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
         + int_to_hex(cluster, 4)
         + (name_len + "5C55" + name_utf16 if name else name_len)
     )
-    return build_cmd("F9", payload)
+    return build_cmd(const.CMD_SET_EYE_ICON, payload)
 
 
 # Action here is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
@@ -236,7 +240,7 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
         + int_to_hex(cluster, 4)
         + (name_len + "5C55" + name_utf16 if name else name_len)
     )
-    return build_cmd("CA", payload)
+    return build_cmd(const.CMD_SET_ACTION, payload)
 
 
 # File transfer and playback
@@ -250,7 +254,7 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
     if not filename:
         raise ValueError("Filename cannot be empty")
     return build_cmd(
-        "C0",
+        const.CMD_START_SEND_DATA,
         int_to_hex(size, 4)
         + int_to_hex(chunk_count, 2)
         + "5C55"
@@ -263,33 +267,35 @@ def send_data_chunk(index: int, data: bytes) -> bytes:
         raise ValueError(f"Index must be between 0 and {0xFFFF}, got {index}")
     if not data:
         raise ValueError("Data cannot be empty")
-    return build_cmd("C1", int_to_hex(index, 2) + data.hex().upper())
+    return build_cmd(
+        const.CMD_SEND_DATA_CHUNK, int_to_hex(index, 2) + data.hex().upper()
+    )
 
 
 def end_send_data() -> bytes:
-    return build_cmd("C2")
+    return build_cmd(const.CMD_END_SEND_DATA)
 
 
 def confirm_file(filename: str) -> bytes:
     if not filename:
         raise ValueError("Filename cannot be empty")
-    return build_cmd("C3", "5C55" + to_utf16le_hex(filename))
+    return build_cmd(const.CMD_CONFIRM_FILE, "5C55" + to_utf16le_hex(filename))
 
 
 def cancel_send() -> bytes:
-    return build_cmd("C4")
+    return build_cmd(const.CMD_CANCEL_SEND)
 
 
 def play_file(file_index: int) -> bytes:
     if not 0 <= file_index <= 0xFFFF:
         raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
-    return build_cmd("C6", int_to_hex(file_index, 2) + "01")
+    return build_cmd(const.CMD_PLAY_STOP_FILE, int_to_hex(file_index, 2) + "01")
 
 
 def stop_file(file_index: int) -> bytes:
     if not 0 <= file_index <= 0xFFFF:
         raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
-    return build_cmd("C6", int_to_hex(file_index, 2) + "00")
+    return build_cmd(const.CMD_PLAY_STOP_FILE, int_to_hex(file_index, 2) + "00")
 
 
 def delete_file(file_index: int, cluster: int) -> bytes:
@@ -297,4 +303,6 @@ def delete_file(file_index: int, cluster: int) -> bytes:
         raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    return build_cmd("C7", int_to_hex(file_index, 2) + int_to_hex(cluster, 4))
+    return build_cmd(
+        const.CMD_DELETE_FILE, int_to_hex(file_index, 2) + int_to_hex(cluster, 4)
+    )

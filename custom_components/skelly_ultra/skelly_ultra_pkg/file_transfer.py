@@ -75,7 +75,7 @@ class FileTransferManager:
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 60.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
-    CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
+    CHUNK_DELAY = 0.1  # seconds between chunks (100ms)
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
