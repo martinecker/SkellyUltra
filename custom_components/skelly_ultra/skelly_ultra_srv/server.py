@@ -1064,6 +1064,8 @@ class SkellyUltraServer:
             response_data = await self.ble_manager.get_notifications(
                 session_id, since, timeout
             )
+            # Add success field for client compatibility
+            response_data["success"] = True
             self._log_response("ble/notifications", response_data)
             return web.json_response(response_data)
 
