@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 DOMAIN = "skelly_ultra"
 SHOW_ALL_TOKEN = "__show_all__"
 CONF_SERVER_URL = "server_url"
+CONF_USE_BLE_PROXY = "use_ble_proxy"
 DEFAULT_SERVER_URL = "http://localhost:8765"
 
 
@@ -35,6 +36,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Initialize flow state."""
         self._discovered: dict[str, str] = {}
         self._server_url: str = DEFAULT_SERVER_URL
+        self._use_ble_proxy: bool = False
         self._user_input: dict[str, Any] | None = None
 
     async def _validate_rest_server(self, server_url: str) -> dict[str, str] | None:
@@ -64,48 +66,92 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         """Initial step offering manual entry or discovery.
 
         The form accepts:
-        - mode: 'manual' or 'scan'
-        - CONF_ADDRESS: optional address when using manual mode
+        - use_ble_proxy: whether to use BLE proxy mode
+        - mode: 'manual' or 'scan' (hidden when proxy mode enabled)
+        - CONF_ADDRESS: device address (required in proxy mode)
         - CONF_NAME: optional friendly name
-        - CONF_SERVER_URL: REST server URL for live mode features
+        - CONF_SERVER_URL: REST server URL (required in proxy mode)
         """
-        # Build form schema
-        schema = vol.Schema(
-            {
-                vol.Required("mode", default="scan"): vol.In(["manual", "scan"]),
-                vol.Optional(CONF_ADDRESS, default=""): str,
-                vol.Optional(CONF_NAME, default="Animated Skelly"): str,
-                vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
-            }
-        )
-
-        # Require that the user has a bluetooth config entry (i.e. the
-        # bluetooth integration is actually set up).
-        bt_entries = self.hass.config_entries.async_entries("bluetooth")
-        if not bt_entries:
-            # Show the same form but with an error explaining bluetooth is
-            # required so the user can take action in the UI.
-            return self.async_show_form(
-                step_id="user",
-                data_schema=schema,
-                errors={"base": "bluetooth_integration_required"},
+        # Build form schema - conditionally show fields based on proxy mode
+        use_proxy = user_input.get(CONF_USE_BLE_PROXY, False) if user_input else False
+        
+        if use_proxy:
+            # Proxy mode: require address and server URL, hide scan mode
+            schema = vol.Schema(
+                {
+                    vol.Required(CONF_USE_BLE_PROXY, default=True): bool,
+                    vol.Required(CONF_ADDRESS): str,
+                    vol.Optional(CONF_NAME, default="Animated Skelly"): str,
+                    vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
+                }
             )
+        else:
+            # Direct BLE mode: show mode selector, optional address
+            schema = vol.Schema(
+                {
+                    vol.Required(CONF_USE_BLE_PROXY, default=False): bool,
+                    vol.Required("mode", default="scan"): vol.In(["manual", "scan"]),
+                    vol.Optional(CONF_ADDRESS, default=""): str,
+                    vol.Optional(CONF_NAME, default="Animated Skelly"): str,
+                    vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
+                }
+            )
+
+        # In proxy mode, bluetooth integration is not required
+        # In direct mode, require that the user has a bluetooth config entry
+        if not use_proxy:
+            bt_entries = self.hass.config_entries.async_entries("bluetooth")
+            if not bt_entries:
+                # Show the same form but with an error explaining bluetooth is
+                # required so the user can take action in the UI.
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=schema,
+                    errors={"base": "bluetooth_integration_required"},
+                )
 
         if user_input is None:
             return self.async_show_form(step_id="user", data_schema=schema)
 
-        # Validate the REST server is accessible (soft check - show warning if unavailable)
+        # Validate the REST server is accessible
+        use_ble_proxy = user_input.get(CONF_USE_BLE_PROXY, False)
         server_url = user_input.get(CONF_SERVER_URL, DEFAULT_SERVER_URL).rstrip("/")
         server_errors = await self._validate_rest_server(server_url)
 
         # Store user input for later use
         self._user_input = user_input
         self._server_url = server_url
+        self._use_ble_proxy = use_ble_proxy
 
-        # If server is not accessible, show warning modal
+        # In proxy mode, server is required - show error if unreachable
+        # In direct mode, server is optional - show warning if unreachable
         if server_errors:
+            if use_ble_proxy:
+                # Proxy mode requires server - show error and don't proceed
+                return self.async_show_form(
+                    step_id="user",
+                    data_schema=schema,
+                    errors=server_errors,
+                )
+            # Direct mode - show warning modal
             return await self.async_step_server_warning()
 
+        # In proxy mode, create entry directly (no scan option)
+        if use_ble_proxy:
+            title = (
+                user_input.get(CONF_NAME) or user_input.get(CONF_ADDRESS) or "Skelly Ultra (Proxy)"
+            )
+            return self.async_create_entry(
+                title=title,
+                data={
+                    CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""),
+                    CONF_NAME: user_input.get(CONF_NAME, ""),
+                    CONF_SERVER_URL: server_url,
+                    CONF_USE_BLE_PROXY: True,
+                },
+            )
+
+        # Direct BLE mode: check mode selector
         mode = user_input.get("mode", "manual")
         if mode == "scan":
             return await self.async_step_scan()
@@ -120,6 +166,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: user_input.get(CONF_ADDRESS, ""),
                 CONF_NAME: user_input.get(CONF_NAME, ""),
                 CONF_SERVER_URL: server_url,
+                CONF_USE_BLE_PROXY: False,
             },
         )
 
@@ -150,6 +197,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_ADDRESS: self._user_input.get(CONF_ADDRESS, ""),
                     CONF_NAME: self._user_input.get(CONF_NAME, ""),
                     CONF_SERVER_URL: self._server_url,
+                    CONF_USE_BLE_PROXY: self._use_ble_proxy,
                 },
             )
 
@@ -347,5 +395,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_ADDRESS: address,
                 CONF_NAME: title,
                 CONF_SERVER_URL: self._server_url,
+                CONF_USE_BLE_PROXY: self._use_ble_proxy,
             },
         )

@@ -47,7 +47,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     address = entry.data.get("address")
     server_url = entry.data.get("server_url", "http://localhost:8765")
-    adapter = SkellyClientAdapter(hass, address=address, server_url=server_url)
+    use_ble_proxy = entry.data.get("use_ble_proxy", False)
+    adapter = SkellyClientAdapter(
+        hass, address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
+    )
     coordinator = SkellyCoordinator(hass, adapter)
 
     # Check if Connected switch is on (defaults to True)

@@ -10,13 +10,16 @@
       "user": {
         "title": "Configure Skelly Ultra",
         "data": {
+          "use_ble_proxy": "Use BLE proxy mode",
           "mode": "Configuration mode",
-          "address": "Bluetooth address (optional for manual mode)",
+          "address": "Bluetooth address",
           "name": "Friendly name",
           "server_url": "REST server URL"
         },
         "data_description": {
-          "server_url": "URL of the Skelly Ultra REST server for live mode audio features (default: http://localhost:8765)"
+          "use_ble_proxy": "Enable this to connect via REST server instead of direct BLE (useful for remote access or systems without BLE hardware)",
+          "address": "MAC address of the Skelly device (required in proxy mode, optional in manual mode)",
+          "server_url": "URL of the Skelly Ultra REST server. Required for proxy mode and live mode features (default: http://localhost:8765)"
         }
       },
       "server_warning": {
