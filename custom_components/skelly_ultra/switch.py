@@ -103,11 +103,6 @@ class SkellyConnectedSwitch(SwitchEntity):
                 _LOGGER.error("Failed to connect to BLE device")
                 return
 
-            # Start notifications
-            started = await self.adapter.start_notifications_with_retry()
-            if not started:
-                _LOGGER.warning("Failed to start BLE notifications")
-
             # Resume coordinator updates
             self.coordinator.resume_updates()
 
