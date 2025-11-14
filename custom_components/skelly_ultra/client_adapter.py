@@ -132,10 +132,7 @@ class SkellyClientAdapter:
                             # preferred to avoid a HA bleak-retry warning.
                             bleak_client = BleakClient(ble_device)
 
-                        # Defer notification registration to HA so entities/coordinator can be ready
-                        ok = await self._client.connect(
-                            client=bleak_client, start_notify=False
-                        )
+                        ok = await self._client.connect(client=bleak_client)
                         if ok:
                             _LOGGER.info(
                                 "Connected to Skelly device at %s on attempt %d",
@@ -152,7 +149,7 @@ class SkellyClientAdapter:
 
                 # Fallback to library discovery/connect
                 # Defer notification registration to HA
-                ok = await self._client.connect(start_notify=False)
+                ok = await self._client.connect()
                 if ok:
                     _LOGGER.info(
                         "SkellyClient connected via internal discovery on attempt %d",
@@ -191,38 +188,6 @@ class SkellyClientAdapter:
     def client(self) -> SkellyClient:
         """Return the underlying SkellyClient instance."""
         return self._client
-
-    async def start_notifications_with_retry(
-        self, attempts: int = 3, backoff: float = 1.0
-    ) -> bool:
-        """Try to start notifications on the SkellyClient with retries and backoff.
-
-        Returns True on success, False if all attempts fail.
-        """
-        last_exc = None
-        for attempt in range(1, attempts + 1):
-            try:
-                await self._client.start_notifications()
-            except Exception as exc:
-                last_exc = exc
-                _LOGGER.warning(
-                    "Attempt %d to start notifications failed: %s", attempt, exc
-                )
-            else:
-                _LOGGER.info(
-                    "Notifications started for Skelly device on attempt %d", attempt
-                )
-                return True
-
-            if attempt < attempts:
-                sleep_for = backoff * (2 ** (attempt - 1))
-                _LOGGER.debug("Retrying start_notifications in %.1f seconds", sleep_for)
-                await asyncio.sleep(sleep_for)
-
-        _LOGGER.error(
-            "Failed to start notifications after %d attempts: %s", attempts, last_exc
-        )
-        return False
 
     async def connect_live_mode(
         self, timeout: float = 10.0, bt_pin: str = "1234"

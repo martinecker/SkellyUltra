@@ -52,17 +52,13 @@ class SkellyClient:
         return self._client is not None and getattr(self._client, "is_connected", False)
 
     async def connect(
-        self,
-        timeout: float = 10.0,
-        client: BleakClient | None = None,
-        start_notify: bool = True,
+        self, timeout: float = 10.0, client: BleakClient | None = None
     ) -> bool:
         """Connect logic separated from notification registration.
 
         Args:
             timeout: discovery timeout when no client/address provided.
             client: optional already-constructed BleakClient (connected or not).
-            start_notify: if True, register notification handler after connect.
 
         Behavior:
             - If `client` is provided and is connected, use it and optionally start notifications.
@@ -104,8 +100,7 @@ class SkellyClient:
 
         # At this point, self._client should be set and connected
         if self.is_connected:
-            if start_notify:
-                await self._start_notifications()
+            await self._start_notifications()
             return True
         return False
 
@@ -119,8 +114,6 @@ class SkellyClient:
         if not self.is_connected:
             raise RuntimeError("Client not connected")
 
-        # Avoid re-registering if start_notify was called previously on same client
-        # We don't keep an explicit flag here; Bleak will raise if notify handler already set.
         def _notif_cb(sender, data):
             try:
                 if self._notification_handler:

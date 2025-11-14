@@ -81,19 +81,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
 
-        # Start notifications before performing the initial refresh so responses
-        # to queries (which arrive via notifications) are delivered to the
-        # client's event queue. If starting notifications fails, the initial
-        # refresh may time out but will retry on next update cycle.
-        try:
-            started = await adapter.start_notifications_with_retry()
-            if not started:
-                _LOGGER.warning(
-                    "Notifications could not be started; data fetch may fail"
-                )
-        except Exception:
-            _LOGGER.exception("Unexpected error while starting notifications")
-
         # Perform initial coordinator refresh
         # Use async_refresh instead of async_config_entry_first_refresh
         # because the config entry is already loaded at this point
