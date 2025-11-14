@@ -77,7 +77,7 @@ class SkellyClient:
             # use the provided client directly
             self._client = client
             try:
-                if not getattr(self._client, "is_connected", False):
+                if not self.is_connected:
                     await self._client.connect()
             except Exception:
                 # failed to connect provided client
@@ -103,20 +103,20 @@ class SkellyClient:
                 return False
 
         # At this point, self._client should be set and connected
-        if self._client and getattr(self._client, "is_connected", False):
+        if self.is_connected:
             if start_notify:
-                await self.start_notifications()
+                await self._start_notifications()
             return True
         return False
 
-    async def start_notifications(self) -> None:
+    async def _start_notifications(self) -> None:
         """Register the notification callback on an already-connected client.
 
         This can be called directly by an integration that manages the BleakClient
         connection itself (e.g. Home Assistant's BLE stack). It is safe to call
         multiple times; redundant registrations are ignored.
         """
-        if not self._client or not getattr(self._client, "is_connected", False):
+        if not self.is_connected:
             raise RuntimeError("Client not connected")
 
         # Avoid re-registering if start_notify was called previously on same client
@@ -149,22 +149,6 @@ class SkellyClient:
         except Exception:
             # swallow notify registration errors; higher-level code can call again
             logger.exception("Failed to start notifications")
-
-    def drain_event_queue(self) -> None:
-        """Remove all pending events from the queue.
-
-        This should be called before sending new queries to ensure
-        only fresh responses are consumed.
-        """
-        drained_count = 0
-        while not self.events.empty():
-            try:
-                self.events.get_nowait()
-                drained_count += 1
-            except asyncio.QueueEmpty:
-                break
-        if drained_count > 0:
-            logger.debug("Drained %d old events from queue", drained_count)
 
     async def disconnect(self) -> None:
         if self._client:
@@ -988,7 +972,7 @@ class SkellyClient:
             so that get_live_name and enable_classic_bt commands can be sent.
         """
         # Validate BLE connection
-        if not self._client or not getattr(self._client, "is_connected", False):
+        if not self.is_connected:
             raise RuntimeError("Not connected to device to request live-mode")
 
         # Step 1: Get device name via BLE
