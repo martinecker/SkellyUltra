@@ -10,6 +10,7 @@ import tempfile
 from aiohttp import web
 
 from .audio_player import AudioPlayer
+from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,8 +34,11 @@ class SkellyUltraServer:
         self.debug_json = debug_json
         self.bt_manager = BluetoothManager()
         self.audio_player = AudioPlayer()
+        self.ble_manager = BLESessionManager()
         self.app = web.Application()
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
+        self.app.on_startup.append(self._on_startup)
+        self.app.on_cleanup.append(self._on_cleanup)
         self._setup_routes()
 
     def _log_request(self, endpoint: str, data: dict | None) -> None:
@@ -77,6 +81,13 @@ class SkellyUltraServer:
         self.app.router.add_post("/disconnect", self.handle_disconnect)
         self.app.router.add_get("/status", self.handle_status)
         self.app.router.add_get("/health", self.handle_health)
+
+        # BLE proxy endpoints
+        self.app.router.add_post("/ble/connect", self.handle_ble_connect)
+        self.app.router.add_post("/ble/send_command", self.handle_ble_send_command)
+        self.app.router.add_get("/ble/notifications", self.handle_ble_notifications)
+        self.app.router.add_post("/ble/disconnect", self.handle_ble_disconnect)
+        self.app.router.add_get("/ble/sessions", self.handle_ble_sessions)
 
     async def handle_connect_by_name(self, request: web.Request) -> web.Response:
         """Handle POST /connect_by_name endpoint.
@@ -824,6 +835,298 @@ class SkellyUltraServer:
         response_data = {"status": "ok"}
         self._log_response("health", response_data)
         return web.json_response(response_data)
+
+    async def handle_ble_connect(self, request: web.Request) -> web.Response:
+        """Handle POST /ble/connect endpoint.
+
+        Expected JSON body:
+        {
+            "address": "AA:BB:CC:DD:EE:FF",  # optional
+            "name_filter": "Animated Skelly",  # optional, defaults to "Animated Skelly"
+            "timeout": 10.0  # optional, defaults to 10.0
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "session_id": "sess-abc123",
+            "address": "AA:BB:CC:DD:EE:FF",
+            "error": "error message if failed"
+        }
+        """
+        try:
+            data = await request.json()
+            self._log_request("ble/connect", data)
+
+            address = data.get("address")
+            name_filter = data.get("name_filter", "Animated Skelly")
+            timeout = data.get("timeout", 10.0)
+
+            session_id, device_address = await self.ble_manager.create_session(
+                address=address, name_filter=name_filter, timeout=timeout
+            )
+
+            response_data = {
+                "success": True,
+                "session_id": session_id,
+                "address": device_address,
+            }
+            self._log_response("ble/connect", response_data)
+            return web.json_response(response_data)
+
+        except ValueError:
+            response_data = {"success": False, "error": "Invalid JSON"}
+            self._log_response("ble/connect", response_data)
+            return web.json_response(response_data, status=400)
+        except RuntimeError as exc:
+            _LOGGER.warning("BLE connect failed: %s", exc)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/connect", response_data)
+            return web.json_response(response_data, status=400)
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE connect")
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/connect", response_data)
+            return web.json_response(response_data, status=500)
+
+    async def handle_ble_send_command(self, request: web.Request) -> web.Response:
+        """Handle POST /ble/send_command endpoint.
+
+        Expected JSON body:
+        {
+            "session_id": "sess-abc123",  # optional if only one session
+            "command": "AA E0 00 00 E0"  # hex string (spaces optional)
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "error": "error message if failed"
+        }
+        """
+        try:
+            data = await request.json()
+            self._log_request("ble/send_command", data)
+
+            session_id = data.get("session_id")
+            command_hex = data.get("command")
+
+            if not command_hex:
+                response_data = {"success": False, "error": "command is required"}
+                self._log_response("ble/send_command", response_data)
+                return web.json_response(response_data, status=400)
+
+            # If no session_id provided, use the only session if there's exactly one
+            if not session_id:
+                sessions = self.ble_manager.list_sessions()
+                if len(sessions) == 1:
+                    session_id = sessions[0]["session_id"]
+                else:
+                    response_data = {
+                        "success": False,
+                        "error": "session_id required when multiple sessions exist",
+                    }
+                    self._log_response("ble/send_command", response_data)
+                    return web.json_response(response_data, status=400)
+
+            # Convert hex string to bytes (remove spaces and convert)
+            try:
+                cmd_bytes = bytes.fromhex(command_hex.replace(" ", ""))
+            except ValueError as exc:
+                response_data = {
+                    "success": False,
+                    "error": f"Invalid hex string: {exc}",
+                }
+                self._log_response("ble/send_command", response_data)
+                return web.json_response(response_data, status=400)
+
+            await self.ble_manager.send_command(session_id, cmd_bytes)
+
+            response_data = {"success": True}
+            self._log_response("ble/send_command", response_data)
+            return web.json_response(response_data)
+
+        except ValueError as exc:
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/send_command", response_data)
+            return web.json_response(response_data, status=400)
+        except RuntimeError as exc:
+            _LOGGER.warning("BLE send command failed: %s", exc)
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/send_command", response_data)
+            return web.json_response(response_data, status=400)
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE send command")
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/send_command", response_data)
+            return web.json_response(response_data, status=500)
+
+    async def handle_ble_notifications(self, request: web.Request) -> web.Response:
+        """Handle GET /ble/notifications endpoint (long-polling).
+
+        Expected query parameters:
+        - session_id: Session identifier (optional if only one session)
+        - since: Last sequence number received (default: 0)
+        - timeout: Long-poll timeout in seconds (default: 30.0)
+
+        Returns:
+        {
+            "notifications": [
+                {
+                    "sequence": 1,
+                    "timestamp": "2025-11-14T10:30:00.123456",
+                    "sender": "0000ffe1-0000-1000-8000-00805f9b34fb",
+                    "data": "BB E0 32 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 FF"
+                },
+                ...
+            ],
+            "next_sequence": 2,
+            "has_more": false,
+            "error": "error message if failed"
+        }
+        """
+        try:
+            params = dict(request.query)
+            self._log_request("ble/notifications", params)
+
+            session_id = params.get("session_id")
+            since = int(params.get("since", 0))
+            timeout = float(params.get("timeout", 30.0))
+
+            # If no session_id provided, use the only session if there's exactly one
+            if not session_id:
+                sessions = self.ble_manager.list_sessions()
+                if len(sessions) == 1:
+                    session_id = sessions[0]["session_id"]
+                else:
+                    response_data = {
+                        "notifications": [],
+                        "next_sequence": since,
+                        "has_more": False,
+                        "error": "session_id required when multiple sessions exist",
+                    }
+                    self._log_response("ble/notifications", response_data)
+                    return web.json_response(response_data, status=400)
+
+            response_data = await self.ble_manager.get_notifications(
+                session_id, since, timeout
+            )
+            self._log_response("ble/notifications", response_data)
+            return web.json_response(response_data)
+
+        except ValueError as exc:
+            response_data = {
+                "notifications": [],
+                "next_sequence": since,
+                "has_more": False,
+                "error": str(exc),
+            }
+            self._log_response("ble/notifications", response_data)
+            return web.json_response(response_data, status=400)
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE notifications")
+            response_data = {
+                "notifications": [],
+                "next_sequence": since,
+                "has_more": False,
+                "error": str(exc),
+            }
+            self._log_response("ble/notifications", response_data)
+            return web.json_response(response_data, status=500)
+
+    async def handle_ble_disconnect(self, request: web.Request) -> web.Response:
+        """Handle POST /ble/disconnect endpoint.
+
+        Expected JSON body:
+        {
+            "session_id": "sess-abc123"  # optional if only one session
+        }
+
+        Returns:
+        {
+            "success": true/false,
+            "error": "error message if failed"
+        }
+        """
+        try:
+            data = await request.json()
+            self._log_request("ble/disconnect", data)
+
+            session_id = data.get("session_id")
+
+            # If no session_id provided, disconnect the only session if there's exactly one
+            if not session_id:
+                sessions = self.ble_manager.list_sessions()
+                if len(sessions) == 1:
+                    session_id = sessions[0]["session_id"]
+                else:
+                    response_data = {
+                        "success": False,
+                        "error": "session_id required when multiple sessions exist",
+                    }
+                    self._log_response("ble/disconnect", response_data)
+                    return web.json_response(response_data, status=400)
+
+            await self.ble_manager.disconnect_session(session_id)
+
+            response_data = {"success": True}
+            self._log_response("ble/disconnect", response_data)
+            return web.json_response(response_data)
+
+        except ValueError as exc:
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/disconnect", response_data)
+            return web.json_response(response_data, status=400)
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE disconnect")
+            response_data = {"success": False, "error": str(exc)}
+            self._log_response("ble/disconnect", response_data)
+            return web.json_response(response_data, status=500)
+
+    async def handle_ble_sessions(self, request: web.Request) -> web.Response:
+        """Handle GET /ble/sessions endpoint.
+
+        Returns list of active BLE sessions.
+
+        Returns:
+        {
+            "sessions": [
+                {
+                    "session_id": "sess-abc123",
+                    "address": "AA:BB:CC:DD:EE:FF",
+                    "created_at": "2025-11-14T10:00:00",
+                    "last_activity": "2025-11-14T10:30:00",
+                    "buffer_size": 5,
+                    "is_connected": true
+                },
+                ...
+            ]
+        }
+        """
+        try:
+            self._log_request("ble/sessions", None)
+
+            sessions = self.ble_manager.list_sessions()
+
+            response_data = {"sessions": sessions}
+            self._log_response("ble/sessions", response_data)
+            return web.json_response(response_data)
+
+        except Exception as exc:
+            _LOGGER.exception("Unexpected error in BLE sessions")
+            response_data = {"sessions": [], "error": str(exc)}
+            self._log_response("ble/sessions", response_data)
+            return web.json_response(response_data, status=500)
+
+    async def _on_startup(self, app: web.Application) -> None:
+        """Called when application starts."""
+        await self.ble_manager.start()
+        _LOGGER.info("BLE session manager started")
+
+    async def _on_cleanup(self, app: web.Application) -> None:
+        """Called when application shuts down."""
+        await self.ble_manager.stop()
+        _LOGGER.info("BLE session manager stopped")
 
     async def start(self) -> None:
         """Start the server."""

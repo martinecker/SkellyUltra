@@ -285,6 +285,31 @@ bluetoothctl
 
 ## 🌐 API Endpoints
 
+### 📑 Endpoint Table of Contents
+
+#### Bluetooth Classic Audio Endpoints
+- [POST /pair_and_trust_by_name](#-post-pair_and_trust_by_name) - Automatically pair and trust device by name
+- [POST /pair_and_trust_by_mac](#-post-pair_and_trust_by_mac) - Automatically pair and trust device by MAC
+- [POST /connect_by_name](#-post-connect_by_name) - Connect to device by name
+- [POST /connect_by_mac](#-post-connect_by_mac) - Connect to device by MAC
+- [GET /name](#-get-name) - Get connected device names
+- [GET /mac](#-get-mac) - Get connected device MACs
+- [POST /play](#️-post-play) - Upload and play audio file
+- [POST /play_filename](#-post-play_filename) - Play audio from file path
+- [POST /stop](#️-post-stop) - Stop audio playback
+- [POST /disconnect](#-post-disconnect) - Disconnect Bluetooth device
+- [GET /status](#-get-status) - Get comprehensive status
+- [GET /health](#-get-health) - Health check
+
+#### BLE Proxy Endpoints (Remote BLE Control)
+- [POST /ble/connect](#-post-bleconnect) - Connect to BLE device and create session
+- [POST /ble/send_command](#-post-blesend_command) - Send raw command bytes to BLE device
+- [GET /ble/notifications](#-get-blenotifications) - Long-poll for raw BLE notifications
+- [POST /ble/disconnect](#-post-bledisconnect) - Disconnect BLE session
+- [GET /ble/sessions](#-get-blesessions) - List active BLE sessions
+
+---
+
 ### 🔐 POST /pair_and_trust_by_name
 **Automatically pair and trust a Bluetooth device by name using D-Bus agent.**
 
@@ -678,6 +703,342 @@ Simple health check endpoint.
 }
 ```
 
+---
+
+## 🔷 BLE Proxy Endpoints
+
+These endpoints enable remote BLE communication, allowing clients without BLE hardware to control Skelly Ultra devices through this server. The server acts as a BLE proxy, forwarding raw command bytes and buffering raw notification bytes.
+
+**Use Case:** Run this server on a machine with BLE hardware (e.g., Raspberry Pi), and control devices from Home Assistant running in a container or on a different machine.
+
+### 🔗 POST /ble/connect
+**Connect to a BLE device and create a proxy session.**
+
+This endpoint discovers and connects to a Skelly Ultra BLE device, then creates a session for sending commands and receiving notifications.
+
+**Request Body:**
+```json
+{
+    "address": "AA:BB:CC:DD:EE:FF",  // Optional: specific MAC address
+    "name_filter": "Animated Skelly",  // Optional: device name filter (default: "Animated Skelly")
+    "timeout": 10.0  // Optional: discovery timeout in seconds (default: 10.0)
+}
+```
+
+**Parameters:**
+- `address` (optional): BLE device MAC address. If provided, connects directly to this address.
+- `name_filter` (optional): Device name substring for discovery. Default is "Animated Skelly".
+- `timeout` (optional): Maximum time to wait for device discovery. Default is 10 seconds.
+
+**Response (success):**
+```json
+{
+    "success": true,
+    "session_id": "sess-abc12345",
+    "address": "AA:BB:CC:DD:EE:FF"
+}
+```
+
+**Response (failure):**
+```json
+{
+    "success": false,
+    "error": "Device not found: Animated Skelly"
+}
+```
+
+**Status Codes:**
+- `200`: Connection successful
+- `400`: Invalid request or device not found
+- `500`: Internal server error
+
+**Example:**
+```bash
+# Connect by name filter
+curl -X POST http://localhost:8765/ble/connect \
+  -H "Content-Type: application/json" \
+  -d '{"name_filter": "Animated Skelly"}'
+
+# Connect by specific address
+curl -X POST http://localhost:8765/ble/connect \
+  -H "Content-Type: application/json" \
+  -d '{"address": "AA:BB:CC:DD:EE:FF"}'
+
+# Connect with custom timeout
+curl -X POST http://localhost:8765/ble/connect \
+  -H "Content-Type: application/json" \
+  -d '{"name_filter": "Animated Skelly", "timeout": 20.0}'
+```
+
+**Notes:**
+- Save the returned `session_id` for subsequent requests
+- Each session maintains its own notification buffer
+- Sessions automatically timeout after 5 minutes of inactivity
+
+### 📤 POST /ble/send_command
+**Send raw command bytes to the BLE device.**
+
+Sends command bytes (as hex string) to the connected BLE device. The server forwards bytes directly without parsing.
+
+**Request Body:**
+```json
+{
+    "session_id": "sess-abc12345",  // Optional if only one session exists
+    "command": "AA E0 00 00 E0"  // Required: hex string (spaces optional)
+}
+```
+
+**Parameters:**
+- `session_id` (optional): Session identifier. If omitted and only one session exists, that session is used automatically.
+- `command` (required): Command bytes as hex string. Spaces are optional and will be removed.
+
+**Response (success):**
+```json
+{
+    "success": true
+}
+```
+
+**Response (failure):**
+```json
+{
+    "success": false,
+    "error": "Invalid session_id: sess-xyz"
+}
+```
+
+**Status Codes:**
+- `200`: Command sent successfully
+- `400`: Invalid request (bad hex string, missing session_id when multiple sessions, etc.)
+- `500`: Internal server error
+
+**Example:**
+```bash
+# Send command with session ID
+curl -X POST http://localhost:8765/ble/send_command \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "sess-abc12345", "command": "AA E0 00 00 E0"}'
+
+# Send command (auto-select if only one session)
+curl -X POST http://localhost:8765/ble/send_command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "AAE00000E0"}'
+
+# Query device volume
+curl -X POST http://localhost:8765/ble/send_command \
+  -H "Content-Type: application/json" \
+  -d '{"command": "AA E3 00 00 E3"}'
+```
+
+**Notes:**
+- Hex string can have spaces or be continuous: `"AA E0"` and `"AAE0"` are equivalent
+- Commands are forwarded as raw bytes - no validation or parsing
+- Response notifications are buffered and retrieved via `/ble/notifications`
+
+### 📥 GET /ble/notifications
+**Long-poll for raw BLE notifications.**
+
+Retrieves buffered BLE notifications as raw bytes (hex strings). This endpoint uses long-polling: if no notifications are available, the connection is held open until notifications arrive or the timeout expires.
+
+**Query Parameters:**
+- `session_id` (optional): Session identifier. If omitted and only one session exists, that session is used.
+- `since` (optional): Last sequence number received. Only notifications with higher sequence numbers are returned. Default: 0.
+- `timeout` (optional): Maximum time to wait for notifications in seconds. Default: 30.0.
+
+**Response (with notifications):**
+```json
+{
+    "notifications": [
+        {
+            "sequence": 1,
+            "timestamp": "2025-11-14T10:30:00.123456",
+            "sender": "0000ffe1-0000-1000-8000-00805f9b34fb",
+            "data": "BB E0 32 00 01 00 00 00 00 00 00 00 00 00 00 00 00 00 FF"
+        },
+        {
+            "sequence": 2,
+            "timestamp": "2025-11-14T10:30:00.234567",
+            "sender": "0000ffe1-0000-1000-8000-00805f9b34fb",
+            "data": "BB D1 00 00 00 01 61 75 64 69 6F 31 2E 6D 70 33 00 FF"
+        }
+    ],
+    "next_sequence": 3,
+    "has_more": false
+}
+```
+
+**Response (no notifications - timeout):**
+```json
+{
+    "notifications": [],
+    "next_sequence": 5,
+    "has_more": false
+}
+```
+
+**Response (error):**
+```json
+{
+    "notifications": [],
+    "next_sequence": 0,
+    "has_more": false,
+    "error": "Invalid session_id: sess-xyz"
+}
+```
+
+**Status Codes:**
+- `200`: Success (may have empty notifications list if timeout)
+- `400`: Invalid request
+- `500`: Internal server error
+
+**Example:**
+```bash
+# Initial poll (get all notifications)
+curl "http://localhost:8765/ble/notifications?session_id=sess-abc12345&since=0&timeout=30"
+
+# Poll for new notifications after receiving up to sequence 5
+curl "http://localhost:8765/ble/notifications?session_id=sess-abc12345&since=5&timeout=30"
+
+# Quick poll with short timeout
+curl "http://localhost:8765/ble/notifications?session_id=sess-abc12345&since=10&timeout=5"
+
+# Auto-select session (if only one exists)
+curl "http://localhost:8765/ble/notifications?since=0&timeout=30"
+```
+
+**Notes:**
+- **Long-polling behavior**: Connection stays open until notifications arrive or timeout
+- Always use `next_sequence` from the response for the next poll
+- `has_more=true` indicates buffered notifications are available (poll again immediately)
+- Notifications are raw bytes (hex strings) - client must parse them
+- Buffer holds up to 200 notifications per session
+- Continuous polling maintains near real-time notification delivery
+
+**Typical polling pattern:**
+```bash
+# 1. Initial poll
+RESPONSE=$(curl -s "http://localhost:8765/ble/notifications?since=0&timeout=30")
+NEXT=$(echo $RESPONSE | jq -r '.next_sequence')
+
+# 2. Continuous polling loop
+while true; do
+    RESPONSE=$(curl -s "http://localhost:8765/ble/notifications?since=$NEXT&timeout=30")
+    NEXT=$(echo $RESPONSE | jq -r '.next_sequence')
+    # Process notifications...
+done
+```
+
+### 🔌 POST /ble/disconnect
+**Disconnect BLE session and cleanup.**
+
+Cleanly disconnects from the BLE device and removes the session.
+
+**Request Body:**
+```json
+{
+    "session_id": "sess-abc12345"  // Optional if only one session exists
+}
+```
+
+**Parameters:**
+- `session_id` (optional): Session identifier to disconnect. If omitted and only one session exists, that session is disconnected.
+
+**Response (success):**
+```json
+{
+    "success": true
+}
+```
+
+**Response (failure):**
+```json
+{
+    "success": false,
+    "error": "Invalid session_id: sess-xyz"
+}
+```
+
+**Status Codes:**
+- `200`: Disconnection successful
+- `400`: Invalid request
+- `500`: Internal server error
+
+**Example:**
+```bash
+# Disconnect specific session
+curl -X POST http://localhost:8765/ble/disconnect \
+  -H "Content-Type: application/json" \
+  -d '{"session_id": "sess-abc12345"}'
+
+# Disconnect (auto-select if only one session)
+curl -X POST http://localhost:8765/ble/disconnect \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+**Notes:**
+- Session is completely removed and cannot be reused
+- Buffered notifications are discarded
+- Subsequent requests with that session_id will fail
+- Sessions also auto-disconnect after 5 minutes of inactivity
+
+### 📋 GET /ble/sessions
+**List all active BLE sessions.**
+
+Returns information about all currently active BLE proxy sessions.
+
+**Response:**
+```json
+{
+    "sessions": [
+        {
+            "session_id": "sess-abc12345",
+            "address": "AA:BB:CC:DD:EE:FF",
+            "created_at": "2025-11-14T10:00:00.000000",
+            "last_activity": "2025-11-14T10:30:00.123456",
+            "buffer_size": 5,
+            "is_connected": true
+        },
+        {
+            "session_id": "sess-xyz67890",
+            "address": "BB:CC:DD:EE:FF:00",
+            "created_at": "2025-11-14T10:15:00.000000",
+            "last_activity": "2025-11-14T10:31:00.456789",
+            "buffer_size": 0,
+            "is_connected": true
+        }
+    ]
+}
+```
+
+**Response fields:**
+- `session_id`: Unique session identifier
+- `address`: BLE device MAC address
+- `created_at`: Session creation timestamp (ISO 8601)
+- `last_activity`: Last activity timestamp (ISO 8601)
+- `buffer_size`: Number of notifications currently buffered
+- `is_connected`: Whether BLE device is still connected
+
+**Status Codes:**
+- `200`: Success
+- `500`: Internal server error
+
+**Example:**
+```bash
+# List all sessions
+curl http://localhost:8765/ble/sessions
+
+# Pretty print with jq
+curl -s http://localhost:8765/ble/sessions | jq
+```
+
+**Notes:**
+- Useful for monitoring and debugging
+- Sessions with `last_activity` older than 5 minutes will be auto-cleaned
+- `buffer_size` indicates how many notifications are waiting to be retrieved
+
+---
+
 ## 💡 Usage Examples
 
 ### � Pair and trust device (automated):
@@ -758,6 +1119,55 @@ curl -X POST http://localhost:8765/disconnect \
 ### 🔌 Disconnect all devices:
 ```bash
 curl -X POST http://localhost:8765/disconnect
+```
+
+### 🔷 Complete BLE proxy workflow:
+```bash
+# 1. Connect to BLE device
+RESPONSE=$(curl -s -X POST http://localhost:8765/ble/connect \
+  -H "Content-Type: application/json" \
+  -d '{"name_filter": "Animated Skelly"}')
+SESSION_ID=$(echo $RESPONSE | jq -r '.session_id')
+echo "Connected with session: $SESSION_ID"
+
+# 2. Start notification polling in background
+(while true; do
+  curl -s "http://localhost:8765/ble/notifications?session_id=$SESSION_ID&since=0&timeout=30" | \
+    jq -r '.notifications[] | "[\(.sequence)] \(.data)"'
+done) &
+POLL_PID=$!
+
+# 3. Send query commands
+curl -X POST http://localhost:8765/ble/send_command \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\": \"$SESSION_ID\", \"command\": \"AA E0 00 00 E0\"}"
+sleep 1
+
+curl -X POST http://localhost:8765/ble/send_command \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\": \"$SESSION_ID\", \"command\": \"AA E3 00 00 E3\"}"
+sleep 2
+
+# 4. Check active sessions
+curl -s http://localhost:8765/ble/sessions | jq
+
+# 5. Cleanup
+kill $POLL_PID
+curl -X POST http://localhost:8765/ble/disconnect \
+  -H "Content-Type: application/json" \
+  -d "{\"session_id\": \"$SESSION_ID\"}"
+```
+
+### 🔷 Monitor BLE notifications in real-time:
+```bash
+# Start monitoring (run in separate terminal)
+SESSION_ID="sess-abc12345"
+SEQUENCE=0
+while true; do
+  RESPONSE=$(curl -s "http://localhost:8765/ble/notifications?session_id=$SESSION_ID&since=$SEQUENCE&timeout=30")
+  echo "$RESPONSE" | jq -r '.notifications[] | "[\(.timestamp)] [\(.sequence)] \(.data)"'
+  SEQUENCE=$(echo "$RESPONSE" | jq -r '.next_sequence')
+done
 ```
 
 ## 🧪 Quick Testing
