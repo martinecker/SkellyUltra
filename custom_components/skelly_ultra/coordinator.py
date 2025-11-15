@@ -74,6 +74,11 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         Uses action_lock to prevent concurrent execution with coordinator updates.
         """
+        # Check if we have a connection before attempting to fetch
+        if not self.adapter.client.is_connected:
+            _LOGGER.debug("Skipping file list refresh - device not connected")
+            return
+
         async with self.action_lock:
             _LOGGER.debug("Acquiring lock for file list refresh")
             try:
