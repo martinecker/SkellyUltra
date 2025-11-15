@@ -14,6 +14,7 @@ There is a companion project that provides a fully web browser-based controller 
 - [📋 Prerequisites](#-prerequisites)
   - [🖥️ Skelly Ultra REST Server](#️-skelly-ultra-rest-server)
   - [📡 Live Mode Bluetooth Pairing](#-live-mode-bluetooth-pairing)
+- [🔄 BLE Proxy Mode (Alternative Connection Method)](#-ble-proxy-mode-alternative-connection-method)
 - [🚀 Installation](#-installation)
 - [🎮 Usage](#-usage)
   - [📦 Available Entities](#-available-entities)
@@ -118,6 +119,68 @@ bluetoothctl
 - You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
 - Look for the device name with **(Live)** suffix - this is the Classic Bluetooth speaker
 
+## 🔄 BLE Proxy Mode (Alternative Connection Method)
+
+By default, the integration connects directly from your Home Assistant host to the Skelly Ultra device via BLE (Bluetooth Low Energy). However, you can alternatively configure the integration to use the **Skelly Ultra REST server as a BLE proxy**.
+
+### What is BLE Proxy Mode?
+
+In BLE proxy mode:
+- The REST server handles the BLE connection to your Skelly Ultra device
+- Home Assistant communicates with the REST server via HTTP
+- The REST server forwards BLE commands to the device and relays responses back to Home Assistant
+
+### When to Use BLE Proxy Mode
+
+BLE proxy mode is useful when:
+
+- **Your Home Assistant host doesn't have Bluetooth hardware** or doesn't support BLE
+- **Your Skelly device is out of range** from your Home Assistant host but within range of your REST server
+- **You want to centralize Bluetooth management** on a dedicated Linux host
+- **You're already running the REST server** for Live Mode audio and want to simplify your setup
+
+### How to Enable BLE Proxy Mode
+
+When adding the integration in Home Assistant:
+
+1. Go to **Settings** → **Devices & Services** → **Add Integration** → **"Skelly Ultra"**
+2. In the configuration form:
+   - **Check "Use BLE Proxy"** (enable the checkbox)
+   - **Enter REST server URL**: `http://<rest-server-ip>:8765` (e.g., `http://192.168.1.100:8765`)
+3. Choose your preferred discovery mode:
+   - **Scan**: The REST server will scan for nearby devices
+   - **Manual**: Enter the device's MAC address manually
+
+### Important Differences in BLE Proxy Mode
+
+#### Device Identification
+- In direct BLE mode, devices are identified by MAC address only
+- In BLE proxy mode, devices are identified by **both MAC address and REST server URL**
+- Example device title in proxy mode: `Animated Skelly (AA:BB:CC:DD:EE:FF via http://192.168.1.100:8765)`
+
+#### Scanning Behavior
+- In direct BLE mode, scanning uses Home Assistant's Bluetooth integration
+- In BLE proxy mode, scanning is performed by the REST server using its BLE adapter
+- The REST server maintains a background scan cache and returns results quickly
+- Scan timeout is properly utilized to wait for devices to appear
+
+### Prerequisites for BLE Proxy Mode
+
+- **Skelly Ultra REST server** must be installed and running (see [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md))
+- **REST server must be accessible** from your Home Assistant host via HTTP
+- **Bluetooth hardware** must be available on the REST server host
+- **No Bluetooth integration required** in Home Assistant (BLE proxy mode bypasses it)
+
+### Switching Between Direct and Proxy Mode
+
+If you want to change connection modes:
+
+1. **Remove the existing integration** from Home Assistant
+2. **Re-add the integration** with the new settings
+3. Choose "Use BLE Proxy" checkbox accordingly
+
+**Note**: You cannot switch modes for an existing config entry - you must remove and re-add the integration.
+
 ## 🚀 Installation
 
 ### Step 1: Install the Integration Files
@@ -145,6 +208,9 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - Go to **Settings** → **Devices & Services**
    - Click **"+ Add Integration"**
    - Search for **"Skelly Ultra"**
+   - Choose connection mode:
+     - **Use BLE Proxy**: Check this to use the REST server as a BLE proxy (see [BLE Proxy Mode](#-ble-proxy-mode-alternative-connection-method) section)
+     - Leave unchecked for direct BLE connection from Home Assistant host
    - Choose configuration mode:
      - **Manual**: Enter the Bluetooth MAC address
      - **Scan**: Discover nearby Skelly devices automatically
@@ -152,8 +218,8 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
 3. **Configure connection settings**:
    - **REST server URL**: URL of the Skelly Ultra REST server (default: `http://localhost:8765`)
      - If the server is on a different host, use `http://<server-ip>:8765`
-   - **Live Mode PIN**: Bluetooth PIN for pairing (default: 1234)
-     - This is only used if the REST server runs as root, otherwise it's for reference only - actual pairing must be done manually via `bluetoothctl`
+     - Required for Live Mode audio
+     - Required for BLE proxy mode where the host running the REST server establishes the connection to the BLE device (and is also used for Live Mode audio)
 
 4. **Verify setup**:
    - The integration should show as "Connected"
@@ -612,17 +678,30 @@ automation:
 - Check REST server logs for progress
 - If it fails, try disabling and re-enabling Live Mode
 
-### 🔐 Wrong PIN Error
+### 📡 Troubleshooting BLE Proxy Mode
 
-**Symptom**: Cannot pair device, or pairing fails with authentication error.
+#### REST Server Unreachable
 
-**Solution**:
-1. The default PIN is **1234**
-2. If your device uses a different PIN, update it in the integration configuration
-3. Remove any failed pairing attempts before trying again:
-   ```bash
-   bluetoothctl remove <MAC_ADDRESS>
-   ```
+If you see "Cannot connect to REST server" error:
+- Verify the REST server is running: `curl http://<server-ip>:8765/health`
+- Check firewall rules on the REST server host
+- Ensure the URL is correct (include `http://` and port `:8765`)
+
+#### Device Not Found During Scan
+
+If scanning doesn't find your device:
+- Ensure the device is powered on and within range of the REST server's Bluetooth adapter
+- Check REST server logs for BLE scanning activity
+- Try increasing the scan timeout in the config flow
+- Verify the device is advertising (try scanning with `bluetoothctl` on the server)
+
+#### Connection Drops Frequently
+
+If the BLE connection is unstable:
+- Check for Bluetooth interference (Wi-Fi, other devices)
+- Move the REST server closer to the Skelly device
+- Check REST server logs for BLE errors
+- Consider using a dedicated USB Bluetooth adapter
 
 ### 🆘 Still Having Issues?
 
