@@ -7,7 +7,29 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
+from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DOMAIN
+
+
+def build_device_identifier(
+    device_name: str, address: str, server_url: str | None = None
+) -> str:
+    """Build a consistent device identifier for Skelly Ultra devices.
+
+    Args:
+        device_name: The BLE device name (e.g., "Animated Skelly")
+        address: The BLE MAC address
+        server_url: Optional REST server URL (used when in BLE proxy mode)
+
+    Returns:
+        A formatted identifier string:
+        - BLE proxy mode: "<name> (<address> via <server_url>)"
+        - Direct BLE mode: "<name> (<address>)"
+    """
+    if server_url:
+        # BLE proxy mode: include server URL in the identifier
+        return f"{device_name} ({address} via {server_url})"
+    # Direct BLE mode: just name and address
+    return f"{device_name} ({address})"
 
 
 def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | None:
@@ -19,6 +41,11 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
 
     Returns:
         DeviceInfo with device name and address identifier, or None if address is None.
+
+    Note:
+        For BLE proxy connections, the identifier includes both the address and server URL
+        to differentiate between the same device accessed via different proxies.
+        For direct BLE connections, only the MAC address is used as the identifier.
     """
     # Get address from entry data or adapter in hass.data
     address = entry.data.get(CONF_ADDRESS)
@@ -30,7 +57,21 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
     if not address:
         return None
 
-    # Always use entry.title for device name, with fallback to address-based name
-    device_name = entry.title or f"Skelly Ultra {address}"
+    # Check if using BLE proxy mode
+    use_ble_proxy = entry.data.get(CONF_USE_BLE_PROXY, False)
 
-    return DeviceInfo(name=device_name, identifiers={(DOMAIN, address)})
+    # Create different identifiers for proxy vs direct connections
+    # Note: This is the device registry identifier, not the user-facing title
+    if use_ble_proxy:
+        # Include server URL in identifier for proxy connections
+        server_url = entry.data.get(CONF_SERVER_URL, "")
+        # Use a composite identifier: "proxy:{address}@{server_url}"
+        identifier = f"proxy:{address}@{server_url}"
+    else:
+        # Direct BLE connection - use MAC address only
+        identifier = address
+
+    # Always use entry.title for device name, with fallback to identifier-based name
+    device_name = entry.title or f"Skelly Ultra {identifier}"
+
+    return DeviceInfo(name=device_name, identifiers={(DOMAIN, identifier)})

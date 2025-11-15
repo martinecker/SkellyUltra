@@ -18,14 +18,17 @@ from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
-from .const import DOMAIN
+from .const import (
+    CONF_SERVER_URL,
+    CONF_USE_BLE_PROXY,
+    DEFAULT_SERVER_URL,
+    DOMAIN,
+)
+from .helpers import build_device_identifier
 
 _LOGGER = logging.getLogger(__name__)
 
 SHOW_ALL_TOKEN = "__show_all__"
-CONF_SERVER_URL = "server_url"
-CONF_USE_BLE_PROXY = "use_ble_proxy"
-DEFAULT_SERVER_URL = "http://localhost:8765"
 
 
 class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -139,12 +142,16 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 errors={"base": "address_required"},
             )
 
-        title = user_input.get(CONF_NAME) or address or "Skelly Ultra"
+        device_name = user_input.get(CONF_NAME) or "Skelly Ultra"
+        # Build consistent title using helper
+        title = build_device_identifier(
+            device_name, address, server_url if use_ble_proxy else None
+        )
         return self.async_create_entry(
             title=title,
             data={
                 CONF_ADDRESS: address,
-                CONF_NAME: user_input.get(CONF_NAME, ""),
+                CONF_NAME: device_name,
                 CONF_SERVER_URL: server_url,
                 CONF_USE_BLE_PROXY: use_ble_proxy,
             },
@@ -166,16 +173,17 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 return await self.async_step_scan()
 
             # Manual mode: create entry directly
-            title = (
-                self._user_input.get(CONF_NAME)
-                or self._user_input.get(CONF_ADDRESS)
-                or "Skelly Ultra"
+            address = self._user_input.get(CONF_ADDRESS, "")
+            device_name = self._user_input.get(CONF_NAME) or "Skelly Ultra"
+            # Build consistent title using helper
+            title = build_device_identifier(
+                device_name, address, self._server_url if self._use_ble_proxy else None
             )
             return self.async_create_entry(
                 title=title,
                 data={
-                    CONF_ADDRESS: self._user_input.get(CONF_ADDRESS, ""),
-                    CONF_NAME: self._user_input.get(CONF_NAME, ""),
+                    CONF_ADDRESS: address,
+                    CONF_NAME: device_name,
                     CONF_SERVER_URL: self._server_url,
                     CONF_USE_BLE_PROXY: self._use_ble_proxy,
                 },
@@ -425,7 +433,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             return self.async_show_form(
                 step_id="scan",
                 data_schema=schema,
-                description_placeholders={"count": len(choices)},
+                description_placeholders={"count": str(len(choices))},
             )
 
         # If the user selected the special show-all token, route to the
@@ -440,12 +448,23 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if not address:
             return self.async_abort(reason="no_devices_found")
 
-        title = self._discovered.get(address) or address
+        # Extract device name from discovered display string (format: "Name (Address)")
+        discovered_display = self._discovered.get(address) or address
+        # Try to extract name from "Name (Address)" format
+        if " (" in discovered_display and discovered_display.endswith(")"):
+            device_name = discovered_display.split(" (")[0]
+        else:
+            device_name = "Skelly Ultra"
+
+        # Build consistent title using helper
+        title = build_device_identifier(
+            device_name, address, self._server_url if self._use_ble_proxy else None
+        )
         return self.async_create_entry(
             title=title,
             data={
                 CONF_ADDRESS: address,
-                CONF_NAME: title,
+                CONF_NAME: device_name,
                 CONF_SERVER_URL: self._server_url,
                 CONF_USE_BLE_PROXY: self._use_ble_proxy,
             },

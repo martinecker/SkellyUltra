@@ -30,7 +30,7 @@ from .skelly_ultra_pkg.file_transfer import (
     FileTransferManager,
 )
 
-from .const import DOMAIN
+from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,8 +48,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     address = entry.data.get("address")
-    server_url = entry.data.get("server_url", "http://localhost:8765")
-    use_ble_proxy = entry.data.get("use_ble_proxy", False)
+    server_url = entry.data.get(CONF_SERVER_URL, DEFAULT_SERVER_URL)
+    use_ble_proxy = entry.data.get(CONF_USE_BLE_PROXY, False)
     adapter = SkellyClientAdapter(
         hass, address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
     )
