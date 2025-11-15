@@ -78,6 +78,45 @@ class SkellyClientAdapter:
         """
         last_exc: Exception | None = None
 
+        # If using BLE proxy, connect directly through the client without BLE device
+        if self._client.use_ble_proxy:
+            for attempt in range(1, attempts + 1):
+                try:
+                    ok = await self._client.connect()
+                    if ok:
+                        _LOGGER.info(
+                            "Connected to Skelly device via BLE proxy on attempt %d",
+                            attempt,
+                        )
+                        return True
+
+                    _LOGGER.warning(
+                        "BLE proxy connection returned False on attempt %d",
+                        attempt,
+                    )
+
+                except Exception as exc:
+                    last_exc = exc
+                    _LOGGER.warning(
+                        "Attempt %d to connect via BLE proxy failed: %s", attempt, exc
+                    )
+
+                # Backoff before retrying
+                if attempt < attempts:
+                    sleep_for = backoff * (2 ** (attempt - 1))
+                    _LOGGER.debug("Retrying in %.1f seconds", sleep_for)
+                    await asyncio.sleep(sleep_for)
+
+            # All attempts exhausted
+            if last_exc:
+                _LOGGER.error("All BLE proxy connection attempts failed: %s", last_exc)
+            else:
+                _LOGGER.error(
+                    "All BLE proxy connection attempts failed (no exception available)"
+                )
+            return False
+
+        # Direct BLE mode - use HA's bluetooth helpers
         # Ensure any stale connections are cleaned up before attempting
         # to establish a new connection via the retry connector.
         if self.address:
