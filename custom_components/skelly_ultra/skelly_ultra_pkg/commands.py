@@ -209,8 +209,10 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
         raise ValueError(f"Icon must be between 0 and 255, got {icon}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    if not name:
-        raise ValueError("Name cannot be empty for set_eye_icon")
+    if not name and cluster > 0:
+        raise ValueError(
+            "Name cannot be empty for set_eye_icon when cluster is specified"
+        )
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
@@ -230,8 +232,10 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
         raise ValueError(f"Action must be between 0 and 255, got {action}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    if not name:
-        raise ValueError("Name cannot be empty for set_action")
+    if not name and cluster > 0:
+        raise ValueError(
+            "Name cannot be empty for set_action when cluster is specified"
+        )
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (

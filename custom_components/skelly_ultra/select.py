@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import contextlib
+import logging
+
 from homeassistant.components.select import SelectEntity
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.const import CONF_ADDRESS
-import contextlib
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from . import DOMAIN
 from .coordinator import SkellyCoordinator
+
+_LOGGER = logging.getLogger(__name__)
 
 
 EYE_ICONS = [
@@ -109,12 +113,17 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         try:
             icon_index = int(index_str)
         except ValueError:
+            _LOGGER.error("Failed to parse eye icon index from option: %s", option)
             return
+
+        _LOGGER.info("Setting eye icon to %d (%s)", icon_index, option)
 
         # Send command to device via adapter client
         try:
             await self.coordinator.adapter.client.set_eye_icon(icon_index)
-        except Exception:  # device/IO errors surfaced here
+            _LOGGER.info("Successfully sent eye icon command")
+        except Exception:
+            _LOGGER.exception("Failed to send eye icon command")
             return
 
         # Push optimistic value into the coordinator cache so other
