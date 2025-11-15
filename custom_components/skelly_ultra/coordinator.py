@@ -78,11 +78,25 @@ class SkellyCoordinator(DataUpdateCoordinator):
             try:
                 self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
                 _LOGGER.debug("Loaded %d files from device", len(self._file_list))
-                # Update the file_count_received in coordinator data
+
+                # Also fetch file order and capacity to get updated device state
+                file_order = await self.adapter.client.get_file_order(timeout=5.0)
+                cap = await self.adapter.client.get_capacity(timeout=5.0)
+
+                # Extract capacity info
+                capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
+                file_count_reported = getattr(cap, "file_count", None) if cap else None
+
+                # Update coordinator data with file list, order, and capacity
                 if self.data:
-                    self.async_set_updated_data(
-                        {**self.data, "file_count_received": len(self._file_list)}
-                    )
+                    updated_data = {
+                        **self.data,
+                        "file_count_received": len(self._file_list),
+                        "file_order": file_order,
+                        "capacity_kb": capacity_kb,
+                        "file_count_reported": file_count_reported,
+                    }
+                    self.async_set_updated_data(updated_data)
             except TimeoutError:
                 _LOGGER.warning("Timeout loading file list from device")
                 self._file_list = []
