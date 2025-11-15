@@ -146,7 +146,13 @@ def set_light_brightness(
 
 
 def set_light_rgb(
-    channel: int, r: int, g: int, b: int, loop: int, cluster: int = 0, name: str = ""
+    channel: int,
+    r: int,
+    g: int,
+    b: int,
+    color_cycle: int,
+    cluster: int = 0,
+    name: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -156,8 +162,8 @@ def set_light_rgb(
         raise ValueError(f"Green value must be between 0 and 255, got {g}")
     if not 0 <= b <= 255:
         raise ValueError(f"Blue value must be between 0 and 255, got {b}")
-    if not 0 <= loop <= 255:
-        raise ValueError(f"Loop value must be between 0 and 255, got {loop}")
+    if not 0 <= color_cycle <= 1:
+        raise ValueError(f"color cycle value must be 0 or 1, got {color_cycle}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
@@ -168,7 +174,7 @@ def set_light_rgb(
         + int_to_hex(r, 1)
         + int_to_hex(g, 1)
         + int_to_hex(b, 1)
-        + int_to_hex(loop, 1)
+        + int_to_hex(color_cycle, 1)
         + int_to_hex(cluster, 4)
     )
     payload += (

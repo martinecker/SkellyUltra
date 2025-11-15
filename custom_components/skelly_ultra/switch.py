@@ -263,14 +263,14 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True if color cycle is enabled (effect == 1)."""
+        """Return True if color cycle is enabled (color_cycle == 1)."""
         data = getattr(self.coordinator, "data", None)
         if data:
             lights = data.get("lights", [])
             if self.channel < len(lights):
                 light_data = lights[self.channel]
-                effect = light_data.get("effect")
-                return effect == 1
+                color_cycle = light_data.get("color_cycle")
+                return color_cycle == 1
         return False
 
     async def async_added_to_hass(self) -> None:
@@ -278,8 +278,14 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
         await super().async_added_to_hass()
         self.async_write_ha_state()
 
-    async def async_turn_on(self, **kwargs) -> None:
-        """Enable color cycling by setting loop=1 in set_light_rgb."""
+    async def _set_color_cycle(self, enable: bool) -> None:
+        """Set color cycle state for this channel.
+
+        Parameters
+        ----------
+        enable: bool
+            True to enable color cycling (color_cycle=1), False to disable (color_cycle=0)
+        """
         try:
             # Get current RGB color from coordinator data
             data = getattr(self.coordinator, "data", None)
@@ -291,9 +297,10 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
                     if rgb:
                         r, g, b = rgb
 
-            # Call set_light_rgb with loop=1 to enable color cycling
+            # Call set_light_rgb with color_cycle=1 to enable, color_cycle=0 to disable
+            color_cycle_value = 1 if enable else 0
             await self.coordinator.adapter.client.set_light_rgb(
-                channel=self.channel, r=r, g=g, b=b, loop=1
+                channel=self.channel, r=r, g=g, b=b, color_cycle=color_cycle_value
             )
 
             # Push optimistic value into coordinator cache
@@ -301,7 +308,7 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
             lights = list(new_data.get("lights", [{}, {}]))
             if self.channel < len(lights):
                 light_data = dict(lights[self.channel])
-                light_data["effect"] = 1
+                light_data["color_cycle"] = color_cycle_value
                 lights[self.channel] = light_data
                 new_data["lights"] = lights
                 with contextlib.suppress(Exception):
@@ -313,48 +320,18 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
             with contextlib.suppress(Exception):
                 await self.coordinator.async_request_refresh()
         except Exception:
+            action = "enable" if enable else "disable"
             _LOGGER.exception(
-                "Failed to enable color cycle for channel %d", self.channel
+                "Failed to %s color cycle for channel %d", action, self.channel
             )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable color cycling by setting loop=1 in set_light_rgb."""
+        await self._set_color_cycle(enable=True)
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable color cycling by setting loop=0 in set_light_rgb."""
-        try:
-            # Get current RGB color from coordinator data
-            data = getattr(self.coordinator, "data", None)
-            r, g, b = 255, 255, 255  # default white
-            if data:
-                lights = data.get("lights", [])
-                if self.channel < len(lights):
-                    rgb = lights[self.channel].get("rgb")
-                    if rgb:
-                        r, g, b = rgb
-
-            # Call set_light_rgb with loop=0 to disable color cycling
-            await self.coordinator.adapter.client.set_light_rgb(
-                channel=self.channel, r=r, g=g, b=b, loop=0
-            )
-
-            # Push optimistic value into coordinator cache
-            new_data = dict(self.coordinator.data or {})
-            lights = list(new_data.get("lights", [{}, {}]))
-            if self.channel < len(lights):
-                light_data = dict(lights[self.channel])
-                light_data["effect"] = 0
-                lights[self.channel] = light_data
-                new_data["lights"] = lights
-                with contextlib.suppress(Exception):
-                    self.coordinator.async_set_updated_data(new_data)
-
-            self.async_write_ha_state()
-
-            # Request coordinator refresh
-            with contextlib.suppress(Exception):
-                await self.coordinator.async_request_refresh()
-        except Exception:
-            _LOGGER.exception(
-                "Failed to disable color cycle for channel %d", self.channel
-            )
+        await self._set_color_cycle(enable=False)
 
 
 class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
@@ -429,8 +406,14 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         await super().async_added_to_hass()
         self.async_write_ha_state()
 
-    async def async_turn_on(self, **kwargs) -> None:
-        """Enable movement for this body part."""
+    async def _set_movement(self, enable: bool) -> None:
+        """Set movement state for this body part.
+
+        Parameters
+        ----------
+        enable: bool
+            True to enable movement, False to disable
+        """
         try:
             # Use lock to prevent race conditions when multiple switches are toggled quickly
             async with self.coordinator.action_lock:
@@ -439,21 +422,31 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
                 current_action = data.get("action", 0) if data else 0
 
                 if self.part == "all":
-                    # Turning on "all" always sends 255
-                    new_action = 255
+                    # "All" is 255 when enabling, 0 when disabling
+                    new_action = 255 if enable else 0
                 else:
-                    # Set the bit for this part
+                    # Get the bit for this part
                     bit_map = {"head": 0, "arm": 1, "torso": 2}
                     bit = bit_map.get(self.part)
                     if bit is None:
                         return
 
-                    new_action = current_action | (1 << bit)
+                    if enable:
+                        # Set the bit for this part
+                        new_action = current_action | (1 << bit)
 
-                    # Check if all three individual parts are now on
-                    # If so, send 255 instead
-                    if (new_action & 0b111) == 0b111:  # all three bits set
-                        new_action = 255
+                        # Check if all three individual parts are now on
+                        # If so, send 255 instead
+                        if (new_action & 0b111) == 0b111:  # all three bits set
+                            new_action = 255
+                    else:
+                        # Clear the bit for this part
+                        new_action = current_action & ~(1 << bit)
+
+                        # If current action was 255 (all enabled), turning off one part
+                        # means we need to clear that specific bit from 0b111
+                        if current_action == 255:
+                            new_action = 0b111 & ~(1 << bit)
 
                 # Send the command
                 await self.coordinator.adapter.client.set_action(new_action)
@@ -470,50 +463,16 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
             with contextlib.suppress(Exception):
                 await self.coordinator.async_request_refresh()
         except Exception:
-            _LOGGER.exception("Failed to enable movement for %s", self.part)
+            action = "enable" if enable else "disable"
+            _LOGGER.exception("Failed to %s movement for %s", action, self.part)
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable movement for this body part."""
+        await self._set_movement(enable=True)
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable movement for this body part."""
-        try:
-            # Use lock to prevent race conditions when multiple switches are toggled quickly
-            async with self.coordinator.action_lock:
-                # Get current action from coordinator
-                data = getattr(self.coordinator, "data", None)
-                current_action = data.get("action", 0) if data else 0
-
-                if self.part == "all":
-                    # Turning off "all" clears all bits
-                    new_action = 0
-                else:
-                    # Clear the bit for this part
-                    bit_map = {"head": 0, "arm": 1, "torso": 2}
-                    bit = bit_map.get(self.part)
-                    if bit is None:
-                        return
-
-                    new_action = current_action & ~(1 << bit)
-
-                    # If current action was 255 (all enabled), turning off one part
-                    # means we need to clear that specific bit from 0b111
-                    if current_action == 255:
-                        new_action = 0b111 & ~(1 << bit)
-
-                # Send the command
-                await self.coordinator.adapter.client.set_action(new_action)
-
-                # Push optimistic value into coordinator cache
-                new_data = dict(self.coordinator.data or {})
-                new_data["action"] = new_action
-                with contextlib.suppress(Exception):
-                    self.coordinator.async_set_updated_data(new_data)
-
-                self.async_write_ha_state()
-
-            # Request coordinator refresh (outside lock to avoid blocking)
-            with contextlib.suppress(Exception):
-                await self.coordinator.async_request_refresh()
-        except Exception:
-            _LOGGER.exception("Failed to disable movement for %s", self.part)
+        await self._set_movement(enable=False)
 
 
 class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):

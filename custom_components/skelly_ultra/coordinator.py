@@ -317,7 +317,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     "file_order": file_order,
                     # pin_code is the Bluetooth pairing PIN (e.g., "1234")
                     "pin_code": pin_code,
-                    # lights is a list of small dicts with brightness, rgb, mode, effect, and speed
+                    # lights is a list of small dicts with brightness, rgb, effect_type, color_cycle, and effect_speed
                     "lights": [
                         {
                             "brightness": int(getattr(light0, "brightness", 0))
@@ -326,13 +326,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
                             "rgb": tuple(getattr(light0, "rgb", (0, 0, 0)))
                             if light0 is not None
                             else None,
-                            "mode": int(getattr(light0, "mode", 1))
+                            "effect_type": int(getattr(light0, "effect_type", 1))
                             if light0 is not None
                             else None,
-                            "effect": int(getattr(light0, "effect", 0))
+                            "color_cycle": int(getattr(light0, "color_cycle", 0))
                             if light0 is not None
                             else None,
-                            "speed": int(getattr(light0, "speed", 0))
+                            "effect_speed": int(getattr(light0, "effect_speed", 0))
                             if light0 is not None
                             else None,
                         },
@@ -343,13 +343,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
                             "rgb": tuple(getattr(light1, "rgb", (0, 0, 0)))
                             if light1 is not None
                             else None,
-                            "mode": int(getattr(light1, "mode", 1))
+                            "effect_type": int(getattr(light1, "effect_type", 1))
                             if light1 is not None
                             else None,
-                            "effect": int(getattr(light1, "effect", 0))
+                            "color_cycle": int(getattr(light1, "color_cycle", 0))
                             if light1 is not None
                             else None,
-                            "speed": int(getattr(light1, "speed", 0))
+                            "effect_speed": int(getattr(light1, "effect_speed", 0))
                             if light1 is not None
                             else None,
                         },

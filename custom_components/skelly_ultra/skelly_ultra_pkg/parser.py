@@ -12,11 +12,11 @@ import logging
 
 @dataclass
 class LightInfo:
-    mode: int  # aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
+    effect_type: int  # aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
     brightness: int  # 0-255
     rgb: tuple
-    effect: int  # 0 == no effect, 1 == cycle all colors
-    speed: int  # 0-255, used by mode 2 (strobe) and 3 (pulsing) only
+    color_cycle: int  # 0 == no color cycle, 1 == cycle all colors
+    effect_speed: int  # 0-255, where 0 and 255 seem to represent the same (fast) speed and 0 is fastest and 254 is slowest; used by effect_type 2 (strobe) and 3 (pulsing) only
 
 
 @dataclass
@@ -184,20 +184,20 @@ def parse_notification(
             chunk = light_data[i * 14 : (i + 1) * 14]
             if len(chunk) < 14:
                 continue
-            mode = int(chunk[0:2], 16)
+            effect_type = int(chunk[0:2], 16)
             brightness = int(chunk[2:4], 16)
             r = int(chunk[4:6], 16)
             g = int(chunk[6:8], 16)
             b = int(chunk[8:10], 16)
-            effect = int(chunk[10:12], 16)
-            speed = int(chunk[12:14], 16)
+            color_cycle = int(chunk[10:12], 16)
+            effect_speed = int(chunk[12:14], 16)
             lights.append(
                 LightInfo(
-                    mode=mode,
+                    effect_type=effect_type,
                     brightness=brightness,
                     rgb=(r, g, b),
-                    effect=effect,
-                    speed=speed,
+                    color_cycle=color_cycle,
+                    effect_speed=effect_speed,
                 )
             )
         eye_icon = int(hexstr[90:92], 16)
@@ -310,20 +310,20 @@ def parse_notification(
         for i in range(6):
             chunk = light_data[i * 14 : (i + 1) * 14]
             if len(chunk) == 14:
-                mode = int(chunk[0:2], 16)
+                effect_type = int(chunk[0:2], 16)
                 brightness = int(chunk[2:4], 16)
                 r = int(chunk[4:6], 16)
                 g = int(chunk[6:8], 16)
                 b = int(chunk[8:10], 16)
-                effect = int(chunk[10:12], 16)
-                speed = int(chunk[12:14], 16)
+                color_cycle = int(chunk[10:12], 16)
+                effect_speed = int(chunk[12:14], 16)
                 lights.append(
                     LightInfo(
-                        mode=mode,
+                        effect_type=effect_type,
                         brightness=brightness,
                         rgb=(r, g, b),
-                        effect=effect,
-                        speed=speed,
+                        color_cycle=color_cycle,
+                        effect_speed=effect_speed,
                     )
                 )
         eye_icon = int(hexstr[110:112], 16)

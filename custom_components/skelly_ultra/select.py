@@ -206,24 +206,24 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
             lights = data.get("lights", [])
             if self.channel < len(lights):
                 light_data = lights[self.channel]
-                mode = light_data.get("mode")
-                # mode: 1 = Static, 2 = Strobe, 3 = Pulse
-                if mode in (1, 2, 3):
-                    return self._options[mode - 1]
+                effect_type = light_data.get("effect_type")
+                # effect_type: 1 = Static, 2 = Strobe, 3 = Pulse
+                if effect_type in (1, 2, 3):
+                    return self._options[effect_type - 1]
         return None
 
     async def async_select_option(self, option: str) -> None:
         """Handle when an option is selected in the UI."""
-        # Convert option name to mode number (1 = Static, 2 = Strobe, 3 = Pulse)
+        # Convert option name to effect_type number (1 = Static, 2 = Strobe, 3 = Pulse)
         try:
-            mode = self._options.index(option) + 1
+            effect_type = self._options.index(option) + 1
         except ValueError:
             return
 
         # Send command to device via adapter client
         try:
             await self.coordinator.adapter.client.set_light_mode(
-                channel=self.channel, mode=mode
+                channel=self.channel, mode=effect_type
             )
         except Exception:  # device/IO errors surfaced here
             return
@@ -233,7 +233,7 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         lights = list(new_data.get("lights", [{}, {}]))
         if self.channel < len(lights):
             light_data = dict(lights[self.channel])
-            light_data["mode"] = mode
+            light_data["effect_type"] = effect_type
             lights[self.channel] = light_data
             new_data["lights"] = lights
             with contextlib.suppress(Exception):

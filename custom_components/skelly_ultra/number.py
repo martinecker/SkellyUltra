@@ -159,7 +159,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         if data:
             lights = data.get("lights", [])
             if self.channel < len(lights):
-                device_speed = lights[self.channel].get("speed")
+                device_speed = lights[self.channel].get("effect_speed")
                 if device_speed is not None:
                     try:
                         speed_int = int(device_speed)
@@ -201,7 +201,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         lights = list(new_data.get("lights", [{}, {}]))
         if self.channel < len(lights):
             light_data = dict(lights[self.channel])
-            light_data["speed"] = device_speed
+            light_data["effect_speed"] = device_speed
             lights[self.channel] = light_data
             new_data["lights"] = lights
             with contextlib.suppress(Exception):

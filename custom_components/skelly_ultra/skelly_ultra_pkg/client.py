@@ -497,12 +497,12 @@ class SkellyClient:
         r: int,
         g: int,
         b: int,
-        loop: int = 0,
+        color_cycle: int = 0,
         cluster: int = 0,
         name: str = "",
     ) -> None:
         await self.send_command(
-            commands.set_light_rgb(channel, r, g, b, loop, cluster, name)
+            commands.set_light_rgb(channel, r, g, b, color_cycle, cluster, name)
         )
 
     async def set_light_brightness(
