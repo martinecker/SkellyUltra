@@ -5,6 +5,13 @@ Skelly Ultra BLE protocol, similar to constants.js in the JavaScript codebase.
 """
 
 # ============================================================================
+# PROTOCOL MARKERS
+# ============================================================================
+
+# Marker used before filename/name strings in command payloads
+PROTOCOL_MARKER_FILENAME = "5C55"
+
+# ============================================================================
 # COMMAND TAGS (sent TO device)
 # ============================================================================
 

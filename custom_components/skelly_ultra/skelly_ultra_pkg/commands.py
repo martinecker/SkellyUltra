@@ -119,7 +119,7 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
         ch
         + int_to_hex(mode, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + "5C55" + name_utf16 if name else name_len)
+        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
     )
     return build_cmd(const.CMD_SET_LIGHT_MODE, payload)
 
@@ -140,7 +140,7 @@ def set_light_brightness(
         ch
         + int_to_hex(brightness, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + "5C55" + name_utf16 if name else name_len)
+        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
     )
     return build_cmd(const.CMD_SET_LIGHT_BRIGHTNESS, payload)
 
@@ -171,7 +171,9 @@ def set_light_rgb(
         + int_to_hex(loop, 1)
         + int_to_hex(cluster, 4)
     )
-    payload += (name_len + "5C55" + name_utf16) if name else name_len
+    payload += (
+        (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16) if name else name_len
+    )
     return build_cmd(const.CMD_SET_LIGHT_RGB, payload)
 
 
@@ -191,7 +193,7 @@ def set_light_speed(
         ch
         + int_to_hex(speed, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + "5C55" + name_utf16 if name else name_len)
+        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
     )
     return build_cmd(const.CMD_SET_LIGHT_SPEED, payload)
 
@@ -219,7 +221,7 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
         int_to_hex(icon, 1)
         + "00"  # 1-byte padding
         + int_to_hex(cluster, 4)
-        + (name_len + "5C55" + name_utf16 if name else name_len)
+        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
     )
     return build_cmd(const.CMD_SET_EYE_ICON, payload)
 
@@ -242,7 +244,7 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
         int_to_hex(action, 1)
         + "00"  # 1-byte padding
         + int_to_hex(cluster, 4)
-        + (name_len + "5C55" + name_utf16 if name else name_len)
+        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
     )
     return build_cmd(const.CMD_SET_ACTION, payload)
 
@@ -261,7 +263,7 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
         const.CMD_START_SEND_DATA,
         int_to_hex(size, 4)
         + int_to_hex(chunk_count, 2)
-        + "5C55"
+        + const.PROTOCOL_MARKER_FILENAME
         + to_utf16le_hex(filename),
     )
 
@@ -283,7 +285,10 @@ def end_send_data() -> bytes:
 def confirm_file(filename: str) -> bytes:
     if not filename:
         raise ValueError("Filename cannot be empty")
-    return build_cmd(const.CMD_CONFIRM_FILE, "5C55" + to_utf16le_hex(filename))
+    return build_cmd(
+        const.CMD_CONFIRM_FILE,
+        const.PROTOCOL_MARKER_FILENAME + to_utf16le_hex(filename),
+    )
 
 
 def cancel_send() -> bytes:
