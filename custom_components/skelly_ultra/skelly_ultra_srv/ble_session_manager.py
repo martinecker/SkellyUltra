@@ -219,38 +219,96 @@ class BLESessionManager:
 
         Args:
             name_filter: Optional name filter (case-insensitive substring match)
-            timeout: Unused (kept for API compatibility)
+            timeout: Time to wait for devices to appear in cache if needed
 
         Returns:
             List of cached devices with name, address, and RSSI
         """
-        _LOGGER.info(
-            "Returning cached BLE devices (cache size: %d)", len(self._device_cache)
-        )
 
-        results = []
-        for cached in self._device_cache.values():
-            device = cached.device
+        def get_matching_devices() -> list[dict[str, str]]:
+            """Helper to get matching devices from cache."""
+            results = []
+            for cached in self._device_cache.values():
+                device = cached.device
 
-            # Apply name filter if provided
-            if name_filter:
-                if not device.name or name_filter.lower() not in device.name.lower():
-                    continue
+                # Apply name filter if provided
+                if name_filter:
+                    if (
+                        not device.name
+                        or name_filter.lower() not in device.name.lower()
+                    ):
+                        continue
 
-            results.append(
-                {
-                    "name": device.name or "Unknown",
-                    "address": device.address,
-                    "rssi": cached.rssi,
-                }
+                results.append(
+                    {
+                        "name": device.name or "Unknown",
+                        "address": device.address,
+                        "rssi": cached.rssi,
+                    }
+                )
+            return results
+
+        # Check if we need to wait for devices
+        initial_results = get_matching_devices()
+
+        # Case 1: name_filter provided but no matching device found
+        if name_filter and not initial_results:
+            _LOGGER.info(
+                "No devices matching '%s' in cache, polling for %.1f seconds",
+                name_filter,
+                timeout,
             )
+            start_time = asyncio.get_event_loop().time()
+            poll_interval = 0.5  # Poll every 500ms
 
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                await asyncio.sleep(poll_interval)
+                results = get_matching_devices()
+                if results:
+                    _LOGGER.info(
+                        "Found %d device(s) matching '%s' after %.1fs",
+                        len(results),
+                        name_filter,
+                        asyncio.get_event_loop().time() - start_time,
+                    )
+                    return results
+
+            _LOGGER.info(
+                "No devices matching '%s' found after timeout",
+                name_filter,
+            )
+            return []
+
+        # Case 2: no name_filter, but cache is empty or has only 1 device
+        if not name_filter and len(self._device_cache) <= 1:
+            _LOGGER.info(
+                "Device cache has %d device(s), waiting %.1f seconds for more devices",
+                len(self._device_cache),
+                timeout,
+            )
+            start_time = asyncio.get_event_loop().time()
+            poll_interval = 0.5  # Poll every 500ms
+
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                await asyncio.sleep(poll_interval)
+                results = get_matching_devices()
+                # Keep waiting until timeout regardless of device count
+
+            results = get_matching_devices()
+            _LOGGER.info(
+                "Found %d BLE device(s) in cache after %.1fs",
+                len(results),
+                asyncio.get_event_loop().time() - start_time,
+            )
+            return results
+
+        # Case 3: Have enough devices already, return immediately
         _LOGGER.info(
-            "Found %d BLE device(s)%s in cache",
-            len(results),
+            "Found %d BLE device(s)%s in cache (returning immediately)",
+            len(initial_results),
             f" matching '{name_filter}'" if name_filter else "",
         )
-        return results
+        return initial_results
 
     async def _cleanup_loop(self) -> None:
         """Background task to cleanup idle sessions."""

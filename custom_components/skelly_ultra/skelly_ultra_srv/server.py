@@ -843,6 +843,10 @@ class SkellyUltraServer:
         Query parameters:
             name_filter: Optional name filter (case-insensitive substring match)
             timeout: Scan duration in seconds (default: 10.0)
+                    - If name_filter is provided but no matching device in cache,
+                      polls cache until timeout or device found
+                    - If no name_filter and cache has 0-1 devices, waits full timeout
+                      to collect more devices
 
         Returns:
         {
