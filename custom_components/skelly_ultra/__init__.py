@@ -13,11 +13,13 @@ from pathlib import Path
 import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.device_registry import DeviceInfo
 
 from .client_adapter import SkellyClientAdapter
 from .coordinator import SkellyCoordinator
@@ -28,9 +30,9 @@ from .skelly_ultra_pkg.file_transfer import (
     FileTransferManager,
 )
 
-_LOGGER = logging.getLogger(__name__)
+from .const import DOMAIN
 
-DOMAIN = "skelly_ultra"
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -365,8 +367,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Get the transfer progress sensor for this entry
         transfer_sensor = None
-        if entry_id in hass.data["skelly_ultra"]:
-            transfer_sensor = hass.data["skelly_ultra"][entry_id].get("transfer_sensor")
+        if entry_id in hass.data[DOMAIN]:
+            transfer_sensor = hass.data[DOMAIN][entry_id].get("transfer_sensor")
 
         # Create file transfer manager
         transfer_manager = FileTransferManager()

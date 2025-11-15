@@ -11,8 +11,9 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 from .skelly_ultra_pkg.file_transfer import FileTransferManager
 
 
@@ -22,15 +23,19 @@ async def async_setup_entry(
     """Set up the number entities from a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get("address") or data.get("adapter").address
+    device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
-            SkellyVolumeNumber(coordinator, entry.entry_id, address),
-            SkellyEffectSpeedNumber(coordinator, entry.entry_id, address, channel=0),
-            SkellyEffectSpeedNumber(coordinator, entry.entry_id, address, channel=1),
+            SkellyVolumeNumber(coordinator, entry.entry_id, device_info),
+            SkellyEffectSpeedNumber(
+                coordinator, entry.entry_id, device_info, channel=0
+            ),
+            SkellyEffectSpeedNumber(
+                coordinator, entry.entry_id, device_info, channel=1
+            ),
             SkellyChunkSizeNumber(
-                coordinator, data.get("adapter"), entry.entry_id, address
+                coordinator, data.get("adapter"), entry.entry_id, device_info
             ),
         ]
     )
@@ -42,7 +47,10 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
     _attr_has_entity_name = True
 
     def __init__(
-        self, coordinator: SkellyCoordinator, entry_id: str, address: str | None
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
     ) -> None:
         super().__init__(coordinator)
         self.coordinator = coordinator
@@ -52,8 +60,7 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_max_value = 100
         self._attr_native_step = 1
         self._attr_native_unit_of_measurement = PERCENTAGE
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def native_value(self) -> int | None:
@@ -118,7 +125,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
         channel: int,
     ) -> None:
         """Initialize the effect speed number entity.
@@ -129,8 +136,8 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
             Coordinator providing access to the adapter/client
         entry_id: str
             Config entry id used to form unique id
-        address: str | None
-            BLE address used for device grouping
+        device_info: DeviceInfo | None
+            Device registry info for grouping entities
         channel: int
             Light channel number (0 = Torso, 1 = Head)
         """
@@ -142,8 +149,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_min_value = 0
         self._attr_native_max_value = 254
         self._attr_native_step = 1
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def native_value(self) -> int | None:
@@ -228,7 +234,7 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
         coordinator: SkellyCoordinator,
         adapter,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the chunk size number entity."""
         super().__init__(coordinator)
@@ -244,8 +250,7 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
         self._attr_native_max_value = FileTransferManager.MAX_CHUNK_SIZE
         self._attr_native_step = 10
 
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def mode(self) -> str:

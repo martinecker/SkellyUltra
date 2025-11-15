@@ -21,15 +21,15 @@ from homeassistant.components.media_player import (
     async_process_play_media_url,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
 
@@ -47,18 +47,15 @@ async def async_setup_entry(
     """Set up Skelly media player for live mode audio playback."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
-    device_name = entry.title or (
-        f"Skelly Ultra {address}" if address else "Skelly Ultra"
-    )
+    device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
             SkellyLiveMediaPlayer(
-                coordinator, data.get("adapter"), entry.entry_id, address, device_name
+                coordinator, data.get("adapter"), entry.entry_id, device_info
             ),
             SkellyInternalFilesPlayer(
-                coordinator, data.get("adapter"), entry.entry_id, address, device_name
+                coordinator, data.get("adapter"), entry.entry_id, device_info
             ),
         ]
     )
@@ -80,8 +77,7 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         coordinator: SkellyCoordinator,
         adapter,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the media player entity."""
         super().__init__(coordinator)
@@ -98,10 +94,7 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._background_tasks: set[asyncio.Task] = set()
 
         # Device grouping
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def available(self) -> bool:
@@ -463,8 +456,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         coordinator: SkellyCoordinator,
         adapter,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the internal files media player entity."""
         super().__init__(coordinator)
@@ -484,10 +476,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         self._eye_icon_cache: dict[int, str] = {}
 
         # Device grouping
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass, load the file list and start event monitoring."""

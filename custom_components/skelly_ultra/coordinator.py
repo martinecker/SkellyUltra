@@ -16,6 +16,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
-            name="skelly_ultra",
+            name=DOMAIN,
             update_interval=timedelta(seconds=30),
         )
         self.adapter = adapter

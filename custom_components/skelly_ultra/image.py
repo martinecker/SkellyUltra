@@ -14,13 +14,13 @@ from datetime import datetime, timezone
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,9 +31,9 @@ async def async_setup_entry(
     """Set up the Skelly eye icon image entity for a config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    device_info = get_device_info(hass, entry)
 
-    async_add_entities([SkellyEyeImage(coordinator, entry.entry_id, address)])
+    async_add_entities([SkellyEyeImage(coordinator, entry.entry_id, device_info)])
 
 
 class SkellyEyeImage(CoordinatorEntity, ImageEntity):
@@ -43,13 +43,16 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
     _attr_content_type = "image/png"
 
     def __init__(
-        self, coordinator: SkellyCoordinator, entry_id: str, address: str | None
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the image entity.
 
         coordinator: the update coordinator with `eye_icon` in data
         entry_id: used for unique id
-        address: optional BLE address used as device identifier
+        device_info: device registry info for grouping entities
         """
         # Initialize CoordinatorEntity
         super().__init__(coordinator)
@@ -60,8 +63,7 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         self._entry_id = entry_id
         self._attr_name = "Eye Icon"
         self._attr_unique_id = f"{entry_id}_eye_icon_image"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
         # compute base images path
         self._images_path = Path(__file__).parent / "images"

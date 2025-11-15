@@ -6,58 +6,42 @@ from datetime import timedelta
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ) -> None:
     """Set up Skelly sensors for a config entry."""
-    data = hass.data["skelly_ultra"][entry.entry_id]
+    data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    adapter = data.get("adapter")
-    address = entry.data.get(CONF_ADDRESS) or adapter.address
-    # Prefer the config entry title if provided, otherwise build a default
-    # name using the BLE address so the device shows up with a friendly name
-    device_name = entry.title or (
-        f"Skelly Ultra {address}" if address else "Skelly Ultra"
-    )
+    device_info = get_device_info(hass, entry)
 
     # Create and store the file transfer progress sensor for service callbacks
     transfer_sensor = SkellyFileTransferProgressSensor(
-        hass, entry.entry_id, address, device_name
+        hass, entry.entry_id, device_info
     )
 
     # Store sensor reference in hass.data for service access
-    if "skelly_ultra" not in hass.data:
-        hass.data["skelly_ultra"] = {}
-    if entry.entry_id not in hass.data["skelly_ultra"]:
-        hass.data["skelly_ultra"][entry.entry_id] = {}
-    hass.data["skelly_ultra"][entry.entry_id]["transfer_sensor"] = transfer_sensor
+    hass.data[DOMAIN][entry.entry_id]["transfer_sensor"] = transfer_sensor
 
     async_add_entities(
         [
-            SkellyVolumeSensor(coordinator, entry.entry_id, address, device_name),
-            SkellyLiveNameSensor(coordinator, entry.entry_id, address, device_name),
-            SkellyStorageCapacitySensor(
-                coordinator, entry.entry_id, address, device_name
-            ),
-            SkellyFileCountReportedSensor(
-                coordinator, entry.entry_id, address, device_name
-            ),
-            SkellyFileCountReceivedSensor(
-                coordinator, entry.entry_id, address, device_name
-            ),
-            SkellyFileOrderSensor(coordinator, entry.entry_id, address, device_name),
-            SkellyLiveBTMacSensor(adapter, entry.entry_id, address, device_name),
-            SkellyPinCodeSensor(coordinator, entry.entry_id, address, device_name),
+            SkellyVolumeSensor(coordinator, entry.entry_id, device_info),
+            SkellyLiveNameSensor(coordinator, entry.entry_id, device_info),
+            SkellyStorageCapacitySensor(coordinator, entry.entry_id, device_info),
+            SkellyFileCountReportedSensor(coordinator, entry.entry_id, device_info),
+            SkellyFileCountReceivedSensor(coordinator, entry.entry_id, device_info),
+            SkellyFileOrderSensor(coordinator, entry.entry_id, device_info),
+            SkellyLiveBTMacSensor(adapter, entry.entry_id, device_info),
+            SkellyPinCodeSensor(coordinator, entry.entry_id, device_info),
             transfer_sensor,
         ]
     )
@@ -72,8 +56,7 @@ class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the volume sensor with coordinator."""
         super().__init__(coordinator)
@@ -83,10 +66,7 @@ class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
         # Volume is expressed as a percentage (0-100)
         self._attr_native_unit_of_measurement = "%"
         # Device grouping
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -105,18 +85,14 @@ class SkellyLiveNameSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the live name sensor with coordinator."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Live Name"
         self._attr_unique_id = f"{entry_id}_live_name"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -136,18 +112,14 @@ class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the storage capacity sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Remaining Capacity"
         self._attr_unique_id = f"{entry_id}_capacity_kb"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -166,18 +138,14 @@ class SkellyFileCountReportedSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the file count reported sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "File Count Reported"
         self._attr_unique_id = f"{entry_id}_file_count_reported"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -196,18 +164,14 @@ class SkellyFileCountReceivedSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the file count received sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "File Count Received"
         self._attr_unique_id = f"{entry_id}_file_count_received"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -226,18 +190,14 @@ class SkellyFileOrderSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the file order sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "File Order"
         self._attr_unique_id = f"{entry_id}_file_order"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -257,17 +217,13 @@ class SkellyLiveBTMacSensor(SensorEntity):
         self,
         adapter,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the Live BT MAC sensor."""
         self.adapter = adapter
         self._attr_name = "Live BT MAC"
         self._attr_unique_id = f"{entry_id}_live_bt_mac"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -285,18 +241,14 @@ class SkellyPinCodeSensor(CoordinatorEntity, SensorEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the PIN code sensor."""
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "PIN Code"
         self._attr_unique_id = f"{entry_id}_pin_code"
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @property
     def native_value(self):
@@ -316,8 +268,7 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         self,
         hass: HomeAssistant,
         entry_id: str,
-        address: str | None,
-        device_name: str | None = None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the file transfer progress sensor."""
         self.hass = hass
@@ -325,10 +276,7 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         self._attr_unique_id = f"{entry_id}_file_transfer_progress"
         self._attr_native_value = "Idle"
         self._cancel_timer = None
-        if address:
-            self._attr_device_info = DeviceInfo(
-                name=device_name, identifiers={(DOMAIN, address)}
-            )
+        self._attr_device_info = device_info
 
     @callback
     def update_progress(self, sent_chunks: int, total_chunks: int) -> None:

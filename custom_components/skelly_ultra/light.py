@@ -6,13 +6,13 @@ import contextlib
 
 from homeassistant.components.light import ColorMode, LightEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 
 
 async def async_setup_entry(
@@ -21,12 +21,16 @@ async def async_setup_entry(
     """Set up Torso and Head lights for the Skelly Ultra."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
-            SkellyChannelLight(coordinator, entry.entry_id, address, 0, "Torso Light"),
-            SkellyChannelLight(coordinator, entry.entry_id, address, 1, "Head Light"),
+            SkellyChannelLight(
+                coordinator, entry.entry_id, device_info, 0, "Torso Light"
+            ),
+            SkellyChannelLight(
+                coordinator, entry.entry_id, device_info, 1, "Head Light"
+            ),
         ]
     )
 
@@ -40,7 +44,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
         channel: int,
         name: str,
     ) -> None:
@@ -55,8 +59,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         # brightness via the brightness property (0-255).
         self._attr_supported_color_modes = {ColorMode.RGB}
         self._attr_color_mode = ColorMode.RGB
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def is_on(self) -> bool:

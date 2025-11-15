@@ -7,13 +7,13 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -24,23 +24,25 @@ async def async_setup_entry(
     """Set up the Skelly switches for the config entry."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
             SkellyConnectedSwitch(
-                hass, coordinator, data.get("adapter"), entry, address
+                hass, coordinator, data.get("adapter"), entry, device_info
             ),
             SkellyLiveModeSwitch(
-                coordinator, data.get("adapter"), entry.entry_id, address
+                coordinator, data.get("adapter"), entry.entry_id, device_info
             ),
-            SkellyColorCycleSwitch(coordinator, entry.entry_id, address, channel=0),
-            SkellyColorCycleSwitch(coordinator, entry.entry_id, address, channel=1),
-            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="head"),
-            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="arm"),
-            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="torso"),
-            SkellyMovementSwitch(coordinator, entry.entry_id, address, part="all"),
-            SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, address),
+            SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=0),
+            SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=1),
+            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="head"),
+            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="arm"),
+            SkellyMovementSwitch(
+                coordinator, entry.entry_id, device_info, part="torso"
+            ),
+            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="all"),
+            SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, device_info),
         ]
     )
 
@@ -61,7 +63,7 @@ class SkellyConnectedSwitch(SwitchEntity):
         coordinator: SkellyCoordinator,
         adapter,
         entry: ConfigEntry,
-        address: str | None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the connected switch."""
         self.hass = hass
@@ -70,8 +72,7 @@ class SkellyConnectedSwitch(SwitchEntity):
         self._entry = entry
         self._attr_translation_key = "connected"
         self._attr_unique_id = f"{entry.entry_id}_connected"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
         # Get initial state from config entry options, default to True (connected)
         self._is_on = entry.options.get("connected", True)
@@ -162,7 +163,7 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
         coordinator: SkellyCoordinator,
         adapter,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the live-mode switch for this config entry."""
         super().__init__(coordinator)
@@ -170,8 +171,7 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
         self.adapter = adapter
         self._attr_name = "Live Mode"
         self._attr_unique_id = f"{entry_id}_live_mode"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def available(self) -> bool:
@@ -232,7 +232,7 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
         channel: int,
     ) -> None:
         """Initialize the color cycle switch for a specific channel.
@@ -243,8 +243,8 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
             Coordinator providing access to the adapter/client
         entry_id: str
             Config entry id used to form unique id
-        address: str | None
-            BLE address used for device grouping
+        device_info: DeviceInfo | None
+            Device registry info for grouping entities
         channel: int
             Light channel number (0 = Torso, 1 = Head)
         """
@@ -253,8 +253,7 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
         self.channel = channel
         self._attr_name = "Torso Color Cycle" if channel == 0 else "Head Color Cycle"
         self._attr_unique_id = f"{entry_id}_color_cycle_{channel}"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def available(self) -> bool:
@@ -343,7 +342,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
         part: str,
     ) -> None:
         """Initialize the movement switch for a specific body part.
@@ -354,8 +353,8 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
             Coordinator providing access to the adapter/client
         entry_id: str
             Config entry id used to form unique id
-        address: str | None
-            BLE address used for device grouping
+        device_info: DeviceInfo | None
+            Device registry info for grouping entities
         part: str
             Body part: "head", "arm", "torso", or "all"
         """
@@ -365,8 +364,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         part_display = part.capitalize()
         self._attr_name = f"Movement {part_display}"
         self._attr_unique_id = f"{entry_id}_movement_{part}"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def available(self) -> bool:
@@ -484,7 +482,7 @@ class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the override chunk size switch."""
         super().__init__(coordinator)
@@ -492,8 +490,7 @@ class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
         self._attr_name = "Override Chunk Size"
         self._attr_unique_id = f"{entry_id}_override_chunk_size"
         self._attr_icon = "mdi:cog"
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def is_on(self) -> bool:

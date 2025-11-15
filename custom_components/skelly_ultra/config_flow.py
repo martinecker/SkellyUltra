@@ -18,9 +18,10 @@ from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
+from .const import DOMAIN
+
 _LOGGER = logging.getLogger(__name__)
 
-DOMAIN = "skelly_ultra"
 SHOW_ALL_TOKEN = "__show_all__"
 CONF_SERVER_URL = "server_url"
 CONF_USE_BLE_PROXY = "use_ble_proxy"

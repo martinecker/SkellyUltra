@@ -7,13 +7,13 @@ import logging
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from . import DOMAIN
+from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import get_device_info
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -48,13 +48,13 @@ async def async_setup_entry(
     """Set up the Skelly select entities."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
-    address = entry.data.get(CONF_ADDRESS) or data.get("adapter").address
+    device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
-            SkellyEyeIconSelect(coordinator, entry.entry_id, address),
-            SkellyEffectModeSelect(coordinator, entry.entry_id, address, channel=0),
-            SkellyEffectModeSelect(coordinator, entry.entry_id, address, channel=1),
+            SkellyEyeIconSelect(coordinator, entry.entry_id, device_info),
+            SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=0),
+            SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=1),
         ]
     )
 
@@ -65,7 +65,10 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
     _attr_has_entity_name = True
 
     def __init__(
-        self, coordinator: SkellyCoordinator, entry_id: str, address: str | None
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the eye icon select entity.
 
@@ -75,16 +78,15 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
             Coordinator providing access to the adapter/client
         entry_id: str
             Config entry id used to form unique id
-        address: str | None
-            BLE address used for device grouping
+        device_info: DeviceInfo | None
+            Device registry info for grouping entities
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Eye Icon"
         self._attr_unique_id = f"{entry_id}_eye_icon"
         self._options = EYE_ICONS
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def options(self) -> list[str]:
@@ -167,7 +169,7 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
-        address: str | None,
+        device_info: DeviceInfo | None,
         channel: int,
     ) -> None:
         """Initialize the effect mode select entity.
@@ -178,8 +180,8 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
             Coordinator providing access to the adapter/client
         entry_id: str
             Config entry id used to form unique id
-        address: str | None
-            BLE address used for device grouping
+        device_info: DeviceInfo | None
+            Device registry info for grouping entities
         channel: int
             Light channel number (0 = Torso, 1 = Head)
         """
@@ -189,8 +191,7 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         self._attr_name = "Torso Effect Mode" if channel == 0 else "Head Effect Mode"
         self._attr_unique_id = f"{entry_id}_effect_mode_{channel}"
         self._options = EFFECT_MODES
-        if address:
-            self._attr_device_info = DeviceInfo(identifiers={(DOMAIN, address)})
+        self._attr_device_info = device_info
 
     @property
     def options(self) -> list[str]:
