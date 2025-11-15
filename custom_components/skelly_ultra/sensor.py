@@ -40,7 +40,7 @@ async def async_setup_entry(
             SkellyFileCountReportedSensor(coordinator, entry.entry_id, device_info),
             SkellyFileCountReceivedSensor(coordinator, entry.entry_id, device_info),
             SkellyFileOrderSensor(coordinator, entry.entry_id, device_info),
-            SkellyLiveBTMacSensor(adapter, entry.entry_id, device_info),
+            SkellyLiveBTMacSensor(coordinator, entry.entry_id, device_info),
             SkellyPinCodeSensor(coordinator, entry.entry_id, device_info),
             transfer_sensor,
         ]
@@ -215,12 +215,12 @@ class SkellyLiveBTMacSensor(SensorEntity):
 
     def __init__(
         self,
-        adapter,
+        coordinator: SkellyCoordinator,
         entry_id: str,
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the Live BT MAC sensor."""
-        self.adapter = adapter
+        self.adapter = coordinator.adapter
         self._attr_name = "Live BT MAC"
         self._attr_unique_id = f"{entry_id}_live_bt_mac"
         self._attr_device_info = device_info
