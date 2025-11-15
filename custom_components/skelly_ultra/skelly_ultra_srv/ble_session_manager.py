@@ -58,6 +58,7 @@ class BLESession:
         self._sequence = 0
         self.created_at = datetime.now(UTC)
         self.last_activity = datetime.now(UTC)
+        self.is_connected = True  # Track connection state
 
     def next_sequence(self) -> int:
         """Get next sequence number.
@@ -369,6 +370,18 @@ class BLESessionManager:
             session_id=session_id, client=client, address=discovered_address
         )
 
+        # Register disconnection callback to detect when device disconnects
+        def disconnection_callback(client: BleakClient) -> None:
+            """Handle device disconnection."""
+            _LOGGER.warning(
+                "[BLE SESSION %s] Device disconnected: %s",
+                session_id[:8],
+                discovered_address,
+            )
+            session.is_connected = False
+
+        client.set_disconnected_callback(disconnection_callback)
+
         # Register raw notification handler
         def notification_callback(sender, data: bytes) -> None:
             """Capture raw notification bytes."""
@@ -424,6 +437,14 @@ class BLESessionManager:
         if not session:
             raise ValueError(f"Invalid session_id: {session_id}")
 
+        # Check if device is still connected
+        if not session.is_connected:
+            _LOGGER.error(
+                "[BLE SESSION %s] Cannot send command: device disconnected",
+                session_id[:8],
+            )
+            raise RuntimeError("BLE device is disconnected")
+
         # Log raw outgoing bytes
         raw_hex = " ".join(f"{b:02X}" for b in cmd_bytes)
         _LOGGER.debug(
@@ -439,6 +460,8 @@ class BLESessionManager:
             session.last_activity = datetime.now(UTC)
         except Exception as exc:
             _LOGGER.error("Failed to send command: %s", exc)
+            # Mark as disconnected if write fails
+            session.is_connected = False
             raise RuntimeError(f"Failed to send command: {exc}") from exc
 
     async def get_notifications(
@@ -502,9 +525,10 @@ class BLESessionManager:
 
         # Otherwise, wait for new notifications (long-poll)
         _LOGGER.debug(
-            "[BLE SESSION %s] Long-polling for notifications (timeout: %.1fs)",
+            "[BLE SESSION %s] Long-polling for notifications (timeout: %.1fs, connected: %s)",
             session_id[:8],
             timeout,
+            session.is_connected,
         )
         try:
             notif = await asyncio.wait_for(

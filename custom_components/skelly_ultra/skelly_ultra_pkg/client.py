@@ -402,9 +402,42 @@ class SkellyClient:
                 ) as resp:
                     data = await resp.json()
                     if not data.get("success"):
-                        raise RuntimeError(
-                            f"BLE proxy send failed: {data.get('error', 'unknown')}"
-                        )
+                        error = data.get("error", "unknown")
+                        # Check if device disconnected - attempt reconnection once
+                        if "disconnected" in error.lower():
+                            logger.warning(
+                                "BLE device disconnected, attempting automatic reconnection"
+                            )
+                            # Clear old session
+                            self._ble_session_id = None
+                            if self._polling_task and not self._polling_task.done():
+                                self._polling_task.cancel()
+
+                            # Try to reconnect
+                            if await self._connect_via_proxy(timeout=10.0):
+                                logger.info(
+                                    "Reconnected successfully, retrying command"
+                                )
+                                # Retry the command once after reconnection
+                                session = self._get_rest_session()
+                                async with session.post(
+                                    f"{self.server_url}/ble/send_command",
+                                    json={
+                                        "session_id": self._ble_session_id,
+                                        "command": cmd_bytes.hex(),
+                                    },
+                                    timeout=aiohttp.ClientTimeout(total=5.0),
+                                ) as retry_resp:
+                                    retry_data = await retry_resp.json()
+                                    if not retry_data.get("success"):
+                                        raise RuntimeError(
+                                            f"BLE proxy send failed after reconnect: {retry_data.get('error', 'unknown')}"
+                                        )
+                                return  # Command succeeded after reconnection
+                            else:
+                                logger.error("Failed to reconnect to BLE device")
+
+                        raise RuntimeError(f"BLE proxy send failed: {error}")
             except aiohttp.ClientError as err:
                 logger.exception("BLE proxy communication error during send_command")
                 raise RuntimeError(f"BLE proxy communication error: {err}") from err
