@@ -20,9 +20,17 @@ A Python REST API server using aiohttp for managing Bluetooth Classic device con
 ## 📖 Overview
 
 This server is designed to work around limitations of managing Bluetooth Classic audio devices from within Home Assistant containers. It provides a REST API interface to:
+
 - 📡 Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
 - 🎵 Play audio files through connected devices
 - 🔗 **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
+
+The server can also act as a BLE proxy to control the BLE device in on or more Skelly devices. It can:
+
+- Forward raw BLE command bytes sent from clients to the Skelly.
+- Receive and buffer raw notification bytes from the Skelly that can be polled by clients.
+
+For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 
 ## 📋 Requirements
 
@@ -74,6 +82,7 @@ python3 run_server.py
 ```
 
 For debug logging:
+
 ```bash
 python3 run_server.py --verbose
 ```
@@ -99,16 +108,19 @@ server.run()
 A systemd service file is provided: `skelly-ultra-server.service`
 
 1. Edit the service file to set your username and paths:
+
    ```bash
    nano skelly-ultra-server.service
    ```
 
 2. Copy to systemd directory:
+
    ```bash
    sudo cp skelly-ultra-server.service /etc/systemd/system/
    ```
 
 3. Enable and start:
+
    ```bash
    sudo systemctl daemon-reload
    sudo systemctl enable skelly-ultra-server
@@ -117,6 +129,7 @@ A systemd service file is provided: `skelly-ultra-server.service`
    ```
 
 4. View logs:
+
    ```bash
    sudo journalctl -u skelly-ultra-server -f
    ```
@@ -126,6 +139,7 @@ A systemd service file is provided: `skelly-ultra-server.service`
 Run the server in a Docker container. First, [build the Docker image](#-build-the-docker-image) if you haven't already.
 
 **Using docker run:**
+
 ```bash
 # Replace 1000 with your user ID (run 'id -u' to find it)
 docker run -d \
@@ -141,6 +155,7 @@ docker run -d \
 ```
 
 **Using docker-compose (recommended):**
+
 ```bash
 # Start the server
 docker-compose up -d
@@ -153,6 +168,7 @@ docker-compose down
 ```
 
 **Important Docker notes:**
+
 - `--privileged` flag is **required** for Bluetooth hardware access
 - `--network host` is **required** for Bluetooth device discovery
 - D-Bus socket mounts (`/var/run/dbus`, `/run/dbus`) are **required** for automated pairing
@@ -162,6 +178,7 @@ docker-compose down
 - **Important**: Update the PipeWire volume mount in docker-compose.yml with your user ID (run `id -u`)
 
 **Monitor Docker container:**
+
 ```bash
 # View logs
 docker logs -f skelly-ultra-server
@@ -183,6 +200,7 @@ docker restart skelly-ultra-server
 The server supports **automated pairing using D-Bus** via the `/pair_and_trust_by_name` and `/pair_and_trust_by_mac` endpoints. The server automatically handles privilege elevation when needed for pairing operations.
 
 **✨ Key Features:**
+
 - ✅ Server runs as regular user (for PipeWire/audio access)
 - ✅ Automatically uses `sudo` only when pairing/trusting devices
 - ✅ Fully automated PIN entry via D-Bus
@@ -193,11 +211,13 @@ The server supports **automated pairing using D-Bus** via the `/pair_and_trust_b
 **Check if you need this step:**
 
 First, test if you already have passwordless sudo:
+
 ```bash
 sudo -l
 ```
 
 If you see `(ALL) NOPASSWD: ALL` or similar, you can **skip this setup** - your system already allows passwordless sudo. This is common on:
+
 - **Raspberry Pi OS** (default `pi` user configuration)
 - Systems where you're in the `wheel` or `admin` group with NOPASSWD
 - Development environments with relaxed sudo policies
@@ -205,11 +225,13 @@ If you see `(ALL) NOPASSWD: ALL` or similar, you can **skip this setup** - your 
 **If sudo prompts for a password**, configure passwordless sudo for the Python executable:
 
 1. **Add to sudoers**:
+
    ```bash
    sudo visudo -f /etc/sudoers.d/skelly-ultra-server
    ```
 
 2. **Add this line** (replace `your_username` with your actual username):
+
    ```
    your_username ALL=(ALL) NOPASSWD: /usr/bin/python3
    ```
@@ -221,11 +243,13 @@ If you see `(ALL) NOPASSWD: ALL` or similar, you can **skip this setup** - your 
 #### Running the Server
 
 Simply run as your regular user:
+
 ```bash
 python3 -m skelly_ultra_srv.server
 ```
 
 **How it works:**
+
 1. Server runs as your user → ✅ PipeWire audio works perfectly
 2. When pairing needed → Automatically uses `sudo` for that operation only
 3. After pairing completes → Returns to user context
@@ -234,6 +258,7 @@ python3 -m skelly_ultra_srv.server
 #### Pairing Usage
 
 **Pair by device name:**
+
 ```bash
 curl -X POST http://localhost:8765/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
@@ -241,6 +266,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_name \
 ```
 
 **Pair by MAC address:**
+
 ```bash
 curl -X POST http://localhost:8765/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
@@ -260,6 +286,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_mac \
 If you cannot configure sudo, you can pair manually:
 
 #### Option 1: Use the helper script
+
 ```bash
 chmod +x pair_device.sh
 ./pair_device.sh <MAC_ADDRESS> <PIN>
@@ -267,6 +294,7 @@ chmod +x pair_device.sh
 ```
 
 #### Option 2: Manual pairing with bluetoothctl
+
 ```bash
 bluetoothctl
 > power on
@@ -288,6 +316,7 @@ bluetoothctl
 ### 📑 Endpoint Table of Contents
 
 #### Bluetooth Classic Audio Endpoints
+
 - [POST /pair_and_trust_by_name](#-post-pair_and_trust_by_name) - Automatically pair and trust device by name
 - [POST /pair_and_trust_by_mac](#-post-pair_and_trust_by_mac) - Automatically pair and trust device by MAC
 - [POST /connect_by_name](#-post-connect_by_name) - Connect to device by name
@@ -302,6 +331,7 @@ bluetoothctl
 - [GET /health](#-get-health) - Health check
 
 #### BLE Proxy Endpoints (Remote BLE Control)
+
 - [GET /ble/scan_devices](#-get-blescan_devices) - Scan for nearby BLE devices
 - [POST /ble/connect](#-post-bleconnect) - Connect to BLE device and create session
 - [POST /ble/send_command](#-post-blesend_command) - Send raw command bytes to BLE device
@@ -312,6 +342,7 @@ bluetoothctl
 ---
 
 ### 🔐 POST /pair_and_trust_by_name
+
 **Automatically pair and trust a Bluetooth device by name using D-Bus agent.**
 
 **✨ Auto-elevates with sudo when needed** - Server can run as regular user
@@ -319,6 +350,7 @@ bluetoothctl
 This endpoint discovers the device by name, then uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`. If the server is not running as root and the device is not already paired, it will automatically use `sudo` to elevate privileges only for the pairing operation.
 
 **Request Body:**
+
 ```json
 {
     "device_name": "Skelly Speaker",
@@ -328,11 +360,13 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 ```
 
 **Parameters:**
+
 - `device_name` (required): Name of the Bluetooth device to pair
 - `pin` (required): PIN code for pairing
 - `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
 
 **Response (success):**
+
 ```json
 {
     "success": true,
@@ -344,6 +378,7 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 ```
 
 **Response (device not found):**
+
 ```json
 {
     "success": false,
@@ -352,6 +387,7 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 ```
 
 **Status Codes:**
+
 - `200`: Pairing successful
 - `403`: Not running as root, no sudo available, and device not paired
 - `503`: D-Bus not available or device not found
@@ -360,6 +396,7 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 **Note:** If not running as root, the server will automatically attempt to use `sudo` for pairing. Ensure your user has sudo privileges (preferably passwordless for automation).
 
 **Example:**
+
 ```bash
 # Pair device by name with PIN
 curl -X POST http://localhost:8765/pair_and_trust_by_name \
@@ -373,6 +410,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_name \
 ```
 
 ### � POST /pair_and_trust_by_mac
+
 **Automatically pair and trust a Bluetooth device by MAC address using D-Bus agent.**
 
 **⚠️ Requires root privileges** - Server must be started with `sudo`
@@ -380,6 +418,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_name \
 This endpoint uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`.
 
 **Request Body:**
+
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",
@@ -389,11 +428,13 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 ```
 
 **Parameters:**
+
 - `mac` (required): MAC address of the device to pair
 - `pin` (required): PIN code for pairing
 - `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
 
 **Response (success):**
+
 ```json
 {
     "success": true,
@@ -404,6 +445,7 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 ```
 
 **Response (not root, device not paired):**
+
 ```json
 {
     "success": false,
@@ -412,6 +454,7 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 ```
 
 **Response (already paired):**
+
 ```json
 {
     "success": true,
@@ -422,12 +465,14 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 ```
 
 **Status Codes:**
+
 - `200`: Pairing successful
 - `403`: Not running as root and device not paired
 - `503`: D-Bus not available or device not found
 - `400`: Invalid request or pairing failed
 
 **Example:**
+
 ```bash
 # Pair device with PIN
 curl -X POST http://localhost:8765/pair_and_trust_by_mac \
@@ -441,6 +486,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_mac \
 ```
 
 **Notes:**
+
 - First time pairing requires root to register D-Bus agent
 - Once paired, device can be connected without root using `/connect_by_mac`
 - Device will be automatically trusted after successful pairing
@@ -450,6 +496,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_mac \
 Connect to a Bluetooth device by name.
 
 **Request Body:**
+
 ```json
 {
     "device_name": "Skelly Speaker",
@@ -467,9 +514,11 @@ Connect to a Bluetooth device by name.
 ```
 
 ### 🔗 POST /connect_by_mac
+
 Connect to a Bluetooth device by MAC address.
 
 **Request Body:**
+
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",
@@ -478,6 +527,7 @@ Connect to a Bluetooth device by MAC address.
 ```
 
 **Response:**
+
 ```json
 {
     "success": true,
@@ -487,9 +537,11 @@ Connect to a Bluetooth device by MAC address.
 ```
 
 ### 📛 GET /name
+
 Get the names of all connected devices, or query for a specific device by MAC address.
 
 **Query Parameters:**
+
 - `mac` (optional): MAC address to query a specific device
 
 **Response (all devices):**
@@ -504,6 +556,7 @@ Get the names of all connected devices, or query for a specific device by MAC ad
 ```
 
 **Response (specific device by MAC):**
+
 ```json
 {
     "device_name": "Skelly Speaker",
@@ -513,6 +566,7 @@ Get the names of all connected devices, or query for a specific device by MAC ad
 ```
 
 **Example:**
+
 ```bash
 # Get all connected devices
 curl http://localhost:8765/name
@@ -522,9 +576,11 @@ curl "http://localhost:8765/name?mac=AA:BB:CC:DD:EE:FF"
 ```
 
 ### 🔍 GET /mac
+
 Get the MAC addresses of all connected devices, or search for a device by name.
 
 **Query Parameters:**
+
 - `name` (optional): Device name to search for
 
 **Response (all devices):**
@@ -539,6 +595,7 @@ Get the MAC addresses of all connected devices, or search for a device by name.
 ```
 
 **Response (specific device by name):**
+
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",
@@ -548,6 +605,7 @@ Get the MAC addresses of all connected devices, or search for a device by name.
 ```
 
 **Example:**
+
 ```bash
 # Get all connected devices
 curl http://localhost:8765/mac
@@ -557,9 +615,11 @@ curl "http://localhost:8765/mac?name=Skelly%20Speaker"
 ```
 
 ### ▶️ POST /play
+
 Upload and play an audio file through the connected device(s).
 
 **Request:** multipart/form-data with the following fields:
+
 - `file`: The audio file (required)
 - `mac`: Optional single target device MAC address
 - `device_name`: Optional device name to look up
@@ -567,6 +627,7 @@ Upload and play an audio file through the connected device(s).
 - `all`: Optional "true" to play on all connected devices
 
 **Example (single device by MAC):**
+
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/audio.wav" \
@@ -574,6 +635,7 @@ curl -X POST http://localhost:8765/play \
 ```
 
 **Example (by device name):**
+
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/audio.wav" \
@@ -581,6 +643,7 @@ curl -X POST http://localhost:8765/play \
 ```
 
 **Example (all devices):**
+
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/audio.wav" \
@@ -600,9 +663,11 @@ curl -X POST http://localhost:8765/play \
 ```
 
 ### 🎵 POST /play_filename
+
 Play an audio file from a file path (legacy endpoint for direct file access).
 
 **Request Body:**
+
 ```json
 {
     "file_path": "/path/to/audio.wav",
@@ -614,6 +679,7 @@ Play an audio file from a file path (legacy endpoint for direct file access).
 ```
 
 **Response:**
+
 ```json
 {
     "success": true,
@@ -626,9 +692,11 @@ Play an audio file from a file path (legacy endpoint for direct file access).
 ```
 
 ### ⏹️ POST /stop
+
 Stop currently playing audio.
 
 **Request Body (optional):**
+
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",  // Optional: stop specific device
@@ -638,6 +706,7 @@ Stop currently playing audio.
 ```
 
 **Response:**
+
 ```json
 {
     "success": true,
@@ -647,9 +716,11 @@ Stop currently playing audio.
 ```
 
 ### 🔌 POST /disconnect
+
 Disconnect Bluetooth device(s).
 
 **Request Body (optional):**
+
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",  // Optional: disconnect specific device
@@ -659,6 +730,7 @@ Disconnect Bluetooth device(s).
 ```
 
 **Response:**
+
 ```json
 {
     "success": true,
@@ -667,9 +739,11 @@ Disconnect Bluetooth device(s).
 ```
 
 ### 📊 GET /status
+
 Get comprehensive status information including all connected devices and their playback sessions.
 
 **Response:**
+
 ```json
 {
     "bluetooth": {
@@ -695,9 +769,11 @@ Get comprehensive status information including all connected devices and their p
 ```
 
 ### ✅ GET /health
+
 Simple health check endpoint.
 
 **Response:**
+
 ```json
 {
     "status": "ok"
@@ -713,15 +789,18 @@ These endpoints enable remote BLE communication, allowing clients without BLE ha
 **Use Case:** Run this server on a machine with BLE hardware (e.g., Raspberry Pi), and control devices from Home Assistant running in a container or on a different machine.
 
 ### 🔍 GET /ble/scan_devices
+
 **Scan for nearby BLE devices.**
 
 Discovers Bluetooth Low Energy devices within range. Useful for finding device MAC addresses or verifying devices are visible to the server.
 
 **Query Parameters:**
+
 - `name_filter` (optional): Filter devices by name (case-insensitive substring match)
 - `timeout` (optional): Scan duration in seconds. Default: 10.0
 
 **Response (success):**
+
 ```json
 {
     "success": true,
@@ -750,11 +829,13 @@ Discovers Bluetooth Low Energy devices within range. Useful for finding device M
 ```
 
 **Status Codes:**
+
 - `200`: Scan successful
 - `400`: Invalid parameters
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # Scan for all BLE devices (10 second scan)
 curl "http://localhost:8765/ble/scan_devices"
@@ -773,6 +854,7 @@ curl -s "http://localhost:8765/ble/scan_devices?name_filter=Skelly" | jq
 ```
 
 **Notes:**
+
 - Devices must be powered on and advertising to be discovered
 - RSSI (signal strength) indicates proximity (-30 is very close, -90 is far)
 - Longer timeouts may discover more devices but take more time
@@ -780,6 +862,7 @@ curl -s "http://localhost:8765/ble/scan_devices?name_filter=Skelly" | jq
 - Returns empty list if no devices match the filter
 
 **Use Cases:**
+
 - Find your Skelly's MAC address if unknown
 - Verify Skelly is advertising and visible to the server
 - Debug BLE connectivity issues
@@ -787,11 +870,13 @@ curl -s "http://localhost:8765/ble/scan_devices?name_filter=Skelly" | jq
 - Monitor BLE device availability
 
 ### 🔗 POST /ble/connect
+
 **Connect to a BLE device and create a proxy session.**
 
 This endpoint discovers and connects to a Skelly Ultra BLE device, then creates a session for sending commands and receiving notifications.
 
 **Request Body:**
+
 ```json
 {
     "address": "AA:BB:CC:DD:EE:FF",  // Optional: specific MAC address
@@ -801,11 +886,13 @@ This endpoint discovers and connects to a Skelly Ultra BLE device, then creates 
 ```
 
 **Parameters:**
+
 - `address` (optional): BLE device MAC address. If provided, connects directly to this address.
 - `name_filter` (optional): Device name substring for discovery. Default is "Animated Skelly".
 - `timeout` (optional): Maximum time to wait for device discovery. Default is 10 seconds.
 
 **Response (success):**
+
 ```json
 {
     "success": true,
@@ -815,6 +902,7 @@ This endpoint discovers and connects to a Skelly Ultra BLE device, then creates 
 ```
 
 **Response (failure):**
+
 ```json
 {
     "success": false,
@@ -823,11 +911,13 @@ This endpoint discovers and connects to a Skelly Ultra BLE device, then creates 
 ```
 
 **Status Codes:**
+
 - `200`: Connection successful
 - `400`: Invalid request or device not found
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # Connect by name filter
 curl -X POST http://localhost:8765/ble/connect \
@@ -846,16 +936,19 @@ curl -X POST http://localhost:8765/ble/connect \
 ```
 
 **Notes:**
+
 - Save the returned `session_id` for subsequent requests
 - Each session maintains its own notification buffer
 - Sessions automatically timeout after 5 minutes of inactivity
 
 ### 📤 POST /ble/send_command
+
 **Send raw command bytes to the BLE device.**
 
 Sends command bytes (as hex string) to the connected BLE device. The server forwards bytes directly without parsing.
 
 **Request Body:**
+
 ```json
 {
     "session_id": "sess-abc12345",  // Optional if only one session exists
@@ -864,6 +957,7 @@ Sends command bytes (as hex string) to the connected BLE device. The server forw
 ```
 
 **Parameters:**
+
 - `session_id` (optional): Session identifier. If omitted and only one session exists, that session is used automatically.
 - `command` (required): Command bytes as hex string. Spaces are optional and will be removed.
 
@@ -883,11 +977,13 @@ Sends command bytes (as hex string) to the connected BLE device. The server forw
 ```
 
 **Status Codes:**
+
 - `200`: Command sent successfully
 - `400`: Invalid request (bad hex string, missing session_id when multiple sessions, etc.)
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # Send command with session ID
 curl -X POST http://localhost:8765/ble/send_command \
@@ -906,21 +1002,25 @@ curl -X POST http://localhost:8765/ble/send_command \
 ```
 
 **Notes:**
+
 - Hex string can have spaces or be continuous: `"AA E0"` and `"AAE0"` are equivalent
 - Commands are forwarded as raw bytes - no validation or parsing
 - Response notifications are buffered and retrieved via `/ble/notifications`
 
 ### 📥 GET /ble/notifications
+
 **Long-poll for raw BLE notifications.**
 
 Retrieves buffered BLE notifications as raw bytes (hex strings). This endpoint uses long-polling: if no notifications are available, the connection is held open until notifications arrive or the timeout expires.
 
 **Query Parameters:**
+
 - `session_id` (optional): Session identifier. If omitted and only one session exists, that session is used.
 - `since` (optional): Last sequence number received. Only notifications with higher sequence numbers are returned. Default: 0.
 - `timeout` (optional): Maximum time to wait for notifications in seconds. Default: 30.0.
 
 **Response (with notifications):**
+
 ```json
 {
     "notifications": [
@@ -943,6 +1043,7 @@ Retrieves buffered BLE notifications as raw bytes (hex strings). This endpoint u
 ```
 
 **Response (no notifications - timeout):**
+
 ```json
 {
     "notifications": [],
@@ -952,6 +1053,7 @@ Retrieves buffered BLE notifications as raw bytes (hex strings). This endpoint u
 ```
 
 **Response (error):**
+
 ```json
 {
     "notifications": [],
@@ -962,11 +1064,13 @@ Retrieves buffered BLE notifications as raw bytes (hex strings). This endpoint u
 ```
 
 **Status Codes:**
+
 - `200`: Success (may have empty notifications list if timeout)
 - `400`: Invalid request
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # Initial poll (get all notifications)
 curl "http://localhost:8765/ble/notifications?session_id=sess-abc12345&since=0&timeout=30"
@@ -982,6 +1086,7 @@ curl "http://localhost:8765/ble/notifications?since=0&timeout=30"
 ```
 
 **Notes:**
+
 - **Long-polling behavior**: Connection stays open until notifications arrive or timeout
 - Always use `next_sequence` from the response for the next poll
 - `has_more=true` indicates buffered notifications are available (poll again immediately)
@@ -990,6 +1095,7 @@ curl "http://localhost:8765/ble/notifications?since=0&timeout=30"
 - Continuous polling maintains near real-time notification delivery
 
 **Typical polling pattern:**
+
 ```bash
 # 1. Initial poll
 RESPONSE=$(curl -s "http://localhost:8765/ble/notifications?since=0&timeout=30")
@@ -1004,11 +1110,13 @@ done
 ```
 
 ### 🔌 POST /ble/disconnect
+
 **Disconnect BLE session and cleanup.**
 
 Cleanly disconnects from the BLE device and removes the session.
 
 **Request Body:**
+
 ```json
 {
     "session_id": "sess-abc12345"  // Optional if only one session exists
@@ -1016,6 +1124,7 @@ Cleanly disconnects from the BLE device and removes the session.
 ```
 
 **Parameters:**
+
 - `session_id` (optional): Session identifier to disconnect. If omitted and only one session exists, that session is disconnected.
 
 **Response (success):**
@@ -1034,11 +1143,13 @@ Cleanly disconnects from the BLE device and removes the session.
 ```
 
 **Status Codes:**
+
 - `200`: Disconnection successful
 - `400`: Invalid request
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # Disconnect specific session
 curl -X POST http://localhost:8765/ble/disconnect \
@@ -1052,17 +1163,20 @@ curl -X POST http://localhost:8765/ble/disconnect \
 ```
 
 **Notes:**
+
 - Session is completely removed and cannot be reused
 - Buffered notifications are discarded
 - Subsequent requests with that session_id will fail
 - Sessions also auto-disconnect after 5 minutes of inactivity
 
 ### 📋 GET /ble/sessions
+
 **List all active BLE sessions.**
 
 Returns information about all currently active BLE proxy sessions.
 
 **Response:**
+
 ```json
 {
     "sessions": [
@@ -1087,6 +1201,7 @@ Returns information about all currently active BLE proxy sessions.
 ```
 
 **Response fields:**
+
 - `session_id`: Unique session identifier
 - `address`: BLE device MAC address
 - `created_at`: Session creation timestamp (ISO 8601)
@@ -1099,6 +1214,7 @@ Returns information about all currently active BLE proxy sessions.
 - `500`: Internal server error
 
 **Example:**
+
 ```bash
 # List all sessions
 curl http://localhost:8765/ble/sessions
@@ -1108,6 +1224,7 @@ curl -s http://localhost:8765/ble/sessions | jq
 ```
 
 **Notes:**
+
 - Useful for monitoring and debugging
 - Sessions with `last_activity` older than 5 minutes will be auto-cleaned
 - `buffer_size` indicates how many notifications are waiting to be retrieved
@@ -1117,6 +1234,7 @@ curl -s http://localhost:8765/ble/sessions | jq
 ## 💡 Usage Examples
 
 ### � Pair and trust device (automated):
+
 ```bash
 # Start server
 python3 run_server.py
@@ -1133,6 +1251,7 @@ curl -X POST http://localhost:8765/connect_by_mac \
 ```
 
 ### �🔗 Connect to device by name:
+
 ```bash
 curl -X POST http://localhost:8765/connect_by_name \
   -H "Content-Type: application/json" \
@@ -1140,6 +1259,7 @@ curl -X POST http://localhost:8765/connect_by_name \
 ```
 
 ### 🔗 Connect to device by MAC:
+
 ```bash
 curl -X POST http://localhost:8765/connect_by_mac \
   -H "Content-Type: application/json" \
@@ -1147,6 +1267,7 @@ curl -X POST http://localhost:8765/connect_by_mac \
 ```
 
 ### ▶️ Upload and play audio on specific device:
+
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/spooky_sound.wav" \
@@ -1154,6 +1275,7 @@ curl -X POST http://localhost:8765/play \
 ```
 
 ### ▶️ Upload and play audio on all devices:
+
 ```bash
 curl -X POST http://localhost:8765/play \
   -F "file=@/path/to/spooky_sound.wav" \
@@ -1161,6 +1283,7 @@ curl -X POST http://localhost:8765/play \
 ```
 
 ### 🎵 Play audio from file path (legacy):
+
 ```bash
 curl -X POST http://localhost:8765/play_filename \
   -H "Content-Type: application/json" \
@@ -1168,6 +1291,7 @@ curl -X POST http://localhost:8765/play_filename \
 ```
 
 ### ⏹️ Stop playback on specific device:
+
 ```bash
 curl -X POST http://localhost:8765/stop \
   -H "Content-Type: application/json" \
@@ -1175,16 +1299,19 @@ curl -X POST http://localhost:8765/stop \
 ```
 
 ### ⏹️ Stop playback on all devices:
+
 ```bash
 curl -X POST http://localhost:8765/stop
 ```
 
 ### 📊 Get status:
+
 ```bash
 curl http://localhost:8765/status
 ```
 
 ### 🔌 Disconnect specific device:
+
 ```bash
 curl -X POST http://localhost:8765/disconnect \
   -H "Content-Type: application/json" \
@@ -1192,11 +1319,13 @@ curl -X POST http://localhost:8765/disconnect \
 ```
 
 ### 🔌 Disconnect all devices:
+
 ```bash
 curl -X POST http://localhost:8765/disconnect
 ```
 
 ### 🔷 Complete BLE proxy workflow:
+
 ```bash
 # 1. Connect to BLE device
 RESPONSE=$(curl -s -X POST http://localhost:8765/ble/connect \
@@ -1234,6 +1363,7 @@ curl -X POST http://localhost:8765/ble/disconnect \
 ```
 
 ### 🔷 Monitor BLE notifications in real-time:
+
 ```bash
 # Start monitoring (run in separate terminal)
 SESSION_ID="sess-abc12345"
@@ -1263,17 +1393,20 @@ curl http://localhost:8765/status
 ## 🛠️ Troubleshooting
 
 ### ❌ Server won't start
+
 - Check if port 8765 is already in use: `sudo netstat -tulpn | grep 8765`
 - Check if bluetoothctl is available: `which bluetoothctl`
 - Check if pw-play is available: `which pw-play`
 
 ### 📡 Can't connect to Bluetooth device
+
 - Make sure Bluetooth is powered on: `bluetoothctl power on`
 - Try scanning manually first: `bluetoothctl scan on`
 - Check if device is already paired: `bluetoothctl devices`
 - If device is already paired, try removing it first: `bluetoothctl remove AA:BB:CC:DD:EE:FF`
 
 ### 🔇 Audio playback not working
+
 - Check PipeWire is running: `systemctl --user status pipewire`
 - List available audio devices: `pw-cli list-objects | grep node.name`. You should see a device called `bluez_output.AA_BB_CC_DD_EE_FF.1` or similar with the MAC address of the Skelly live speaker.
 - Test pw-play directly: `pw-play --target AA:BB:CC:DD:EE:FF /path/to/test.wav` where `AA:BB:CC:DD:EE:FF` should be replaced with the MAC address of your Skelly live speaker.
@@ -1284,6 +1417,7 @@ curl http://localhost:8765/status
   - pulseaudio-utils
 
 ### 🔐 Permission issues
+
 - Make sure your user is in the `bluetooth` group: `sudo usermod -aG bluetooth $USER`
 - Log out and back in for group changes to take effect
 
