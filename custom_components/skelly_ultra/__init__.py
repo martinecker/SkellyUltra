@@ -86,10 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
 
-        # Perform initial coordinator refresh
-        # Use async_refresh instead of async_config_entry_first_refresh
-        # because the config entry is already loaded at this point
-        # Don't use async_request_refresh as it has a 2-second debounce delay
+        # Perform immediate initial coordinator refresh after successful connection
         try:
             await coordinator.async_refresh()
         except Exception:
