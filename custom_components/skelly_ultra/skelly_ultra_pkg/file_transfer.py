@@ -84,7 +84,7 @@ class FileTransferManager:
         self._chunk_cache: dict[int, bytes] = {}
 
     def get_chunk_size(
-        self, client: SkellyClient, override_size: int | None = None
+        self, client: SkellyClient, override_size: int | None = None,
     ) -> int:
         """Calculate optimal chunk size based on BLE MTU or use override value.
 
@@ -179,7 +179,7 @@ class FileTransferManager:
 
             try:
                 await self._do_transfer(
-                    client, file_data, filename, progress_callback, override_chunk_size
+                    client, file_data, filename, progress_callback, override_chunk_size,
                 )
                 logger.info("File transfer complete: %s", filename)
             except FileTransferCancelled:
@@ -269,12 +269,12 @@ class FileTransferManager:
         # Phase 1: Start transfer (C0)
         await client.start_send_data(size, chunk_count, filename)
         start_event = await self._wait_for_event(
-            client, parser.StartTransferEvent, self.TIMEOUT_START, "BBC0"
+            client, parser.StartTransferEvent, self.TIMEOUT_START, "BBC0",
         )
 
         if start_event.failed != 0:
             raise FileTransferError(
-                f"Device rejected start transfer (failed={start_event.failed})"
+                f"Device rejected start transfer (failed={start_event.failed})",
             )
 
         # Check if device wants to resume from previous transfer
@@ -296,13 +296,13 @@ class FileTransferManager:
 
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(
-            client, file_data, start_index, chunk_count, chunk_size, progress_callback
+            client, file_data, start_index, chunk_count, chunk_size, progress_callback,
         )
 
         # Phase 3: End transfer (C2)
         await client.end_send_data()
         end_event = await self._wait_for_event(
-            client, parser.TransferEndEvent, self.TIMEOUT_END, "BBC2"
+            client, parser.TransferEndEvent, self.TIMEOUT_END, "BBC2",
         )
 
         # Handle failed transfer - restart with smaller chunks
@@ -333,7 +333,7 @@ class FileTransferManager:
             # Restart transfer with smaller chunk size (max 2 retries)
             if retry_count >= 2:
                 raise FileTransferError(
-                    "Transfer failed after 3 attempts with progressively smaller chunks"
+                    "Transfer failed after 3 attempts with progressively smaller chunks",
                 )
 
             logger.warning(
@@ -359,13 +359,13 @@ class FileTransferManager:
         # Phase 4: Confirm file (C3)
         await client.confirm_file(filename)
         confirm_event = await self._wait_for_event(
-            client, parser.ResumeWriteEvent, self.TIMEOUT_CONFIRM, "BBC3"
+            client, parser.ResumeWriteEvent, self.TIMEOUT_CONFIRM, "BBC3",
         )
 
         # BBC3 parser returns TransferConfirmEvent with 'failed' field
         if confirm_event.written != 0:
             raise FileTransferError(
-                f"Device failed final confirmation (failed={confirm_event.failed})"
+                f"Device failed final confirmation (failed={confirm_event.failed})",
             )
 
         logger.info("File transfer confirmed by device: %s", filename)
@@ -415,7 +415,7 @@ class FileTransferManager:
                         await client.events.put(event)
                         # Stop sending more chunks - we'll handle retry in Phase 3
                         logger.info(
-                            "Stopping chunk transmission at %d due to early BBC2", idx
+                            "Stopping chunk transmission at %d due to early BBC2", idx,
                         )
                         return
                     # Not a TransferEndEvent, put it back
@@ -474,14 +474,14 @@ class FileTransferManager:
         while True:
             if self._state.cancelled:
                 raise FileTransferCancelled(
-                    "Transfer cancelled while waiting for response"
+                    "Transfer cancelled while waiting for response",
                 )
 
             # Check if we've exceeded timeout
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed > timeout:
                 raise FileTransferTimeout(
-                    f"Timeout waiting for {event_name} after {timeout}s"
+                    f"Timeout waiting for {event_name} after {timeout}s",
                 )
 
             # Try to get event from queue (non-blocking with short timeout)

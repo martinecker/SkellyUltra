@@ -4,10 +4,10 @@ Pure parsing functions that convert BLE notification bytes into typed events.
 """
 
 from dataclasses import dataclass
+import logging
+from typing import Any
 
 from . import constants as const
-from typing import Any
-import logging
 
 
 @dataclass
@@ -147,7 +147,7 @@ def get_ascii(hexpart: str) -> str:
 
 
 def parse_notification(
-    sender: Any, data: bytes
+    sender: Any, data: bytes,
 ) -> (
     LiveModeEvent
     | VolumeEvent
@@ -198,7 +198,7 @@ def parse_notification(
                     rgb=(r, g, b),
                     color_cycle=color_cycle,
                     effect_speed=effect_speed,
-                )
+                ),
             )
         eye_icon = int(hexstr[90:92], 16)
         return LiveModeEvent(
@@ -271,7 +271,7 @@ def parse_notification(
         playing = int(hexstr[8:10], 16)
         duration = int(hexstr[10:14], 16)
         return PlaybackEvent(
-            file_index=file_index, playing=bool(playing), duration=duration
+            file_index=file_index, playing=bool(playing), duration=duration,
         )
 
     if hexstr.startswith(const.RESP_DELETE_FILE):
@@ -288,7 +288,7 @@ def parse_notification(
         action_mode = int(hexstr[14:16], 16)
         mode_str = "Set Action" if action_mode else "Transfer Mode"
         return CapacityEvent(
-            capacity_kb=capacity, file_count=file_count, mode_str=mode_str
+            capacity_kb=capacity, file_count=file_count, mode_str=mode_str,
         )
 
     if hexstr.startswith(const.RESP_FILE_ORDER):
@@ -324,7 +324,7 @@ def parse_notification(
                         rgb=(r, g, b),
                         color_cycle=color_cycle,
                         effect_speed=effect_speed,
-                    )
+                    ),
                 )
         eye_icon = int(hexstr[110:112], 16)
         db_pos = int(hexstr[112:114], 16)

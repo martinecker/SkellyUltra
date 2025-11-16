@@ -8,6 +8,10 @@ from . import constants as const
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
 
+# Value limits
+MAX_FILE_INDEX = 0xFFFF  # 65535
+MAX_CLUSTER = 0xFFFFFFFF  # 4294967295
+
 
 def crc8(data: bytes) -> str:
     crc = 0
@@ -108,7 +112,7 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
     if not 1 <= mode <= 3:
         raise ValueError(
-            f"Light mode must be 1 (static), 2 (strobe), or 3 (pulsing), got {mode}"
+            f"Light mode must be 1 (static), 2 (strobe), or 3 (pulsing), got {mode}",
         )
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
@@ -125,7 +129,10 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
 
 
 def set_light_brightness(
-    channel: int, brightness: int, cluster: int = 0, name: str = ""
+    channel: int,
+    brightness: int,
+    cluster: int = 0,
+    name: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -184,7 +191,10 @@ def set_light_rgb(
 
 
 def set_light_speed(
-    channel: int, speed: int, cluster: int = 0, name: str = ""
+    channel: int,
+    speed: int,
+    cluster: int = 0,
+    name: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -208,7 +218,8 @@ def select_rgb_channel(channel: int) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
     return build_cmd(
-        const.CMD_SELECT_RGB_CHANNEL, "FF" if channel == -1 else int_to_hex(channel, 1)
+        const.CMD_SELECT_RGB_CHANNEL,
+        "FF" if channel == -1 else int_to_hex(channel, 1),
     )
 
 
@@ -219,7 +230,7 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     if not name and cluster > 0:
         raise ValueError(
-            "Name cannot be empty for set_eye_icon when cluster is specified"
+            "Name cannot be empty for set_eye_icon when cluster is specified",
         )
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -242,7 +253,7 @@ def set_action(action: int, cluster: int, name: str) -> bytes:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     if not name and cluster > 0:
         raise ValueError(
-            "Name cannot be empty for set_action when cluster is specified"
+            "Name cannot be empty for set_action when cluster is specified",
         )
     name_utf16 = to_utf16le_hex(name)
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
@@ -261,7 +272,7 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
         raise ValueError(f"Size must be between 0 and {0xFFFFFFFF}, got {size}")
     if not 0 <= chunk_count <= 0xFFFF:
         raise ValueError(
-            f"Chunk count must be between 0 and {0xFFFF}, got {chunk_count}"
+            f"Chunk count must be between 0 and {0xFFFF}, got {chunk_count}",
         )
     if not filename:
         raise ValueError("Filename cannot be empty")
@@ -280,7 +291,8 @@ def send_data_chunk(index: int, data: bytes) -> bytes:
     if not data:
         raise ValueError("Data cannot be empty")
     return build_cmd(
-        const.CMD_SEND_DATA_CHUNK, int_to_hex(index, 2) + data.hex().upper()
+        const.CMD_SEND_DATA_CHUNK,
+        int_to_hex(index, 2) + data.hex().upper(),
     )
 
 
@@ -308,16 +320,43 @@ def play_file(file_index: int) -> bytes:
 
 
 def stop_file(file_index: int) -> bytes:
-    if not 0 <= file_index <= 0xFFFF:
-        raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
+    """Stop playback of a specific file by index.
+
+    Args:
+        file_index: The 0-based index of the file to stop (0-65535)
+
+    Returns:
+        Command bytes to send via BLE
+
+    Raises:
+        ValueError: If file_index is out of valid range
+    """
+    if not 0 <= file_index <= MAX_FILE_INDEX:
+        msg = f"File index must be between 0 and {MAX_FILE_INDEX}, got {file_index}"
+        raise ValueError(msg)
     return build_cmd(const.CMD_PLAY_STOP_FILE, int_to_hex(file_index, 2) + "00")
 
 
 def delete_file(file_index: int, cluster: int) -> bytes:
-    if not 0 <= file_index <= 0xFFFF:
-        raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")
-    if not 0 <= cluster <= 0xFFFFFFFF:
-        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
+    """Delete a file from device storage.
+
+    Args:
+        file_index: The 0-based index of the file to delete (0-65535)
+        cluster: The cluster location of the file (0-4294967295)
+
+    Returns:
+        Command bytes to send via BLE
+
+    Raises:
+        ValueError: If file_index or cluster is out of valid range
+    """
+    if not 0 <= file_index <= MAX_FILE_INDEX:
+        msg = f"File index must be between 0 and {MAX_FILE_INDEX}, got {file_index}"
+        raise ValueError(msg)
+    if not 0 <= cluster <= MAX_CLUSTER:
+        msg = f"Cluster must be between 0 and {MAX_CLUSTER}, got {cluster}"
+        raise ValueError(msg)
     return build_cmd(
-        const.CMD_DELETE_FILE, int_to_hex(file_index, 2) + int_to_hex(cluster, 4)
+        const.CMD_DELETE_FILE,
+        int_to_hex(file_index, 2) + int_to_hex(cluster, 4),
     )

@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Callable
+import contextlib
 import logging
 from typing import Any
 
@@ -38,12 +39,12 @@ class SkellyClient:
         self._polling_task: asyncio.Task | None = None
 
     def register_notification_handler(
-        self, handler: Callable[[Any, bytes], None]
+        self, handler: Callable[[Any, bytes], None],
     ) -> None:
         self._notification_handler = handler
 
     def register_parsed_notification_handler(
-        self, handler: Callable[[Any, Any], None]
+        self, handler: Callable[[Any, Any], None],
     ) -> None:
         self._parsed_handler = handler
 
@@ -60,7 +61,7 @@ class SkellyClient:
         return self._client is not None and getattr(self._client, "is_connected", False)
 
     async def connect(
-        self, timeout: float = 10.0, client: BleakClient | None = None
+        self, timeout: float = 10.0, client: BleakClient | None = None,
     ) -> bool:
         """Connect logic separated from notification registration.
 
@@ -143,10 +144,8 @@ class SkellyClient:
                     except asyncio.QueueFull:
                         pass
                     if self._parsed_handler:
-                        try:
+                        with contextlib.suppress(Exception):
                             self._parsed_handler(sender, parsed)
-                        except Exception:
-                            pass
             except Exception:
                 pass
 
@@ -160,10 +159,8 @@ class SkellyClient:
         # Stop polling task if running
         if self._polling_task and not self._polling_task.done():
             self._polling_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._polling_task
-            except asyncio.CancelledError:
-                pass
             self._polling_task = None
 
         # Disconnect BLE proxy session if active
@@ -178,11 +175,11 @@ class SkellyClient:
                     data = await resp.json()
                     if data.get("success"):
                         logger.info(
-                            "Disconnected BLE proxy session %s", self._ble_session_id
+                            "Disconnected BLE proxy session %s", self._ble_session_id,
                         )
                     else:
                         logger.warning(
-                            "BLE proxy disconnect reported failure: %s", data
+                            "BLE proxy disconnect reported failure: %s", data,
                         )
             except Exception:
                 logger.exception("Failed to disconnect BLE proxy session")
@@ -191,22 +188,16 @@ class SkellyClient:
 
         # Disconnect direct BLE client if active
         if self._client:
-            try:
+            with contextlib.suppress(Exception):
                 await self._client.stop_notify(commands.NOTIFY_UUID)
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 await self._client.disconnect()
-            except Exception:
-                pass
             self._client = None
 
         # Close REST session if it exists
         if self._rest_session:
-            try:
+            with contextlib.suppress(Exception):
                 await self._rest_session.close()
-            except Exception:
-                pass
             self._rest_session = None
 
     def _get_rest_session(self) -> aiohttp.ClientSession:
@@ -265,7 +256,7 @@ class SkellyClient:
             self._live_mode_client_address = None
 
     async def play_audio_live_mode(
-        self, file_data: bytes, filename: str = "audio.wav", mac: str | None = None
+        self, file_data: bytes, filename: str = "audio.wav", mac: str | None = None,
     ) -> dict[str, Any]:
         """Play audio file via REST server to classic BT device.
 
@@ -291,7 +282,7 @@ class SkellyClient:
             # Create multipart form data
             data = aiohttp.FormData()
             data.add_field(
-                "file", file_data, filename=filename, content_type="audio/wav"
+                "file", file_data, filename=filename, content_type="audio/wav",
             )
             if target_mac:
                 data.add_field("mac", target_mac)
@@ -406,7 +397,7 @@ class SkellyClient:
                         # Check if device disconnected - attempt reconnection once
                         if "disconnected" in error.lower():
                             logger.warning(
-                                "BLE device disconnected, attempting automatic reconnection"
+                                "BLE device disconnected, attempting automatic reconnection",
                             )
                             # Clear old session
                             self._ble_session_id = None
@@ -416,7 +407,7 @@ class SkellyClient:
                             # Try to reconnect
                             if await self._connect_via_proxy(timeout=10.0):
                                 logger.info(
-                                    "Reconnected successfully, retrying command"
+                                    "Reconnected successfully, retrying command",
                                 )
                                 # Retry the command once after reconnection
                                 session = self._get_rest_session()
@@ -431,11 +422,10 @@ class SkellyClient:
                                     retry_data = await retry_resp.json()
                                     if not retry_data.get("success"):
                                         raise RuntimeError(
-                                            f"BLE proxy send failed after reconnect: {retry_data.get('error', 'unknown')}"
+                                            f"BLE proxy send failed after reconnect: {retry_data.get('error', 'unknown')}",
                                         )
                                 return  # Command succeeded after reconnection
-                            else:
-                                logger.error("Failed to reconnect to BLE device")
+                            logger.error("Failed to reconnect to BLE device")
 
                         raise RuntimeError(f"BLE proxy send failed: {error}")
             except aiohttp.ClientError as err:
@@ -502,23 +492,23 @@ class SkellyClient:
         name: str = "",
     ) -> None:
         await self.send_command(
-            commands.set_light_rgb(channel, r, g, b, color_cycle, cluster, name)
+            commands.set_light_rgb(channel, r, g, b, color_cycle, cluster, name),
         )
 
     async def set_light_brightness(
-        self, channel: int, brightness: int, cluster: int = 0, name: str = ""
+        self, channel: int, brightness: int, cluster: int = 0, name: str = "",
     ) -> None:
         await self.send_command(
-            commands.set_light_brightness(channel, brightness, cluster, name)
+            commands.set_light_brightness(channel, brightness, cluster, name),
         )
 
     async def set_light_mode(
-        self, channel: int, mode: int, cluster: int = 0, name: str = ""
+        self, channel: int, mode: int, cluster: int = 0, name: str = "",
     ) -> None:
         await self.send_command(commands.set_light_mode(channel, mode, cluster, name))
 
     async def set_light_speed(
-        self, channel: int, speed: int, cluster: int = 0, name: str = ""
+        self, channel: int, speed: int, cluster: int = 0, name: str = "",
     ) -> None:
         await self.send_command(commands.set_light_speed(channel, speed, cluster, name))
 
@@ -557,7 +547,7 @@ class SkellyClient:
         await self.send_command(commands.delete_file(file_index, cluster))
 
     async def delete_file_with_confirmation(
-        self, file_index: int, cluster: int, timeout: float = 5.0
+        self, file_index: int, cluster: int, timeout: float = 5.0,
     ) -> bool:
         """Delete a file and wait for confirmation from the device.
 
@@ -576,7 +566,7 @@ class SkellyClient:
         """
         await self.send_command(commands.delete_file(file_index, cluster))
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.DeleteFileEvent), timeout=timeout
+            lambda e: isinstance(e, parser.DeleteFileEvent), timeout=timeout,
         )
         return ev.success
 
@@ -613,7 +603,7 @@ class SkellyClient:
                 if remaining <= 0:
                     raise TimeoutError(
                         f"Timeout waiting for file info events. "
-                        f"Expected {expected_count}, received {len(file_info_events)}"
+                        f"Expected {expected_count}, received {len(file_info_events)}",
                     )
 
                 try:
@@ -629,13 +619,13 @@ class SkellyClient:
                     if expected_count is None:
                         expected_count = ev.total_files
                         logger.debug(
-                            "Expecting %d total FileInfoEvents", expected_count
+                            "Expecting %d total FileInfoEvents", expected_count,
                         )
 
                     # Check if we've received all expected events
                     if len(file_info_events) >= expected_count:
                         logger.debug(
-                            "Collected all %d FileInfoEvents", len(file_info_events)
+                            "Collected all %d FileInfoEvents", len(file_info_events),
                         )
                         return file_info_events
                 else:
@@ -649,20 +639,18 @@ class SkellyClient:
         finally:
             # Re-queue non-FileInfoEvent events
             for e in temp:
-                try:
+                with contextlib.suppress(Exception):
                     self.events.put_nowait(e)
-                except Exception:
-                    pass
 
     async def set_music_order(
-        self, total: int, index: int, file_serial: int, filename: str
+        self, total: int, index: int, file_serial: int, filename: str,
     ) -> None:
         await self.send_command(
-            commands.set_music_order(total, index, file_serial, filename)
+            commands.set_music_order(total, index, file_serial, filename),
         )
 
     async def set_music_animation(
-        self, action: int, cluster: int, filename: str
+        self, action: int, cluster: int, filename: str,
     ) -> None:
         await self.send_command(commands.set_music_animation(action, cluster, filename))
 
@@ -694,16 +682,14 @@ class SkellyClient:
         finally:
             # re-queue temp events in order
             for e in temp:
-                try:
+                with contextlib.suppress(Exception):
                     self.events.put_nowait(e)
-                except Exception:
-                    pass
 
     async def get_volume(self, timeout: float = 2.0) -> int:
         """Query volume and await a VolumeEvent; returns the numeric volume."""
         await self.send_command(commands.query_volume())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.VolumeEvent), timeout=timeout
+            lambda e: isinstance(e, parser.VolumeEvent), timeout=timeout,
         )
         return ev.volume
 
@@ -711,14 +697,14 @@ class SkellyClient:
         """Query the live name and await a LiveNameEvent; returns the name string."""
         await self.send_command(commands.query_live_name())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveNameEvent), timeout=timeout
+            lambda e: isinstance(e, parser.LiveNameEvent), timeout=timeout,
         )
         return ev.name
 
     async def get_file_order(self, timeout: float = 2.0) -> list[int]:
         await self.send_command(commands.query_file_order())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.FileOrderEvent), timeout=timeout
+            lambda e: isinstance(e, parser.FileOrderEvent), timeout=timeout,
         )
         return ev.file_indices
 
@@ -726,20 +712,19 @@ class SkellyClient:
         """Query the device live mode and return the eye_icon integer."""
         await self.send_command(commands.query_live_mode())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout
+            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout,
         )
         return ev.eye_icon
 
     async def get_live_mode(self, timeout: float = 2.0) -> parser.LiveModeEvent:
         """Query the device live mode and return the parsed LiveModeEvent."""
         await self.send_command(commands.query_live_mode())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout
+        return await self._wait_for_event(
+            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout,
         )
-        return ev
 
     async def get_light_info(
-        self, channel: int, timeout: float = 2.0
+        self, channel: int, timeout: float = 2.0,
     ) -> parser.LightInfo:
         """Query the device live mode and return the LightInfo for the specified channel index.
 
@@ -748,7 +733,7 @@ class SkellyClient:
         """
         await self.send_command(commands.query_live_mode())
         ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout
+            lambda e: isinstance(e, parser.LiveModeEvent), timeout=timeout,
         )
         lights = ev.lights
         if channel < 0 or channel >= len(lights):
@@ -757,10 +742,9 @@ class SkellyClient:
 
     async def get_capacity(self, timeout: float = 2.0) -> parser.CapacityEvent:
         await self.send_command(commands.query_capacity())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout
+        return await self._wait_for_event(
+            lambda e: isinstance(e, parser.CapacityEvent), timeout=timeout,
         )
-        return ev
 
     async def get_device_params(self, timeout: float = 2.0) -> parser.DeviceParamsEvent:
         """Query device parameters including PIN code, WiFi password, and channels.
@@ -769,10 +753,9 @@ class SkellyClient:
             DeviceParamsEvent with device configuration parameters.
         """
         await self.send_command(commands.query_device_params())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.DeviceParamsEvent), timeout=timeout
+        return await self._wait_for_event(
+            lambda e: isinstance(e, parser.DeviceParamsEvent), timeout=timeout,
         )
-        return ev
 
     # Private helper methods for connect_live_mode
 
@@ -806,7 +789,7 @@ class SkellyClient:
             return True
 
     async def _attempt_automated_pairing(
-        self, live_name: str, bt_pin: str, timeout: float
+        self, live_name: str, bt_pin: str, timeout: float,
     ) -> tuple[str | None, bool]:
         """Attempt automated pairing via REST server.
 
@@ -839,7 +822,7 @@ class SkellyClient:
                     )
                     return mac_address, True
                 logger.warning(
-                    "Pairing succeeded but no MAC address returned, falling back to connect_by_name"
+                    "Pairing succeeded but no MAC address returned, falling back to connect_by_name",
                 )
             error_msg = pair_data.get("error", "Unknown error")
             logger.info(
@@ -858,7 +841,7 @@ class SkellyClient:
         return None, False
 
     async def _connect_by_mac_after_pairing(
-        self, mac_address: str, bt_pin: str, timeout: float
+        self, mac_address: str, bt_pin: str, timeout: float,
     ) -> str | None:
         """Connect to paired device by MAC address.
 
@@ -883,7 +866,7 @@ class SkellyClient:
 
             if connect_data.get("success"):
                 logger.info(
-                    "Successfully connected to classic BT device %s", mac_address
+                    "Successfully connected to classic BT device %s", mac_address,
                 )
                 self._live_mode_client_address = mac_address
                 return mac_address
@@ -899,13 +882,13 @@ class SkellyClient:
 
         except (TimeoutError, aiohttp.ClientError) as err:
             logger.warning(
-                "Error connecting by MAC after pairing: %s, trying connect_by_name", err
+                "Error connecting by MAC after pairing: %s, trying connect_by_name", err,
             )
 
         return None
 
     async def _connect_by_name_simple(
-        self, live_name: str, bt_pin: str, timeout: float
+        self, live_name: str, bt_pin: str, timeout: float,
     ) -> str | None:
         """Connect to device by name without retry logic.
 
@@ -982,7 +965,7 @@ class SkellyClient:
         return None
 
     async def _connect_by_name_with_retry(
-        self, live_name: str, bt_pin: str, timeout: float
+        self, live_name: str, bt_pin: str, timeout: float,
     ) -> str | None:
         """Connect to device by name with retry logic on timeout.
 
@@ -1003,7 +986,7 @@ class SkellyClient:
         except TimeoutError:
             logger.warning("REST server connection request timed out")
             logger.info(
-                "Checking REST server status to verify connection for %s", live_name
+                "Checking REST server status to verify connection for %s", live_name,
             )
 
             # Check if connection succeeded despite timeout
@@ -1019,7 +1002,7 @@ class SkellyClient:
 
             try:
                 mac_address = await self._connect_by_name_simple(
-                    live_name, bt_pin, timeout
+                    live_name, bt_pin, timeout,
                 )
                 if mac_address:
                     logger.info(
@@ -1031,8 +1014,7 @@ class SkellyClient:
             except TimeoutError:
                 logger.warning("REST server retry connection also timed out")
                 # One more status check after retry timeout
-                mac_address = await self._check_device_in_status(live_name)
-                return mac_address
+                return await self._check_device_in_status(live_name)
 
             except aiohttp.ClientError as err:
                 logger.warning("REST server retry communication error: %s", err)
@@ -1146,10 +1128,8 @@ class SkellyClient:
 
                             # Call notification handler (if registered)
                             if self._notification_handler:
-                                try:
+                                with contextlib.suppress(Exception):
                                     self._notification_handler(sender, raw_data)
-                                except Exception:
-                                    pass
 
                             # Parse and queue event
                             try:
@@ -1161,17 +1141,15 @@ class SkellyClient:
                                     except asyncio.QueueFull:
                                         pass
                                     if self._parsed_handler:
-                                        try:
+                                        with contextlib.suppress(Exception):
                                             self._parsed_handler(sender, parsed)
-                                        except Exception:
-                                            pass
                             except Exception:
                                 pass
 
                         except Exception:
                             logger.exception("Error processing notification from proxy")
 
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 # Long-poll timeout is expected, just retry
                 logger.debug("BLE notification poll timeout, retrying")
                 continue
@@ -1188,7 +1166,7 @@ class SkellyClient:
         logger.info("BLE notification polling loop stopped")
 
     async def connect_live_mode(
-        self, timeout: float = 40.0, bt_pin: str = "1234"
+        self, timeout: float = 40.0, bt_pin: str = "1234",
     ) -> str | None:
         """Enable classic BT and connect via REST server.
 
@@ -1228,18 +1206,18 @@ class SkellyClient:
             return None
 
         logger.info(
-            "Requesting REST server to connect to classic BT device: %s", live_name
+            "Requesting REST server to connect to classic BT device: %s", live_name,
         )
 
         # Step 3: Try automated pairing (requires root privileges on server)
         mac_address, pairing_succeeded = await self._attempt_automated_pairing(
-            live_name, bt_pin, timeout
+            live_name, bt_pin, timeout,
         )
 
         # Step 4: If pairing succeeded, connect by MAC address
         if pairing_succeeded and mac_address:
             connected_mac = await self._connect_by_mac_after_pairing(
-                mac_address, bt_pin, timeout
+                mac_address, bt_pin, timeout,
             )
             if connected_mac:
                 return connected_mac

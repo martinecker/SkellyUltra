@@ -10,6 +10,6 @@ from .parser import handle_notification, parse_notification
 
 __all__ = [
     "SkellyClient",
-    "parse_notification",
     "handle_notification",
+    "parse_notification",
 ]
