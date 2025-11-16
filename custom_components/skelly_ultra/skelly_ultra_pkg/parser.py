@@ -147,7 +147,8 @@ def get_ascii(hexpart: str) -> str:
 
 
 def parse_notification(
-    sender: Any, data: bytes,
+    sender: Any,
+    data: bytes,
 ) -> (
     LiveModeEvent
     | VolumeEvent
@@ -172,8 +173,8 @@ def parse_notification(
     hexstr = data.hex().upper()
 
     if hexstr.startswith(const.RESP_KEEP_ALIVE):
-        # Keep alive message - strip the FEDC prefix and return the payload
-        payload = data[2:]  # Skip first 2 bytes (FEDC)
+        # Keep alive message - strip frame markers (FEDC prefix, EF suffix)
+        payload = data[2:-1]  # Skip first 2 bytes (FEDC) and last byte (EF)
         return KeepAliveEvent(payload=payload)
 
     if hexstr.startswith(const.RESP_LIVE_MODE):
@@ -271,7 +272,9 @@ def parse_notification(
         playing = int(hexstr[8:10], 16)
         duration = int(hexstr[10:14], 16)
         return PlaybackEvent(
-            file_index=file_index, playing=bool(playing), duration=duration,
+            file_index=file_index,
+            playing=bool(playing),
+            duration=duration,
         )
 
     if hexstr.startswith(const.RESP_DELETE_FILE):
@@ -288,7 +291,9 @@ def parse_notification(
         action_mode = int(hexstr[14:16], 16)
         mode_str = "Set Action" if action_mode else "Transfer Mode"
         return CapacityEvent(
-            capacity_kb=capacity, file_count=file_count, mode_str=mode_str,
+            capacity_kb=capacity,
+            file_count=file_count,
+            mode_str=mode_str,
         )
 
     if hexstr.startswith(const.RESP_FILE_ORDER):
