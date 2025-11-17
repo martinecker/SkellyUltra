@@ -405,13 +405,32 @@ class BLESessionManager:
         # At this point, device is guaranteed to be set (or exception raised)
         discovered_address = device.address
 
+        # Generate session ID early so we can use it in the callback
+        session_id = f"sess-{uuid.uuid4().hex[:8]}"
+
+        # Create disconnection callback before creating the client
+        # Use a list to store session reference since we need to create it after client
+        session_ref: list[BLESession | None] = [None]
+
+        def disconnection_callback(client: BleakClient) -> None:
+            """Handle device disconnection."""
+            _LOGGER.warning(
+                "[BLE SESSION %s] Device disconnected: %s",
+                session_id[:8],
+                discovered_address,
+            )
+            if session_ref[0]:
+                session_ref[0].is_connected = False
+
         # Pause background scanner to avoid connection conflicts
         await self._pause_scanner()
 
         try:
-            # Create BleakClient with BLEDevice object
+            # Create BleakClient with disconnected_callback parameter
             _LOGGER.info("Connecting to BLE device: %s", discovered_address)
-            client = BleakClient(device, timeout=timeout)
+            client = BleakClient(
+                device, timeout=timeout, disconnected_callback=disconnection_callback
+            )
             try:
                 await client.connect()
             except Exception as exc:
@@ -423,23 +442,11 @@ class BLESessionManager:
             await self._resume_scanner()
             raise
 
-        # Create session
-        session_id = f"sess-{uuid.uuid4().hex[:8]}"
+        # Create session and store reference for the disconnection callback
         session = BLESession(
             session_id=session_id, client=client, address=discovered_address
         )
-
-        # Register disconnection callback to detect when device disconnects
-        def disconnection_callback(client: BleakClient) -> None:
-            """Handle device disconnection."""
-            _LOGGER.warning(
-                "[BLE SESSION %s] Device disconnected: %s",
-                session_id[:8],
-                discovered_address,
-            )
-            session.is_connected = False
-
-        client.set_disconnected_callback(disconnection_callback)
+        session_ref[0] = session
 
         # Register raw notification handler
         def notification_callback(sender, data: bytes) -> None:
@@ -565,27 +572,34 @@ class BLESessionManager:
         notifications = []
 
         # First, collect any buffered notifications with sequence > since
+        # We peek at all notifications but don't remove them from the queue yet
         temp_buffer = []
         while not session.notification_buffer.empty():
             notif = session.notification_buffer.get_nowait()
+            temp_buffer.append(notif)
             if notif.sequence > since:
                 notifications.append(notif)
-            else:
-                temp_buffer.append(notif)  # Re-queue older ones
 
-        # Put back notifications we didn't use
+        # Put ALL notifications back into the queue (keeps buffer for debugging)
         for notif in temp_buffer:
             try:
                 session.notification_buffer.put_nowait(notif)
             except asyncio.QueueFull:
-                pass
+                # If buffer is full, we'll drop oldest notifications
+                try:
+                    session.notification_buffer.get_nowait()
+                    session.notification_buffer.put_nowait(notif)
+                except Exception:
+                    pass
 
         # If we have notifications, return immediately
         if notifications:
-            _LOGGER.debug(
-                "[BLE SESSION %s] Returning %d buffered notifications",
+            _LOGGER.info(
+                "[BLE SESSION %s] Returning %d buffered notifications (since=%d, sequences=%s)",
                 session_id[:8],
                 len(notifications),
+                since,
+                [n.sequence for n in notifications],
             )
             return {
                 "notifications": [
@@ -694,7 +708,7 @@ class BLESessionManager:
             "created_at": session.created_at.isoformat(),
             "last_activity": session.last_activity.isoformat(),
             "buffer_size": session.notification_buffer.qsize(),
-            "is_connected": session.client.is_connected,
+            "is_connected": bool(session.client.is_connected),
         }
 
     def list_sessions(self) -> list[dict]:
