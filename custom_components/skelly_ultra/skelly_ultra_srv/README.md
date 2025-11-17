@@ -32,6 +32,8 @@ The server can also act as a BLE proxy to control the BLE device in on or more S
 
 For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 
+**Note**: The BLE proxy functionality works on Windows, Linux, and other platforms. However, the Bluetooth Classic A2DP speaker endpoints require a Linux-based system due to dependencies on command line tools like `bluetoothctl` that are only available there.
+
 ## 📋 Requirements
 
 - 🐍 **Python 3.11+**
