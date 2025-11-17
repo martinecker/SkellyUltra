@@ -16,6 +16,23 @@ from .bluetooth_manager import BluetoothManager
 _LOGGER = logging.getLogger(__name__)
 
 
+@web.middleware
+async def cors_middleware(request, handler):
+    """Add CORS headers to all responses."""
+    if request.method == "OPTIONS":
+        # Handle preflight requests
+        response = web.Response()
+    else:
+        response = await handler(request)
+
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, DELETE, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization"
+    response.headers["Access-Control-Max-Age"] = "3600"
+
+    return response
+
+
 class SkellyUltraServer:
     """REST server for managing Bluetooth connections and audio playback."""
 
@@ -35,7 +52,7 @@ class SkellyUltraServer:
         self.bt_manager = BluetoothManager()
         self.audio_player = AudioPlayer()
         self.ble_manager = BLESessionManager()
-        self.app = web.Application()
+        self.app = web.Application(middlewares=[cors_middleware])
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
         self.app.on_startup.append(self._on_startup)
         self.app.on_cleanup.append(self._on_cleanup)
