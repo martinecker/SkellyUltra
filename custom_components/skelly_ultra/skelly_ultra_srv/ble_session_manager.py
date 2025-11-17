@@ -316,12 +316,12 @@ class BLESessionManager:
             try:
                 await asyncio.sleep(60)  # Check every minute
 
-                # Find and remove idle sessions (5 minute timeout)
+                # Find and remove idle sessions (2 minute timeout)
                 now = datetime.now(UTC)
                 idle_sessions = []
                 for session_id, session in self._sessions.items():
                     idle_time = (now - session.last_activity).total_seconds()
-                    if idle_time > 300:  # 5 minutes
+                    if idle_time > 120:  # 2 minutes
                         idle_sessions.append(session_id)
 
                 for session_id in idle_sessions:
