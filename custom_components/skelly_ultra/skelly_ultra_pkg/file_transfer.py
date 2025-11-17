@@ -113,7 +113,7 @@ class FileTransferManager:
             if mtu and mtu > 0:
                 # Account for ATT protocol overhead
                 chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
-                logger.info(
+                logger.debug(
                     "Using MTU-based chunk size: %d bytes (MTU: %d)",
                     chunk_size,
                     mtu,
