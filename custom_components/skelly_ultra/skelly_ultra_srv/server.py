@@ -908,6 +908,7 @@ class SkellyUltraServer:
             "success": true/false,
             "session_id": "sess-abc123",
             "address": "AA:BB:CC:DD:EE:FF",
+            "mtu": 517,  # optional, BLE MTU size in bytes if available
             "error": "error message if failed"
         }
         """
@@ -919,7 +920,7 @@ class SkellyUltraServer:
             name_filter = data.get("name_filter", "Animated Skelly")
             timeout = data.get("timeout", 10.0)
 
-            session_id, device_address = await self.ble_manager.create_session(
+            session_id, device_address, mtu = await self.ble_manager.create_session(
                 address=address, name_filter=name_filter, timeout=timeout
             )
 
@@ -928,6 +929,9 @@ class SkellyUltraServer:
                 "session_id": session_id,
                 "address": device_address,
             }
+            # Include MTU if available
+            if mtu is not None:
+                response_data["mtu"] = mtu
             self._log_response("ble/connect", response_data)
             return web.json_response(response_data)
 

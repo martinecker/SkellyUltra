@@ -347,7 +347,8 @@ class BLESessionManager:
             timeout: Discovery timeout in seconds
 
         Returns:
-            Tuple of (session_id, device_address)
+            Tuple of (session_id, device_address, mtu)
+            where mtu is the BLE MTU size in bytes (or None if unavailable)
 
         Raises:
             RuntimeError: If device not found or connection fails
@@ -471,14 +472,33 @@ class BLESessionManager:
             raise RuntimeError(f"Failed to start notifications: {exc}") from exc
 
         self._sessions[session_id] = session
-        _LOGGER.info(
-            "Created BLE session %s for device %s", session_id, discovered_address
-        )
+
+        # Get MTU size if available
+        mtu = None
+        try:
+            if hasattr(client, "mtu_size"):
+                mtu = client.mtu_size
+                _LOGGER.info(
+                    "Created BLE session %s for device %s (MTU: %d)",
+                    session_id,
+                    discovered_address,
+                    mtu,
+                )
+            else:
+                _LOGGER.info(
+                    "Created BLE session %s for device %s",
+                    session_id,
+                    discovered_address,
+                )
+        except Exception:
+            _LOGGER.info(
+                "Created BLE session %s for device %s", session_id, discovered_address
+            )
 
         # Resume scanner now that connection is established
         await self._resume_scanner()
 
-        return session_id, discovered_address
+        return session_id, discovered_address, mtu
 
     async def send_command(self, session_id: str, cmd_bytes: bytes) -> None:
         """Send raw command bytes to BLE device.

@@ -10,7 +10,6 @@ from collections.abc import Callable
 from dataclasses import dataclass
 import logging
 from typing import TYPE_CHECKING, Any
-import warnings
 
 from . import parser
 
@@ -84,7 +83,9 @@ class FileTransferManager:
         self._chunk_cache: dict[int, bytes] = {}
 
     def get_chunk_size(
-        self, client: SkellyClient, override_size: int | None = None,
+        self,
+        client: SkellyClient,
+        override_size: int | None = None,
     ) -> int:
         """Calculate optimal chunk size based on BLE MTU or use override value.
 
@@ -107,25 +108,20 @@ class FileTransferManager:
             )
 
         # Try to use MTU-based chunk size if available
-        if client.client and hasattr(client.client, "_mtu_size"):
-            try:
-                # Access the private _mtu_size attribute directly to check if MTU is set
-                # Suppress the Bleak warning about using default MTU
-                with warnings.catch_warnings():
-                    warnings.filterwarnings("ignore", message="Using default MTU value")
-                    mtu = client.client._mtu_size  # noqa: SLF001
-                if mtu and mtu > 0:
-                    # Account for ATT protocol overhead
-                    chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
-                    logger.info(
-                        "Using MTU-based chunk size: %d bytes (MTU: %d)",
-                        chunk_size,
-                        mtu,
-                    )
-                    return max(chunk_size, self.MIN_CHUNK_SIZE)
-            except (AttributeError, TypeError):
-                # MTU not available or not valid, fall through to default
-                pass
+        try:
+            mtu = client.get_mtu_size()
+            if mtu and mtu > 0:
+                # Account for ATT protocol overhead
+                chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
+                logger.info(
+                    "Using MTU-based chunk size: %d bytes (MTU: %d)",
+                    chunk_size,
+                    mtu,
+                )
+                return max(chunk_size, self.MIN_CHUNK_SIZE)
+        except (AttributeError, TypeError):
+            # MTU not available or not valid, fall through to default
+            pass
 
         logger.debug("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
@@ -179,7 +175,11 @@ class FileTransferManager:
 
             try:
                 await self._do_transfer(
-                    client, file_data, filename, progress_callback, override_chunk_size,
+                    client,
+                    file_data,
+                    filename,
+                    progress_callback,
+                    override_chunk_size,
                 )
                 logger.info("File transfer complete: %s", filename)
             except FileTransferCancelled:
@@ -269,7 +269,10 @@ class FileTransferManager:
         # Phase 1: Start transfer (C0)
         await client.start_send_data(size, chunk_count, filename)
         start_event = await self._wait_for_event(
-            client, parser.StartTransferEvent, self.TIMEOUT_START, "BBC0",
+            client,
+            parser.StartTransferEvent,
+            self.TIMEOUT_START,
+            "BBC0",
         )
 
         if start_event.failed != 0:
@@ -296,13 +299,21 @@ class FileTransferManager:
 
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(
-            client, file_data, start_index, chunk_count, chunk_size, progress_callback,
+            client,
+            file_data,
+            start_index,
+            chunk_count,
+            chunk_size,
+            progress_callback,
         )
 
         # Phase 3: End transfer (C2)
         await client.end_send_data()
         end_event = await self._wait_for_event(
-            client, parser.TransferEndEvent, self.TIMEOUT_END, "BBC2",
+            client,
+            parser.TransferEndEvent,
+            self.TIMEOUT_END,
+            "BBC2",
         )
 
         # Handle failed transfer - restart with smaller chunks
@@ -359,7 +370,10 @@ class FileTransferManager:
         # Phase 4: Confirm file (C3)
         await client.confirm_file(filename)
         confirm_event = await self._wait_for_event(
-            client, parser.ResumeWriteEvent, self.TIMEOUT_CONFIRM, "BBC3",
+            client,
+            parser.ResumeWriteEvent,
+            self.TIMEOUT_CONFIRM,
+            "BBC3",
         )
 
         # BBC3 parser returns TransferConfirmEvent with 'failed' field
@@ -415,7 +429,8 @@ class FileTransferManager:
                         await client.events.put(event)
                         # Stop sending more chunks - we'll handle retry in Phase 3
                         logger.info(
-                            "Stopping chunk transmission at %d due to early BBC2", idx,
+                            "Stopping chunk transmission at %d due to early BBC2",
+                            idx,
                         )
                         return
                     # Not a TransferEndEvent, put it back
