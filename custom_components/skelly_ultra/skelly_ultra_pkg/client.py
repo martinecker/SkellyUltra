@@ -252,7 +252,7 @@ class SkellyClient:
         try:
             session = self._get_rest_session()
             async with session.post(
-                f"{self.server_url}/disconnect",
+                f"{self.server_url}/classic/disconnect",
                 json={"mac": self._live_mode_client_address},
                 timeout=aiohttp.ClientTimeout(total=10.0),
             ) as resp:
@@ -310,7 +310,7 @@ class SkellyClient:
 
             session = self._get_rest_session()
             async with session.post(
-                f"{self.server_url}/play",
+                f"{self.server_url}/classic/play",
                 data=data,
                 timeout=aiohttp.ClientTimeout(total=30.0),
             ) as resp:
@@ -341,7 +341,7 @@ class SkellyClient:
 
             session = self._get_rest_session()
             async with session.post(
-                f"{self.server_url}/stop",
+                f"{self.server_url}/classic/stop",
                 json=request_body if request_body else None,
                 timeout=aiohttp.ClientTimeout(total=5.0),
             ) as resp:
@@ -366,7 +366,7 @@ class SkellyClient:
         try:
             session = self._get_rest_session()
             async with session.get(
-                f"{self.server_url}/status",
+                f"{self.server_url}/classic/status",
                 timeout=aiohttp.ClientTimeout(total=5.0),
             ) as resp:
                 return await resp.json()
@@ -866,7 +866,7 @@ class SkellyClient:
             timeout_config = aiohttp.ClientTimeout(total=http_timeout)
             async with aiohttp.ClientSession(timeout=timeout_config) as session:
                 async with session.post(
-                    f"{self.server_url}/pair_and_trust_by_name",
+                    f"{self.server_url}/classic/pair_and_trust_by_name",
                     json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
                 ) as resp:
                     pair_data = await resp.json()
@@ -921,7 +921,7 @@ class SkellyClient:
             timeout_config = aiohttp.ClientTimeout(total=http_timeout)
             async with aiohttp.ClientSession(timeout=timeout_config) as session:
                 async with session.post(
-                    f"{self.server_url}/connect_by_mac",
+                    f"{self.server_url}/classic/connect_by_mac",
                     json={"mac": mac_address, "pin": bt_pin},
                 ) as resp:
                     connect_data = await resp.json()
@@ -971,7 +971,7 @@ class SkellyClient:
         timeout_config = aiohttp.ClientTimeout(total=http_timeout)
         async with aiohttp.ClientSession(timeout=timeout_config) as session:
             async with session.post(
-                f"{self.server_url}/connect_by_name",
+                f"{self.server_url}/classic/connect_by_name",
                 json={"device_name": live_name, "pin": bt_pin},
             ) as resp:
                 connect_data = await resp.json()

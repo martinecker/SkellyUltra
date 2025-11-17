@@ -262,7 +262,7 @@ python3 -m skelly_ultra_srv.server
 **Pair by device name:**
 
 ```bash
-curl -X POST http://localhost:8765/pair_and_trust_by_name \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 ```
@@ -270,7 +270,7 @@ curl -X POST http://localhost:8765/pair_and_trust_by_name \
 **Pair by MAC address:**
 
 ```bash
-curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF", "pin": "1234"}'
 ```
@@ -317,20 +317,21 @@ bluetoothctl
 
 ### 📑 Endpoint Table of Contents
 
+- [GET /health](#-get-health) - Health check
+
 #### Bluetooth Classic Audio Endpoints
 
-- [POST /pair_and_trust_by_name](#-post-pair_and_trust_by_name) - Automatically pair and trust device by name
-- [POST /pair_and_trust_by_mac](#-post-pair_and_trust_by_mac) - Automatically pair and trust device by MAC
-- [POST /connect_by_name](#-post-connect_by_name) - Connect to device by name
-- [POST /connect_by_mac](#-post-connect_by_mac) - Connect to device by MAC
-- [GET /name](#-get-name) - Get connected device names
-- [GET /mac](#-get-mac) - Get connected device MACs
-- [POST /play](#️-post-play) - Upload and play audio file
-- [POST /play_filename](#-post-play_filename) - Play audio from file path
-- [POST /stop](#️-post-stop) - Stop audio playback
-- [POST /disconnect](#-post-disconnect) - Disconnect Bluetooth device
-- [GET /status](#-get-status) - Get comprehensive status
-- [GET /health](#-get-health) - Health check
+- [POST /classic/pair_and_trust_by_name](#-post-classicpair_and_trust_by_name) - Automatically pair and trust device by name
+- [POST /classic/pair_and_trust_by_mac](#-post-classicpair_and_trust_by_mac) - Automatically pair and trust device by MAC
+- [POST /classic/connect_by_name](#-post-classicconnect_by_name) - Connect to device by name
+- [POST /classic/connect_by_mac](#-post-classicconnect_by_mac) - Connect to device by MAC
+- [GET /classic/name](#-get-classicname) - Get connected device names
+- [GET /classic/mac](#-get-classicmac) - Get connected device MACs
+- [POST /classic/play](#️-post-classicplay) - Upload and play audio file
+- [POST /classic/play_filename](#-post-classicplay_filename) - Play audio from file path
+- [POST /classic/stop](#️-post-classicstop) - Stop audio playback
+- [POST /classic/disconnect](#-post-classicdisconnect) - Disconnect Bluetooth device
+- [GET /classic/status](#-get-classicstatus) - Get comprehensive status
 
 #### BLE Proxy Endpoints (Remote BLE Control)
 
@@ -343,7 +344,20 @@ bluetoothctl
 
 ---
 
-### 🔐 POST /pair_and_trust_by_name
+
+### ✅ GET /health
+
+Simple health check endpoint.
+
+**Response:**
+
+```json
+{
+    "status": "ok"
+}
+```
+
+### 🔐 POST /classic/pair_and_trust_by_name
 
 **Automatically pair and trust a Bluetooth device by name using D-Bus agent.**
 
@@ -401,17 +415,17 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 
 ```bash
 # Pair device by name with PIN
-curl -X POST http://localhost:8765/pair_and_trust_by_name \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "8947"}'
 
 # With custom timeout
-curl -X POST http://localhost:8765/pair_and_trust_by_name \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "8947", "timeout": 60}'
 ```
 
-### � POST /pair_and_trust_by_mac
+### 🔐 POST /classic/pair_and_trust_by_mac
 
 **Automatically pair and trust a Bluetooth device by MAC address using D-Bus agent.**
 
@@ -477,12 +491,12 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 
 ```bash
 # Pair device with PIN
-curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
 
 # With custom timeout
-curl -X POST http://localhost:8765/pair_and_trust_by_mac \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947", "timeout": 60}'
 ```
@@ -490,11 +504,11 @@ curl -X POST http://localhost:8765/pair_and_trust_by_mac \
 **Notes:**
 
 - First time pairing requires root to register D-Bus agent
-- Once paired, device can be connected without root using `/connect_by_mac`
+- Once paired, device can be connected without root using `/classic/connect_by_mac`
 - Device will be automatically trusted after successful pairing
 - If device is already paired, trusts it and returns success (no root needed)
 
-### �🔗 POST /connect_by_name
+### 🔗 POST /classic/connect_by_name
 Connect to a Bluetooth device by name.
 
 **Request Body:**
@@ -515,7 +529,7 @@ Connect to a Bluetooth device by name.
 }
 ```
 
-### 🔗 POST /connect_by_mac
+### 🔗 POST /classic/connect_by_mac
 
 Connect to a Bluetooth device by MAC address.
 
@@ -538,7 +552,7 @@ Connect to a Bluetooth device by MAC address.
 }
 ```
 
-### 📛 GET /name
+### 📛 GET /classic/name
 
 Get the names of all connected devices, or query for a specific device by MAC address.
 
@@ -571,13 +585,13 @@ Get the names of all connected devices, or query for a specific device by MAC ad
 
 ```bash
 # Get all connected devices
-curl http://localhost:8765/name
+curl http://localhost:8765/classic/name
 
 # Get specific device by MAC
-curl "http://localhost:8765/name?mac=AA:BB:CC:DD:EE:FF"
+curl "http://localhost:8765/classic/name?mac=AA:BB:CC:DD:EE:FF"
 ```
 
-### 🔍 GET /mac
+### 🔍 GET /classic/mac
 
 Get the MAC addresses of all connected devices, or search for a device by name.
 
@@ -610,13 +624,13 @@ Get the MAC addresses of all connected devices, or search for a device by name.
 
 ```bash
 # Get all connected devices
-curl http://localhost:8765/mac
+curl http://localhost:8765/classic/mac
 
 # Search for device by name
-curl "http://localhost:8765/mac?name=Skelly%20Speaker"
+curl "http://localhost:8765/classic/mac?name=Skelly%20Speaker"
 ```
 
-### ▶️ POST /play
+### ▶️ POST /classic/play
 
 Upload and play an audio file through the connected device(s).
 
@@ -631,7 +645,7 @@ Upload and play an audio file through the connected device(s).
 **Example (single device by MAC):**
 
 ```bash
-curl -X POST http://localhost:8765/play \
+curl -X POST http://localhost:8765/classic/play \
   -F "file=@/path/to/audio.wav" \
   -F "mac=AA:BB:CC:DD:EE:FF"
 ```
@@ -639,7 +653,7 @@ curl -X POST http://localhost:8765/play \
 **Example (by device name):**
 
 ```bash
-curl -X POST http://localhost:8765/play \
+curl -X POST http://localhost:8765/classic/play \
   -F "file=@/path/to/audio.wav" \
   -F "device_name=Skelly Speaker"
 ```
@@ -647,7 +661,7 @@ curl -X POST http://localhost:8765/play \
 **Example (all devices):**
 
 ```bash
-curl -X POST http://localhost:8765/play \
+curl -X POST http://localhost:8765/classic/play \
   -F "file=@/path/to/audio.wav" \
   -F "all=true"
 ```
@@ -664,7 +678,7 @@ curl -X POST http://localhost:8765/play \
 }
 ```
 
-### 🎵 POST /play_filename
+### 🎵 POST /classic/play_filename
 
 Play an audio file from a file path (legacy endpoint for direct file access).
 
@@ -693,7 +707,7 @@ Play an audio file from a file path (legacy endpoint for direct file access).
 }
 ```
 
-### ⏹️ POST /stop
+### ⏹️ POST /classic/stop
 
 Stop currently playing audio.
 
@@ -717,7 +731,7 @@ Stop currently playing audio.
 }
 ```
 
-### 🔌 POST /disconnect
+### 🔌 POST /classic/disconnect
 
 Disconnect Bluetooth device(s).
 
@@ -740,7 +754,7 @@ Disconnect Bluetooth device(s).
 }
 ```
 
-### 📊 GET /status
+### 📊 GET /classic/status
 
 Get comprehensive status information including all connected devices and their playback sessions.
 
@@ -767,18 +781,6 @@ Get comprehensive status information including all connected devices and their p
             }
         }
     }
-}
-```
-
-### ✅ GET /health
-
-Simple health check endpoint.
-
-**Response:**
-
-```json
-{
-    "status": "ok"
 }
 ```
 
@@ -1242,20 +1244,20 @@ curl -s http://localhost:8765/ble/sessions | jq
 python3 run_server.py
 
 # Pair device with PIN
-curl -X POST http://localhost:8765/pair_and_trust \
+curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
-  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+  -d '{"device_name": "Skelly Speaker", "pin": "8947"}'
 
 # After pairing, can connect without root
-curl -X POST http://localhost:8765/connect_by_mac \
+curl -X POST http://localhost:8765/classic/connect_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
 ```
 
-### �🔗 Connect to device by name:
+### 🔗 Connect to device by name:
 
 ```bash
-curl -X POST http://localhost:8765/connect_by_name \
+curl -X POST http://localhost:8765/classic/connect_by_name \
   -H "Content-Type: application/json" \
   -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 ```
@@ -1263,7 +1265,7 @@ curl -X POST http://localhost:8765/connect_by_name \
 ### 🔗 Connect to device by MAC:
 
 ```bash
-curl -X POST http://localhost:8765/connect_by_mac \
+curl -X POST http://localhost:8765/classic/connect_by_mac \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF", "pin": "1234"}'
 ```
@@ -1271,7 +1273,7 @@ curl -X POST http://localhost:8765/connect_by_mac \
 ### ▶️ Upload and play audio on specific device:
 
 ```bash
-curl -X POST http://localhost:8765/play \
+curl -X POST http://localhost:8765/classic/play \
   -F "file=@/path/to/spooky_sound.wav" \
   -F "mac=AA:BB:CC:DD:EE:FF"
 ```
@@ -1279,7 +1281,7 @@ curl -X POST http://localhost:8765/play \
 ### ▶️ Upload and play audio on all devices:
 
 ```bash
-curl -X POST http://localhost:8765/play \
+curl -X POST http://localhost:8765/classic/play \
   -F "file=@/path/to/spooky_sound.wav" \
   -F "all=true"
 ```
@@ -1287,7 +1289,7 @@ curl -X POST http://localhost:8765/play \
 ### 🎵 Play audio from file path (legacy):
 
 ```bash
-curl -X POST http://localhost:8765/play_filename \
+curl -X POST http://localhost:8765/classic/play_filename \
   -H "Content-Type: application/json" \
   -d '{"file_path": "/path/to/spooky_sound.wav", "mac": "AA:BB:CC:DD:EE:FF"}'
 ```
@@ -1295,7 +1297,7 @@ curl -X POST http://localhost:8765/play_filename \
 ### ⏹️ Stop playback on specific device:
 
 ```bash
-curl -X POST http://localhost:8765/stop \
+curl -X POST http://localhost:8765/classic/stop \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF"}'
 ```
@@ -1303,19 +1305,19 @@ curl -X POST http://localhost:8765/stop \
 ### ⏹️ Stop playback on all devices:
 
 ```bash
-curl -X POST http://localhost:8765/stop
+curl -X POST http://localhost:8765/classic/stop
 ```
 
 ### 📊 Get status:
 
 ```bash
-curl http://localhost:8765/status
+curl http://localhost:8765/classic/status
 ```
 
 ### 🔌 Disconnect specific device:
 
 ```bash
-curl -X POST http://localhost:8765/disconnect \
+curl -X POST http://localhost:8765/classic/disconnect \
   -H "Content-Type: application/json" \
   -d '{"mac": "AA:BB:CC:DD:EE:FF"}'
 ```
@@ -1323,7 +1325,7 @@ curl -X POST http://localhost:8765/disconnect \
 ### 🔌 Disconnect all devices:
 
 ```bash
-curl -X POST http://localhost:8765/disconnect
+curl -X POST http://localhost:8765/classic/disconnect
 ```
 
 ### 🔷 Complete BLE proxy workflow:
@@ -1389,7 +1391,7 @@ curl http://localhost:8765/health
 ### 📊 Check status:
 
 ```bash
-curl http://localhost:8765/status
+curl http://localhost:8765/classic/status
 ```
 
 ## 🛠️ Troubleshooting

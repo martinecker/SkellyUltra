@@ -51,50 +51,38 @@ async def main():
         host=args.host, port=args.port, debug_json=args.debug_json
     )
 
-    print(f"Starting Skelly Ultra REST server on http://{args.host}:{args.port}")
-    print("\nAvailable endpoints:")
-    print("\n  Pairing (requires root):")
-    print("  POST /pair_and_trust_by_name  - Pair and trust device by name")
-    print("  POST /pair_and_trust_by_mac   - Pair and trust device by MAC address")
-    print("\n  Connection:")
-    print("  POST /connect_by_name  - Connect by device name")
-    print("  POST /connect_by_mac   - Connect by MAC address")
-    print(
-        "  POST /disconnect       - Disconnect device(s) (optional mac/device_name, defaults to all)"
-    )
-    print("\n  Device Info:")
-    print(
-        "  GET  /name             - Get connected device name(s) (optional ?mac= filter)"
-    )
-    print(
-        "  GET  /mac              - Get connected device MAC(s) (optional ?name= search)"
-    )
-    print("  GET  /status           - Get full status (all devices and sessions)")
-    print("\n  Audio Playback:")
-    print("  POST /play             - Upload and play audio (multipart/form-data)")
-    print("  POST /play_filename    - Play audio from file path (JSON with file_path)")
-    print(
-        "  POST /stop             - Stop playback (optional mac/device_name, defaults to all)"
-    )
-    print("\n  BLE Proxy (Remote BLE Control):")
-    print(
-        "  GET  /ble/scan_devices - Scan for nearby BLE devices (optional ?name_filter= and ?timeout=)"
-    )
-    print("  POST /ble/connect      - Connect to BLE device and create session")
-    print("  POST /ble/send_command - Send raw command bytes to BLE device")
-    print("  GET  /ble/notifications - Long-poll for raw BLE notifications")
-    print("  POST /ble/disconnect   - Disconnect BLE session")
-    print("  GET  /ble/sessions     - List active BLE sessions")
-    print("\n  Health:")
-    print("  GET  /health           - Health check")
-    print(f"\nLog level: {'DEBUG (verbose)' if args.verbose else 'INFO'}")
-    print("\nMulti-device support:")
-    print("  - Connect multiple devices simultaneously")
-    print("  - Upload audio files via HTTP and play on specific devices or all at once")
-    print("  - Specify device by 'mac' (MAC address) or 'device_name'")
-    print("  - Use 'macs' array for multiple targets or 'all' for all devices")
-    print("  - Stop/disconnect specific devices or all devices")
-    print("\nPress Ctrl+C to stop\n")
+    print(f"""Starting Skelly Ultra REST server on http://{args.host}:{args.port}
+
+Available endpoints:
+
+  Classic Bluetooth A2DP Speaker:
+  POST /classic/pair_and_trust_by_name  - Pair and trust device by name (requires root)
+  POST /classic/pair_and_trust_by_mac   - Pair and trust device by MAC (requires root)
+  POST /classic/connect_by_name         - Connect by device name
+  POST /classic/connect_by_mac          - Connect by MAC address
+  POST /classic/disconnect              - Disconnect device(s) (optional mac/device_name, defaults to all)
+  GET  /classic/name                    - Get connected device name(s) (optional ?mac= filter)
+  GET  /classic/mac                     - Get connected device MAC(s) (optional ?name= search)
+  GET  /classic/status                  - Get full status (all devices and sessions)
+  POST /classic/play                    - Upload and play audio (multipart/form-data)
+  POST /classic/play_filename           - Play audio from file path (JSON with file_path)
+  POST /classic/stop                    - Stop playback (optional mac/device_name, defaults to all)
+
+  BLE Proxy (Remote BLE Control):
+  GET  /ble/scan_devices - Scan for nearby BLE devices (optional ?name_filter= and ?timeout=)
+  POST /ble/connect      - Connect to BLE device and create session
+  POST /ble/send_command - Send raw command bytes to BLE device
+  GET  /ble/notifications - Long-poll for raw BLE notifications
+  POST /ble/disconnect   - Disconnect BLE session
+  GET  /ble/sessions     - List active BLE sessions
+
+  Health:
+  GET  /health           - Health check
+
+Log level: {"DEBUG (verbose)" if args.verbose else "INFO"}
+
+Press Ctrl+C to stop
+""")
 
     await server.start()
 

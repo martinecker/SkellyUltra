@@ -82,21 +82,25 @@ class SkellyUltraServer:
 
     def _setup_routes(self) -> None:
         """Set up API routes."""
+        # Classic Bluetooth A2DP speaker endpoints
         self.app.router.add_post(
-            "/pair_and_trust_by_name", self.handle_pair_and_trust_by_name
+            "/classic/pair_and_trust_by_name", self.handle_pair_and_trust_by_name
         )
         self.app.router.add_post(
-            "/pair_and_trust_by_mac", self.handle_pair_and_trust_by_mac
+            "/classic/pair_and_trust_by_mac", self.handle_pair_and_trust_by_mac
         )
-        self.app.router.add_post("/connect_by_name", self.handle_connect_by_name)
-        self.app.router.add_post("/connect_by_mac", self.handle_connect_by_mac)
-        self.app.router.add_get("/name", self.handle_get_name)
-        self.app.router.add_get("/mac", self.handle_get_mac)
-        self.app.router.add_post("/play", self.handle_play)
-        self.app.router.add_post("/play_filename", self.handle_play_filename)
-        self.app.router.add_post("/stop", self.handle_stop)
-        self.app.router.add_post("/disconnect", self.handle_disconnect)
-        self.app.router.add_get("/status", self.handle_status)
+        self.app.router.add_post(
+            "/classic/connect_by_name", self.handle_connect_by_name
+        )
+        self.app.router.add_post("/classic/connect_by_mac", self.handle_connect_by_mac)
+        self.app.router.add_get("/classic/name", self.handle_get_name)
+        self.app.router.add_get("/classic/mac", self.handle_get_mac)
+        self.app.router.add_post("/classic/play", self.handle_play)
+        self.app.router.add_post("/classic/play_filename", self.handle_play_filename)
+        self.app.router.add_post("/classic/stop", self.handle_stop)
+        self.app.router.add_post("/classic/disconnect", self.handle_disconnect)
+        self.app.router.add_get("/classic/status", self.handle_status)
+
         self.app.router.add_get("/health", self.handle_health)
 
         # BLE proxy endpoints
