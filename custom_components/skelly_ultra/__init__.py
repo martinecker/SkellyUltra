@@ -420,6 +420,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     raise HomeAssistantError(f"File not found: {file_path}")
                 local_file = file_path
 
+            # Step 2: Process audio to required format (8kHz mono MP3)
+            # Run audio processing in executor to avoid blocking event loop
+            _LOGGER.debug("Processing audio file: %s", local_file)
+            processed_file = await hass.async_add_executor_job(
+                AudioProcessor.process_file, local_file
+            )
+            if str(processed_file) != local_file:
+                temp_files.append(str(processed_file))
+
+            # Step 3: Read file data using executor to avoid blocking
+            file_data = await hass.async_add_executor_job(
+                Path(processed_file).read_bytes
+            )
+
             # Get coordinator for lock
             coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
             if not coordinator:
@@ -428,20 +442,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Acquire lock to prevent concurrent coordinator updates during file transfer
             _LOGGER.debug("Acquiring lock for file transfer")
             async with coordinator.action_lock:
-                # Step 2: Process audio to required format (8kHz mono MP3)
-                # Run audio processing in executor to avoid blocking event loop
-                _LOGGER.debug("Processing audio file: %s", local_file)
-                processed_file = await hass.async_add_executor_job(
-                    AudioProcessor.process_file, local_file
-                )
-                if str(processed_file) != local_file:
-                    temp_files.append(str(processed_file))
-
-                # Step 3: Read file data using executor to avoid blocking
-                file_data = await hass.async_add_executor_job(
-                    Path(processed_file).read_bytes
-                )
-
                 # Step 4: Upload to device
                 _LOGGER.info(
                     "Uploading file to entry %s as %s",
