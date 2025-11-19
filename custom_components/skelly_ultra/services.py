@@ -333,22 +333,30 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
                 raise HomeAssistantError(f"File not found: {file_path}")
             local_file = file_path
 
+        # Get coordinator early to check for bitrate override
+        coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+        if not coordinator:
+            raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+
+        # Check if bitrate override is enabled
+        bitrate = None
+        if coordinator.data:
+            override_enabled = coordinator.data.get("override_bitrate", False)
+            if override_enabled:
+                bitrate = coordinator.data.get("bitrate_override")
+                _LOGGER.debug("Using bitrate override: %s", bitrate)
+
         # Step 2: Process audio to required format (8kHz mono MP3)
         # Run audio processing in executor to avoid blocking event loop
         _LOGGER.debug("Processing audio file: %s", local_file)
         processed_file = await hass.async_add_executor_job(
-            AudioProcessor.process_file, local_file
+            AudioProcessor.process_file, local_file, None, bitrate
         )
         if str(processed_file) != local_file:
             temp_files.append(str(processed_file))
 
         # Step 3: Read file data using executor to avoid blocking
         file_data = await hass.async_add_executor_job(Path(processed_file).read_bytes)
-
-        # Get coordinator for lock
-        coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-        if not coordinator:
-            raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
 
         # Acquire lock to prevent concurrent coordinator updates during file transfer
         _LOGGER.debug("Acquiring lock for file transfer")

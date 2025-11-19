@@ -41,19 +41,21 @@ class AudioProcessor:
     TARGET_FORMAT = "mp3"
 
     # MP3 encoding parameters
-    MP3_BITRATE = "64k"  # Good quality for 8kHz mono speech
+    MP3_BITRATE = "32k"  # Decent quality for 8kHz mono speech
 
     @classmethod
     def process_file(
         cls,
         input_path: str | Path,
         output_path: str | Path | None = None,
+        bitrate: str | None = None,
     ) -> Path:
         """Process audio file to Skelly-compatible format.
 
         Args:
             input_path: Path to input audio file (any format supported by pydub)
             output_path: Path for output MP3 file. If None, creates temp file.
+            bitrate: MP3 bitrate (e.g., "64k", "128k"). If None, uses MP3_BITRATE default.
 
         Returns:
             Path to the processed MP3 file
@@ -94,7 +96,7 @@ class AudioProcessor:
             processed_audio.export(
                 str(output_path),
                 format=cls.TARGET_FORMAT,
-                bitrate=cls.MP3_BITRATE,
+                bitrate=bitrate or cls.MP3_BITRATE,
                 parameters=["-ar", str(cls.TARGET_SAMPLE_RATE)],  # Ensure sample rate
             )
 

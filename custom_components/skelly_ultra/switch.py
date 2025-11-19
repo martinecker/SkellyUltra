@@ -43,6 +43,7 @@ async def async_setup_entry(
             ),
             SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="all"),
             SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, device_info),
+            SkellyOverrideBitrateSwitch(coordinator, entry.entry_id, device_info),
         ]
     )
 
@@ -515,6 +516,53 @@ class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
         _LOGGER.debug("Disabling chunk size override")
         new_data = dict(self.coordinator.data or {})
         new_data["override_chunk_size"] = False
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+        self.async_write_ha_state()
+
+
+class SkellyOverrideBitrateSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to enable/disable manual bitrate override for file transfers."""
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the override bitrate switch."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Override Bitrate"
+        self._attr_unique_id = f"{entry_id}_override_bitrate"
+        self._attr_icon = "mdi:cog"
+        self._attr_device_info = device_info
+
+    @property
+    def is_on(self) -> bool:
+        """Return True if override is enabled."""
+        return (
+            self.coordinator.data.get("override_bitrate", False)
+            if self.coordinator.data
+            else False
+        )
+
+    async def async_turn_on(self, **kwargs) -> None:
+        """Enable bitrate override."""
+        _LOGGER.debug("Enabling bitrate override")
+        new_data = dict(self.coordinator.data or {})
+        new_data["override_bitrate"] = True
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+        self.async_write_ha_state()
+
+    async def async_turn_off(self, **kwargs) -> None:
+        """Disable bitrate override."""
+        _LOGGER.debug("Disabling bitrate override")
+        new_data = dict(self.coordinator.data or {})
+        new_data["override_bitrate"] = False
         with contextlib.suppress(Exception):
             self.coordinator.async_set_updated_data(new_data)
         self.async_write_ha_state()

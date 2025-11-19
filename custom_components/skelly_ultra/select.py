@@ -14,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
 from .helpers import get_device_info
+from .skelly_ultra_pkg.audio_processor import AudioProcessor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -41,6 +42,9 @@ EYE_ICONS = [
 
 EFFECT_MODES = ["Static", "Strobe", "Pulse"]
 
+# Bitrate options for MP3 encoding
+BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
@@ -55,6 +59,7 @@ async def async_setup_entry(
             SkellyEyeIconSelect(coordinator, entry.entry_id, device_info),
             SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=0),
             SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=1),
+            SkellyBitrateSelect(coordinator, entry.entry_id, device_info),
         ]
     )
 
@@ -252,3 +257,74 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         data = getattr(self.coordinator, "data", None)
         if data and data.get("lights"):
             self.async_write_ha_state()
+
+
+class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
+    """Select entity for file transfer bitrate.
+
+    Shows the current bitrate when override is off (uses default),
+    or allows manual selection when override is on.
+    """
+
+    _attr_has_entity_name = True
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the bitrate select entity."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Bitrate"
+        self._attr_unique_id = f"{entry_id}_bitrate"
+        self._attr_icon = "mdi:music-note"
+        self._attr_device_info = device_info
+
+    @property
+    def options(self) -> list[str]:
+        """Return the available bitrate options."""
+        return BITRATE_OPTIONS
+
+    @property
+    def current_option(self) -> str | None:
+        """Return current bitrate.
+
+        If override is enabled, returns the user-set value.
+        If override is disabled, returns the default.
+        """
+        data = self.coordinator.data
+        if not data:
+            return AudioProcessor.MP3_BITRATE
+
+        override_enabled = data.get("override_bitrate", False)
+
+        if override_enabled:
+            # Return user-set value
+            return data.get("bitrate_override", AudioProcessor.MP3_BITRATE)
+
+        # Return default when override is disabled
+        return AudioProcessor.MP3_BITRATE
+
+    async def async_select_option(self, option: str) -> None:
+        """Set the bitrate override value.
+
+        Only works when override switch is enabled.
+        """
+        data = self.coordinator.data
+        if not data:
+            return
+
+        override_enabled = data.get("override_bitrate", False)
+        if not override_enabled:
+            # Don't allow changes when override is disabled
+            return
+
+        # Store the override value
+        new_data = dict(data)
+        new_data["bitrate_override"] = option
+        with contextlib.suppress(Exception):
+            self.coordinator.async_set_updated_data(new_data)
+
+        self.async_write_ha_state()
