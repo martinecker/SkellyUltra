@@ -72,8 +72,9 @@ class FileTransferManager:
     DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
     ATT_OVERHEAD = 3  # ATT protocol overhead bytes
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
-    TIMEOUT_END = 60.0  # seconds to wait for BBC2 (long for large files)
-    TIMEOUT_CONFIRM = 10.0  # seconds to wait for BBC3
+    TIMEOUT_END_MIN = 5.0  # minimum seconds to wait for BBC2
+    TIMEOUT_END_PER_KB = 0.4  # seconds per kilobyte of file size
+    TIMEOUT_CONFIRM = 5.0  # seconds to wait for BBC3
     CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
 
     def __init__(self) -> None:
@@ -339,10 +340,21 @@ class FileTransferManager:
 
         # Phase 3: End transfer (C2)
         await client.end_send_data()
+
+        # Calculate dynamic timeout based on file size
+        file_size_kb = size / 1024
+        timeout_end = max(
+            self.TIMEOUT_END_MIN,
+            self.TIMEOUT_END_MIN + (file_size_kb * self.TIMEOUT_END_PER_KB),
+        )
+        logger.debug(
+            "Using BBC2 timeout of %.1fs for %d KB file", timeout_end, int(file_size_kb)
+        )
+
         end_event = await self._wait_for_event(
             client,
             parser.TransferEndEvent,
-            self.TIMEOUT_END,
+            timeout_end,
             "BBC2",
         )
 
