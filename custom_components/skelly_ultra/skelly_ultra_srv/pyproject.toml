@@ -5,19 +5,13 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "skelly-ultra-server"
 version = "1.0.0"
-description = "REST server providing Bluetooth Classic audio playback for Skelly Ultra devices"
+description = "REST server providing Bluetooth Classic audio playback and/or BLE proxy services for Ultra Skelly devices"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9.0",
     "pydbus>=0.6.0",
     "bleak>=0.21.0",
-]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.0.0",
-    "pytest-asyncio>=0.21.0",
 ]
 
 [project.scripts]
