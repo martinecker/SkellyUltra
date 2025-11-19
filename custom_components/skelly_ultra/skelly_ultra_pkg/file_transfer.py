@@ -401,13 +401,12 @@ class FileTransferManager:
         await client.confirm_file(filename)
         confirm_event = await self._wait_for_event(
             client,
-            parser.ResumeWriteEvent,
+            parser.TransferConfirmEvent,
             self.TIMEOUT_CONFIRM,
             "BBC3",
         )
 
-        # BBC3 parser returns TransferConfirmEvent with 'failed' field
-        if confirm_event.written != 0:
+        if confirm_event.failed != 0:
             raise FileTransferError(
                 f"Device failed final confirmation (failed={confirm_event.failed})",
             )
