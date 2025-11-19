@@ -119,6 +119,17 @@ class SkellyClient:
 
         # At this point, self._client should be set and connected
         if self.is_connected:
+            # Initialize MTU to prevent warning on first access
+            # For BlueZ backend, set a temporary value that will be replaced by _acquire_mtu()
+            if (
+                hasattr(self._client, "_backend")
+                and "bluez" in type(self._client._backend).__module__.lower()  # noqa: SLF001
+                and hasattr(self._client._backend, "_mtu_size")  # noqa: SLF001
+                and self._client._backend._mtu_size is None  # noqa: SLF001
+            ):
+                self._client._backend._mtu_size = 23  # noqa: SLF001
+                logger.debug("Initialized MTU to default value to prevent warning")
+
             await self._start_notifications()
             return True
         return False
@@ -247,7 +258,30 @@ class SkellyClient:
                         self._client._backend  # noqa: SLF001
                     ).__module__.lower()
                 ):
-                    await self._client._backend._acquire_mtu()  # noqa: SLF001
+                    # Workaround for BlueZ: _acquire_mtu() must be called to get actual MTU
+                    # instead of the default value (23). Only call it once.
+                    backend = self._client._backend  # noqa: SLF001
+                    try:
+                        # Check if MTU hasn't been properly acquired yet
+                        # (_mtu_size is None or still at default value of 23)
+                        if hasattr(backend, "_mtu_size") and (
+                            backend._mtu_size is None or backend._mtu_size == 23
+                        ):  # noqa: SLF001
+                            # _acquire_mtu() requires services to be resolved first
+                            # If services aren't ready, this will raise AssertionError
+                            if self._client.services is None:
+                                logger.debug("Resolving services before acquiring MTU")
+                                await self._client.get_services()
+
+                            # Acquire MTU to set _mtu_size to actual value
+                            await backend._acquire_mtu()  # noqa: SLF001
+                            logger.debug("Acquired MTU: %d", backend._mtu_size)  # noqa: SLF001
+                    except AssertionError:
+                        logger.debug("Cannot acquire MTU: services not available")
+                    except Exception as e:
+                        logger.debug("Could not acquire MTU: %s", e)
+
+                # Return the MTU value (either acquired or default)
                 return self._client.mtu_size
         except (AttributeError, TypeError):
             pass
