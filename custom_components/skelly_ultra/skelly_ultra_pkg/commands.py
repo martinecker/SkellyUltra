@@ -36,6 +36,23 @@ def int_to_hex(n: int, byte_len: int) -> str:
     return pad_hex(hex(n)[2:], byte_len * 2).upper()
 
 
+def _build_filename_payload(name: str) -> str:
+    """Build filename payload with length prefix and protocol marker.
+
+    Args:
+        name: Filename or name string to encode
+
+    Returns:
+        Hex string: length (1 byte) + protocol marker + UTF-16LE encoded name
+        If name is empty, returns "00"
+    """
+    if not name:
+        return "00"
+    name_utf16 = to_utf16le_hex(name)
+    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1)
+    return name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16
+
+
 def build_cmd(tag: str, payload: str = "00") -> bytes:
     base_str = tag + payload
     if len(payload) < 16:
@@ -107,7 +124,9 @@ def set_music_mode(mode: int) -> bytes:
 
 
 # Sets the light mode aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
-def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") -> bytes:
+def set_light_mode(
+    channel: int, mode: int, cluster: int = 0, filename: str = ""
+) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
     if not 1 <= mode <= 3:
@@ -117,13 +136,11 @@ def set_light_mode(channel: int, mode: int, cluster: int = 0, name: str = "") ->
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         ch
         + int_to_hex(mode, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_LIGHT_MODE, payload)
 
@@ -132,7 +149,7 @@ def set_light_brightness(
     channel: int,
     brightness: int,
     cluster: int = 0,
-    name: str = "",
+    filename: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -141,13 +158,11 @@ def set_light_brightness(
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         ch
         + int_to_hex(brightness, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_LIGHT_BRIGHTNESS, payload)
 
@@ -159,7 +174,7 @@ def set_light_rgb(
     b: int,
     color_cycle: int,
     cluster: int = 0,
-    name: str = "",
+    filename: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -174,8 +189,6 @@ def set_light_rgb(
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         ch
         + int_to_hex(r, 1)
@@ -183,9 +196,7 @@ def set_light_rgb(
         + int_to_hex(b, 1)
         + int_to_hex(color_cycle, 1)
         + int_to_hex(cluster, 4)
-    )
-    payload += (
-        (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16) if name else name_len
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_LIGHT_RGB, payload)
 
@@ -194,7 +205,7 @@ def set_light_speed(
     channel: int,
     speed: int,
     cluster: int = 0,
-    name: str = "",
+    filename: str = "",
 ) -> bytes:
     if channel != -1 and not 0 <= channel <= 5:
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
@@ -203,13 +214,11 @@ def set_light_speed(
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     ch = "FF" if channel == -1 else int_to_hex(channel, 1)
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         ch
         + int_to_hex(speed, 1)
         + int_to_hex(cluster, 4)
-        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_LIGHT_SPEED, payload)
 
@@ -223,22 +232,20 @@ def select_rgb_channel(channel: int) -> bytes:
     )
 
 
-def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
+def set_eye_icon(icon: int, cluster: int, filename: str) -> bytes:
     if not 0 <= icon <= 255:
         raise ValueError(f"Icon must be between 0 and 255, got {icon}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    if not name and cluster > 0:
+    if not filename and cluster > 0:
         raise ValueError(
-            "Name cannot be empty for set_eye_icon when cluster is specified",
+            "Filename cannot be empty for set_eye_icon when cluster is specified",
         )
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         int_to_hex(icon, 1)
         + "00"  # 1-byte padding
         + int_to_hex(cluster, 4)
-        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_EYE_ICON, payload)
 
@@ -246,22 +253,20 @@ def set_eye_icon(icon: int, cluster: int, name: str) -> bytes:
 # Action here is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
 # If a bit is set movement for that body part is enabled, otherwise disabled.
 # Can send a value of 255 to enable all (head+arm+torso) which in the phone app has a unique icon.
-def set_action(action: int, cluster: int, name: str) -> bytes:
+def set_action(action: int, cluster: int, filename: str) -> bytes:
     if not 0 <= action <= 255:
         raise ValueError(f"Action must be between 0 and 255, got {action}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    if not name and cluster > 0:
+    if not filename and cluster > 0:
         raise ValueError(
-            "Name cannot be empty for set_action when cluster is specified",
+            "Filename cannot be empty for set_action when cluster is specified",
         )
-    name_utf16 = to_utf16le_hex(name)
-    name_len = int_to_hex((len(name_utf16) // 2) + 2, 1) if name else "00"
     payload = (
         int_to_hex(action, 1)
         + "00"  # 1-byte padding
         + int_to_hex(cluster, 4)
-        + (name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16 if name else name_len)
+        + _build_filename_payload(filename)
     )
     return build_cmd(const.CMD_SET_ACTION, payload)
 
@@ -280,8 +285,7 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
         const.CMD_START_SEND_DATA,
         int_to_hex(size, 4)
         + int_to_hex(chunk_count, 2)
-        + const.PROTOCOL_MARKER_FILENAME
-        + to_utf16le_hex(filename),
+        + _build_filename_payload(filename),
     )
 
 
@@ -305,7 +309,7 @@ def confirm_file(filename: str) -> bytes:
         raise ValueError("Filename cannot be empty")
     return build_cmd(
         const.CMD_CONFIRM_FILE,
-        const.PROTOCOL_MARKER_FILENAME + to_utf16le_hex(filename),
+        _build_filename_payload(filename),
     )
 
 
