@@ -481,10 +481,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if transfer_sensor:
                     transfer_sensor.set_complete()
 
-                # Refresh the file list via coordinator
-                _LOGGER.debug("Refreshing file list after successful upload")
-                await coordinator.async_refresh_file_list()
-
         except FileTransferCancelled:
             _LOGGER.warning("File transfer was cancelled: %s", target_filename)
             if transfer_sensor:
@@ -511,6 +507,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # Remove from tracking
             if "file_transfers" in hass.data[DOMAIN]:
                 hass.data[DOMAIN]["file_transfers"].pop(entry_id, None)
+
+        # Refresh the file list via coordinator
+        _LOGGER.debug("Refreshing file list after successful upload")
+        await coordinator.async_refresh_file_list()
 
     hass.services.async_register(
         DOMAIN,
