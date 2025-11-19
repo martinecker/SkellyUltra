@@ -294,6 +294,27 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     self.data.get("file_count_received") if self.data else None
                 )
 
+                # Calculate MTU-based chunk size for display in number entity
+                mtu_chunk_size = 250  # Default
+                try:
+                    mtu = await self.adapter.client.get_mtu_size()
+                    if mtu and mtu > 0:
+                        from .skelly_ultra_pkg.file_transfer import FileTransferManager
+
+                        mtu_chunk_size = (
+                            FileTransferManager.calculate_chunk_size_from_mtu(mtu)
+                        )
+                        _LOGGER.debug(
+                            "Calculated MTU-based chunk size: %d bytes (MTU: %d)",
+                            mtu_chunk_size,
+                            mtu,
+                        )
+                except Exception:
+                    _LOGGER.debug(
+                        "Could not calculate MTU-based chunk size, using default: %d bytes",
+                         mtu_chunk_size
+                    )
+
                 # Extract pin_code and show_mode from DeviceParamsEvent
                 pin_code = (
                     getattr(device_params, "pin_code", None) if device_params else None
@@ -315,6 +336,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     "capacity_kb": capacity_kb,
                     "file_count_reported": file_count_reported,
                     "file_count_received": existing_file_count_received,  # Preserve existing value
+                    "mtu_chunk_size": mtu_chunk_size,  # MTU-based chunk size for display
                     # eye is expected to be an int (1-based) or None
                     "eye_icon": eye,
                     # action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso

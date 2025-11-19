@@ -280,11 +280,10 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
             return data.get("chunk_size_override", 250)
 
         # Calculate from MTU (read-only display)
-        manager = FileTransferManager()
-        try:
-            return manager.get_chunk_size(self.adapter.client)
-        except Exception:
-            return 250  # Default fallback
+        # Note: get_chunk_size is async, but properties can't be async.
+        # Return cached MTU-based value from coordinator data if available,
+        # otherwise return default. The actual MTU will be queried during transfer.
+        return data.get("mtu_chunk_size", 250)  # Default fallback
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the chunk size override value.

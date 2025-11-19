@@ -73,7 +73,7 @@ class FileTransferManager:
     ATT_OVERHEAD = 3  # ATT protocol overhead bytes
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 60.0  # seconds to wait for BBC2 (long for large files)
-    TIMEOUT_CONFIRM = 3.0  # seconds to wait for BBC3
+    TIMEOUT_CONFIRM = 10.0  # seconds to wait for BBC3
     CHUNK_DELAY = 0.1  # seconds between chunks (100ms)
 
     def __init__(self) -> None:
@@ -82,7 +82,24 @@ class FileTransferManager:
         self._lock = asyncio.Lock()
         self._chunk_cache: dict[int, bytes] = {}
 
-    def get_chunk_size(
+    @staticmethod
+    def calculate_chunk_size_from_mtu(mtu: int) -> int:
+        """Calculate optimal chunk size from MTU value.
+
+        Args:
+            mtu: The BLE MTU size in bytes
+
+        Returns:
+            Optimal chunk size in bytes, constrained to valid range
+        """
+        # Account for ATT protocol overhead
+        chunk_size = min(
+            mtu - FileTransferManager.ATT_OVERHEAD,
+            FileTransferManager.MAX_CHUNK_SIZE,
+        )
+        return max(chunk_size, FileTransferManager.MIN_CHUNK_SIZE)
+
+    async def get_chunk_size(
         self,
         client: SkellyClient,
         override_size: int | None = None,
@@ -109,16 +126,15 @@ class FileTransferManager:
 
         # Try to use MTU-based chunk size if available
         try:
-            mtu = client.get_mtu_size()
+            mtu = await client.get_mtu_size()
             if mtu and mtu > 0:
-                # Account for ATT protocol overhead
-                chunk_size = min(mtu - self.ATT_OVERHEAD, self.MAX_CHUNK_SIZE)
+                chunk_size = self.calculate_chunk_size_from_mtu(mtu)
                 logger.debug(
                     "Using MTU-based chunk size: %d bytes (MTU: %d)",
                     chunk_size,
                     mtu,
                 )
-                return max(chunk_size, self.MIN_CHUNK_SIZE)
+                return chunk_size
         except (AttributeError, TypeError):
             # MTU not available or not valid, fall through to default
             pass
@@ -250,7 +266,7 @@ class FileTransferManager:
             )
         else:
             # First attempt - determine optimal chunk size based on BLE MTU or user override
-            chunk_size = self.get_chunk_size(client, override_chunk_size)
+            chunk_size = await self.get_chunk_size(client, override_chunk_size)
 
         self._state.chunk_size = chunk_size
 

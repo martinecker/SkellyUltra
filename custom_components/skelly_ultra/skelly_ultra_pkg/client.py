@@ -219,7 +219,7 @@ class SkellyClient:
             self._rest_session = aiohttp.ClientSession()
         return self._rest_session
 
-    def get_mtu_size(self) -> int | None:
+    async def get_mtu_size(self) -> int | None:
         """Get the BLE MTU size if available.
 
         Returns:
@@ -238,6 +238,16 @@ class SkellyClient:
         # In direct BLE mode, query the client
         try:
             if self._client and hasattr(self._client, "mtu_size"):
+                # Workaround for BlueZ backend: acquire MTU to get actual value
+                # Check if backend is BlueZ by inspecting the backend class name
+                if (
+                    hasattr(self._client, "_backend")
+                    and "bluez"
+                    in type(
+                        self._client._backend  # noqa: SLF001
+                    ).__module__.lower()
+                ):
+                    await self._client._backend._acquire_mtu()  # noqa: SLF001
                 return self._client.mtu_size
         except (AttributeError, TypeError):
             pass
