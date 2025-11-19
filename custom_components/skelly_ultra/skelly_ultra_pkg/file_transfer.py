@@ -74,7 +74,7 @@ class FileTransferManager:
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END = 60.0  # seconds to wait for BBC2 (long for large files)
     TIMEOUT_CONFIRM = 10.0  # seconds to wait for BBC3
-    CHUNK_DELAY = 0.1  # seconds between chunks (100ms)
+    CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
@@ -282,6 +282,27 @@ class FileTransferManager:
             chunk_size,
         )
 
+        # Give device a moment to process any potential previous requests sent (from coordinator)
+        # Then clear any stale events from queue before doing the transfer
+        await asyncio.sleep(0.1)
+
+        while not client.events.empty():
+            try:
+                stale_event = client.events.get_nowait()
+                logger.debug(
+                    "Clearing stale event before file transfer: %s",
+                    type(stale_event).__name__,
+                )
+            except asyncio.QueueEmpty:
+                break
+
+        # Pre-cache all chunks before sending (needed for retry if BBC2 arrives early)
+        logger.debug("Pre-caching all %d chunks for potential retry...", chunk_count)
+        for idx in range(chunk_count):
+            offset = idx * chunk_size
+            chunk_data = file_data[offset : offset + chunk_size]
+            self._chunk_cache[idx] = chunk_data
+
         # Phase 1: Start transfer (C0)
         await client.start_send_data(size, chunk_count, filename)
         start_event = await self._wait_for_event(
@@ -305,13 +326,6 @@ class FileTransferManager:
                 start_event.written,
             )
             self._state.sent_chunks = start_index
-
-        # Pre-cache all chunks before sending (needed for retry if BBC2 arrives early)
-        logger.debug("Pre-caching all %d chunks for potential retry...", chunk_count)
-        for idx in range(chunk_count):
-            offset = idx * chunk_size
-            chunk_data = file_data[offset : offset + chunk_size]
-            self._chunk_cache[idx] = chunk_data
 
         # Phase 2: Send data chunks (C1)
         await self._send_chunks(

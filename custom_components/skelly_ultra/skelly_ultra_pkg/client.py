@@ -571,8 +571,8 @@ class SkellyClient:
         await self.send_command(commands.set_eye_icon(icon, cluster, name))
 
     # File transfer convenience wrappers
-    async def start_send_data(self, size: int, max_pack: int, filename: str) -> None:
-        await self.send_command(commands.start_send_data(size, max_pack, filename))
+    async def start_send_data(self, size: int, chunk_count: int, filename: str) -> None:
+        await self.send_command(commands.start_send_data(size, chunk_count, filename))
 
     async def send_data_chunk(self, index: int, data: bytes) -> None:
         await self.send_command(commands.send_data_chunk(index, data))
