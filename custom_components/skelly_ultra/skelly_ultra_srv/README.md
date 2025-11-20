@@ -25,7 +25,7 @@ This server is designed to work around limitations of managing Bluetooth Classic
 - 🎵 Play audio files through connected devices
 - 🔗 **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
 
-The server can also act as a BLE proxy to control the BLE device in on or more Skelly devices. It can:
+The server can also act as a BLE proxy to control the BLE device in one or more Skelly devices. It can:
 
 - Forward raw BLE command bytes sent from clients to the Skelly.
 - Receive and buffer raw notification bytes from the Skelly that can be polled by clients.
