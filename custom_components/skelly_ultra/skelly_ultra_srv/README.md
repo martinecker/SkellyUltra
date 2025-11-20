@@ -56,9 +56,18 @@ sudo apt-get install bluez pipewire-bin python3-pip
 sudo dnf install bluez pipewire-utils python3-pip
 ```
 
+To install the Python dependencies, which are specified in `pyproject.toml`, simply run `pip`:
+
 ```bash
 cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
-pip3 install -r requirements.txt
+pip3 install .
+```
+
+On some Linux distributions you may instead have to manually install these dependencies via `sudo apt-get` using distribution-provided packages.
+These will often have a `python3-` prefix followed by the package name, for example:
+
+```bash
+sudo apt-get install python3-pydbus
 ```
 
 ### 2. Docker Installation (Alternative)
@@ -279,7 +288,7 @@ curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
 
 #### Requirements
 
-- Python package: `pydbus` (included in requirements.txt)
+- Python package: `pydbus` (included in `pyproject.toml`)
 - Sudo access for pairing (configured above)
 - Device must be in pairing mode and within range. Pairing mode is automatically enabled by the HA integration if called from it. See the HA integration service `skelly_ultra.enable_classic_bt`.
 
@@ -292,7 +301,7 @@ If you cannot configure sudo, you can pair manually:
 ```bash
 chmod +x pair_device.sh
 ./pair_device.sh <MAC_ADDRESS> <PIN>
-# Example: ./pair_device.sh F5:A1:BC:80:63:EC 8947
+# Example: ./pair_device.sh F5:A1:BC:80:63:EC 1234
 ```
 
 #### Option 2: Manual pairing with bluetoothctl
@@ -417,19 +426,19 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 # Pair device by name with PIN
 curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
-  -d '{"device_name": "Skelly Speaker", "pin": "8947"}'
+  -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 
 # With custom timeout
 curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
-  -d '{"device_name": "Skelly Speaker", "pin": "8947", "timeout": 60}'
+  -d '{"device_name": "Skelly Speaker", "pin": "1234", "timeout": 60}'
 ```
 
 ### 🔐 POST /classic/pair_and_trust_by_mac
 
 **Automatically pair and trust a Bluetooth device by MAC address using D-Bus agent.**
 
-**⚠️ Requires root privileges** - Server must be started with `sudo`
+**✨ Auto-elevates with sudo when needed** - Server can run as regular user
 
 This endpoint uses a D-Bus agent to handle PIN code requests automatically, eliminating the need for manual pairing through `bluetoothctl`.
 
@@ -493,12 +502,12 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 # Pair device with PIN
 curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
-  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "1234"}'
 
 # With custom timeout
 curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
   -H "Content-Type: application/json" \
-  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947", "timeout": 60}'
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "1234", "timeout": 60}'
 ```
 
 **Notes:**
@@ -1246,12 +1255,12 @@ python3 run_server.py
 # Pair device with PIN
 curl -X POST http://localhost:8765/classic/pair_and_trust_by_name \
   -H "Content-Type: application/json" \
-  -d '{"device_name": "Skelly Speaker", "pin": "8947"}'
+  -d '{"device_name": "Skelly Speaker", "pin": "1234"}'
 
 # After pairing, can connect without root
 curl -X POST http://localhost:8765/classic/connect_by_mac \
   -H "Content-Type: application/json" \
-  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "8947"}'
+  -d '{"mac": "F5:A1:BC:80:63:EC", "pin": "1234"}'
 ```
 
 ### 🔗 Connect to device by name:
