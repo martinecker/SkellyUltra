@@ -74,4 +74,9 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
     # Always use entry.title for device name, with fallback to identifier-based name
     device_name = entry.title or f"Skelly Ultra {identifier}"
 
-    return DeviceInfo(name=device_name, identifiers={(DOMAIN, identifier)})
+    return DeviceInfo(
+        name=device_name,
+        identifiers={(DOMAIN, identifier)},
+        manufacturer="Seasonal Visions International/Home Depot",
+        model="Ultra Skelly",
+    )
