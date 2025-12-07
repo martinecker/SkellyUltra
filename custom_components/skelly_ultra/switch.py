@@ -90,13 +90,13 @@ class SkellyConnectedSwitch(SwitchEntity):
         # If switch is off on startup, pause the coordinator
         if not self._is_on:
             self.coordinator.pause_updates()
-            _LOGGER.info("Connected switch is off - coordinator updates paused")
+            _LOGGER.debug("Connected switch is off - coordinator updates paused")
 
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs) -> None:
         """Turn on - connect to devices and resume coordinator polling."""
-        _LOGGER.info("Turning on Connected switch - connecting to devices")
+        _LOGGER.debug("Turning on Connected switch - connecting to devices")
 
         try:
             # Connect to BLE device
@@ -118,7 +118,7 @@ class SkellyConnectedSwitch(SwitchEntity):
             )
             self.async_write_ha_state()
 
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Connected switch turned on - devices connected and polling resumed"
             )
 
@@ -127,7 +127,7 @@ class SkellyConnectedSwitch(SwitchEntity):
 
     async def async_turn_off(self, **kwargs) -> None:
         """Turn off - disconnect from devices and pause coordinator polling."""
-        _LOGGER.info("Turning off Connected switch - disconnecting from devices")
+        _LOGGER.debug("Turning off Connected switch - disconnecting from devices")
 
         try:
             # Pause coordinator updates first to stop polling
@@ -146,7 +146,7 @@ class SkellyConnectedSwitch(SwitchEntity):
             )
             self.async_write_ha_state()
 
-            _LOGGER.info(
+            _LOGGER.debug(
                 "Connected switch turned off - devices disconnected and polling paused"
             )
 

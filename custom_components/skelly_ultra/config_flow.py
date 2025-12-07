@@ -52,7 +52,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             timeout = aiohttp.ClientTimeout(total=5.0)
             async with (
                 aiohttp.ClientSession(timeout=timeout) as session,
-                session.get(f"{server_url}/status") as resp,
+                session.get(f"{server_url}/health") as resp,
             ):
                 if resp.status == 200:
                     # Server is accessible
