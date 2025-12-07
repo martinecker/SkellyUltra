@@ -77,6 +77,7 @@ class AudioPlayer:
             cmd = ["pw-play"]
             if target:
                 cmd.extend(["--target", target])
+            cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
 
             process = await asyncio.create_subprocess_exec(
@@ -100,8 +101,12 @@ class AudioPlayer:
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
+            cmd_str = " ".join(f'"{arg}"' if " " in arg else arg for arg in cmd)
             _LOGGER.info(
-                "Playback started for: %s on target: %s", file_path, target_key
+                "Playback started for: %s on target: %s - Command: %s",
+                file_path,
+                target_key,
+                cmd_str,
             )
             return True
 

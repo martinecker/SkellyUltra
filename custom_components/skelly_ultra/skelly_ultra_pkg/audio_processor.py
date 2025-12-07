@@ -145,6 +145,8 @@ class AudioProcessor:
         input_path: str | Path,
         target_sample_rate: int | None = None,
         target_channels: int | None = None,
+        normalize_gain: bool = True,
+        target_peak_db: float = -9.0,
     ) -> bytes:
         """Process audio file and return WAV data as bytes.
 
@@ -152,6 +154,8 @@ class AudioProcessor:
             input_path: Path to input audio file (any format supported by pydub)
             target_sample_rate: Target sample rate (default: no resampling)
             target_channels: Target channels (default: no conversion)
+            normalize_gain: Whether to normalize audio gain (default: True)
+            target_peak_db: Target peak level in dB, between -12 and -6 (default: -9)
 
         Returns:
             WAV file data as bytes
@@ -163,6 +167,14 @@ class AudioProcessor:
         input_path = Path(input_path)
         if not input_path.exists():
             raise FileNotFoundError(f"Input audio file not found: {input_path}")
+
+        # Validate target_peak_db is in acceptable range
+        if not -12.0 <= target_peak_db <= -6.0:
+            logger.warning(
+                "target_peak_db %.1f dB is outside recommended range [-12, -6], clamping",
+                target_peak_db,
+            )
+            target_peak_db = max(-12.0, min(-6.0, target_peak_db))
 
         logger.info("Processing audio file to WAV: %s", input_path)
 
@@ -193,6 +205,29 @@ class AudioProcessor:
                     target_sample_rate,
                 )
                 audio = audio.set_frame_rate(target_sample_rate)
+
+            # Normalize gain if requested
+            if normalize_gain:
+                # Get current peak level in dBFS (dB relative to full scale)
+                current_peak_db = audio.max_dBFS
+                logger.debug("Current peak level: %.1f dBFS", current_peak_db)
+
+                # Calculate gain adjustment needed
+                # If audio is quieter than target, increase gain
+                # If audio is louder than target, decrease gain
+                gain_adjustment = target_peak_db - current_peak_db
+                logger.debug(
+                    "Applying gain adjustment: %.1f dB (target: %.1f dBFS)",
+                    gain_adjustment,
+                    target_peak_db,
+                )
+
+                # Apply gain adjustment
+                audio = audio.apply_gain(gain_adjustment)
+
+                # Verify final level
+                final_peak_db = audio.max_dBFS
+                logger.debug("Final peak level: %.1f dBFS", final_peak_db)
 
             # Export to WAV format in memory
             buffer = BytesIO()
