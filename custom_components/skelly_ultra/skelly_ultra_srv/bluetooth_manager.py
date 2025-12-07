@@ -16,9 +16,11 @@ try:
     import pydbus
 
     DBUS_AVAILABLE = True
-except ImportError:
+except ImportError as e:
     DBUS_AVAILABLE = False
-    _LOGGER.debug("pydbus not available, pair_and_trust will not work")
+    _LOGGER.warning(
+        "pydbus not available, pair_and_trust will not work. Import error: %s", e
+    )
 
 
 class DeviceInfo(NamedTuple):
