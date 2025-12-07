@@ -1295,7 +1295,7 @@ class SkellyClient:
 
     async def connect_live_mode(
         self,
-        timeout: float = 40.0,
+        timeout: float = 30.0,
         bt_pin: str = "1234",
     ) -> str | None:
         """Enable classic BT and connect via REST server.

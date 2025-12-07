@@ -233,7 +233,7 @@ class SkellyClientAdapter:
         return self._client
 
     async def connect_live_mode(
-        self, timeout: float = 10.0, bt_pin: str = "1234"
+        self, timeout: float = 30.0, bt_pin: str = "1234"
     ) -> str | None:
         """Connect to the classic/live Bluetooth device aka live mode.
 
