@@ -157,6 +157,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Return last known data or empty dict to avoid raising UpdateFailed
             return self.data if self.data else {}
 
+        if not self.adapter.client.is_connected:
+            _LOGGER.debug("Skipping coordinator update - device not connected")
+            return self.data if self.data else {}
+
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
             _LOGGER.debug("Coordinator polling Skelly device for updates")
@@ -312,7 +316,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 except Exception:
                     _LOGGER.debug(
                         "Could not calculate MTU-based chunk size, using default: %d bytes",
-                         mtu_chunk_size
+                        mtu_chunk_size,
                     )
 
                 # Extract pin_code and show_mode from DeviceParamsEvent
