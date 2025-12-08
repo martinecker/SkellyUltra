@@ -893,8 +893,8 @@ class SkellyClient:
         live_name: str,
         bt_pin: str,
         timeout: float,
-    ) -> tuple[str | None, bool]:
-        """Attempt automated pairing via REST server.
+    ) -> str | None:
+        """Attempt automated pairing via REST server with retry on timeout.
 
         Args:
             live_name: Device name to pair
@@ -902,48 +902,92 @@ class SkellyClient:
             timeout: Server-side timeout for pairing operation
 
         Returns:
-            Tuple of (mac_address, pairing_succeeded)
+            MAC address on success, None on failure
         """
-        try:
-            logger.debug("Attempting to pair and trust device: %s", live_name)
-            http_timeout = timeout + 10  # Add buffer for HTTP response
-            timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-            async with aiohttp.ClientSession(timeout=timeout_config) as session:
+
+        async def _try_pairing() -> tuple[str | None, dict[str, Any] | None]:
+            """Single pairing attempt. Returns (mac_address, response_data)."""
+            try:
+                logger.debug("Attempting to pair and trust device: %s", live_name)
+                http_timeout = timeout + 10  # Add buffer for HTTP response
+                timeout_config = aiohttp.ClientTimeout(total=http_timeout)
+                session = self._get_rest_session()
                 async with session.post(
                     f"{self.server_url}/classic/pair_and_trust_by_name",
                     json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
+                    timeout=timeout_config,
                 ) as resp:
                     pair_data = await resp.json()
 
-            if pair_data.get("success"):
-                mac_address = pair_data.get("mac")
-                if mac_address:
-                    logger.info(
-                        "Successfully paired and trusted device %s (MAC: %s)",
-                        live_name,
-                        mac_address,
-                    )
-                    return mac_address, True
-                logger.warning(
-                    "Pairing succeeded but no MAC address returned, falling back to connect_by_name",
+                if pair_data.get("success"):
+                    mac_address = pair_data.get("mac")
+                    if mac_address:
+                        logger.info(
+                            "Successfully paired and trusted device %s (MAC: %s)",
+                            live_name,
+                            mac_address,
+                        )
+                        return mac_address, pair_data
+                    logger.warning("Pairing succeeded but no MAC address returned")
+                    return None, pair_data
+
+                error_msg = pair_data.get("error", "Unknown error")
+                logger.warning("Pairing failed: %s", error_msg)
+                return None, pair_data
+
+            except TimeoutError:
+                logger.warning("Pairing request timed out")
+                return None, None
+            except aiohttp.ClientError as err:
+                logger.warning("Pairing request communication error: %s", err)
+                return None, None
+            except Exception:
+                logger.exception("Unexpected error during pairing attempt")
+                return None, None
+
+        # First attempt
+        mac_address, response_data = await _try_pairing()
+        if mac_address:
+            return mac_address
+
+        # If first attempt timed out, check status to see if pairing succeeded anyway
+        if response_data is None:  # Timeout occurred
+            logger.info(
+                "Checking REST server status to verify if pairing succeeded despite timeout",
+            )
+            status_mac = await self._check_device_in_status(live_name)
+            if status_mac:
+                logger.info(
+                    "Device %s found paired in status after timeout",
+                    live_name,
                 )
-            error_msg = pair_data.get("error", "Unknown error")
+                return status_mac
+
+            # Not found in status after timeout, retry once
             logger.info(
-                "Pairing failed (%s), will attempt connect_by_name fallback",
-                error_msg,
+                "Device %s not found in status after timeout, retrying pairing",
+                live_name,
             )
+            mac_address, response_data = await _try_pairing()
+            if mac_address:
+                return mac_address
 
-        except (TimeoutError, aiohttp.ClientError) as err:
-            logger.info(
-                "Pairing request failed (%s), will attempt connect_by_name fallback",
-                err,
-            )
-        except Exception:
-            logger.debug("Unexpected error during pairing attempt", exc_info=True)
+            # Check status again after retry timeout
+            if response_data is None:
+                logger.info(
+                    "Checking REST server status after retry timeout",
+                )
+                status_mac = await self._check_device_in_status(live_name)
+                if status_mac:
+                    return status_mac
 
-        return None, False
+        logger.error(
+            "Failed to pair device %s after all attempts",
+            live_name,
+        )
+        return None
 
-    async def _connect_by_mac_after_pairing(
+    async def _connect_by_mac(
         self,
         mac_address: str,
         bt_pin: str,
@@ -963,12 +1007,13 @@ class SkellyClient:
             logger.info("Connecting to paired device by MAC address: %s", mac_address)
             http_timeout = timeout + 5  # Connection should be quick after pairing
             timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-            async with aiohttp.ClientSession(timeout=timeout_config) as session:
-                async with session.post(
-                    f"{self.server_url}/classic/connect_by_mac",
-                    json={"mac": mac_address, "pin": bt_pin},
-                ) as resp:
-                    connect_data = await resp.json()
+            session = self._get_rest_session()
+            async with session.post(
+                f"{self.server_url}/classic/connect_by_mac",
+                json={"mac": mac_address, "pin": bt_pin},
+                timeout=timeout_config,
+            ) as resp:
+                connect_data = await resp.json()
 
             if connect_data.get("success"):
                 logger.info(
@@ -977,71 +1022,27 @@ class SkellyClient:
                 )
                 self._live_mode_client_address = mac_address
                 return mac_address
+
             error_msg = (
                 connect_data.get("error")
                 or connect_data.get("message")
                 or "Unknown error"
             )
-            logger.warning(
-                "Failed to connect by MAC after pairing: %s, trying connect_by_name",
+            logger.error(
+                "Failed to connect by MAC: %s",
                 error_msg,
             )
+            return None
 
         except (TimeoutError, aiohttp.ClientError) as err:
-            logger.warning(
-                "Error connecting by MAC after pairing: %s, trying connect_by_name",
+            logger.error(
+                "Error connecting by MAC: %s",
                 err,
             )
-
-        return None
-
-    async def _connect_by_name_simple(
-        self,
-        live_name: str,
-        bt_pin: str,
-        timeout: float,
-    ) -> str | None:
-        """Connect to device by name without retry logic.
-
-        Args:
-            live_name: Device name to connect to
-            bt_pin: PIN code for connection
-            timeout: Server-side timeout for connection operation
-
-        Returns:
-            MAC address on success, None on failure.
-        """
-        http_timeout = timeout + 5  # Add buffer for HTTP overhead
-        timeout_config = aiohttp.ClientTimeout(total=http_timeout)
-        async with aiohttp.ClientSession(timeout=timeout_config) as session:
-            async with session.post(
-                f"{self.server_url}/classic/connect_by_name",
-                json={"device_name": live_name, "pin": bt_pin},
-            ) as resp:
-                connect_data = await resp.json()
-
-        if not connect_data.get("success"):
-            error_msg = (
-                connect_data.get("error")
-                or connect_data.get("message")
-                or "Unknown error"
-            )
-            logger.warning(
-                "REST server failed to connect to %s: %s (response: %s)",
-                live_name,
-                error_msg,
-                connect_data,
-            )
             return None
-
-        mac_address = connect_data.get("mac")
-        if not mac_address:
-            logger.warning("REST server connected but did not return MAC address")
+        except Exception:
+            logger.exception("Unexpected error connecting by MAC")
             return None
-
-        logger.info("Successfully connected to classic BT device %s", mac_address)
-        self._live_mode_client_address = mac_address
-        return mac_address
 
     async def _check_device_in_status(self, live_name: str) -> str | None:
         """Check if device is connected by querying REST server status.
@@ -1074,75 +1075,6 @@ class SkellyClient:
             logger.debug("Failed to check device status", exc_info=True)
 
         return None
-
-    async def _connect_by_name_with_retry(
-        self,
-        live_name: str,
-        bt_pin: str,
-        timeout: float,
-    ) -> str | None:
-        """Connect to device by name with retry logic on timeout.
-
-        This handles the case where the connection succeeds but the response times out.
-
-        Args:
-            live_name: Device name to connect to
-            bt_pin: PIN code for connection
-            timeout: Server-side timeout for connection operation
-
-        Returns:
-            MAC address on success, None on failure.
-        """
-        try:
-            logger.info("Attempting to connect by name: %s", live_name)
-            return await self._connect_by_name_simple(live_name, bt_pin, timeout)
-
-        except TimeoutError:
-            logger.warning("REST server connection request timed out")
-            logger.info(
-                "Checking REST server status to verify connection for %s",
-                live_name,
-            )
-
-            # Check if connection succeeded despite timeout
-            mac_address = await self._check_device_in_status(live_name)
-            if mac_address:
-                return mac_address
-
-            # Not found in status, retry the connection once
-            logger.info(
-                "Device %s not found in REST server status, retrying connection",
-                live_name,
-            )
-
-            try:
-                mac_address = await self._connect_by_name_simple(
-                    live_name,
-                    bt_pin,
-                    timeout,
-                )
-                if mac_address:
-                    logger.info(
-                        "Successfully connected to classic BT device %s on retry",
-                        mac_address,
-                    )
-                return mac_address
-
-            except TimeoutError:
-                logger.warning("REST server retry connection also timed out")
-                # One more status check after retry timeout
-                return await self._check_device_in_status(live_name)
-
-            except aiohttp.ClientError as err:
-                logger.warning("REST server retry communication error: %s", err)
-                return None
-
-        except aiohttp.ClientError as err:
-            logger.warning("REST server communication error: %s", err)
-            return None
-        except Exception:
-            logger.exception("Unexpected error during REST server communication")
-            return None
 
     async def _connect_via_proxy(self, timeout: float = 10.0) -> bool:
         """Connect to BLE device via REST server proxy.
@@ -1303,14 +1235,11 @@ class SkellyClient:
         Sequence:
         1. Query the device for its live name (uses the existing BLE connection)
         2. Send the enable_classic_bt command to expose a classic Bluetooth device
-        3. Attempt automated pairing via REST server (requires root on server):
-           - If successful: Connect by MAC address and return immediately
-        4. Fallback to connect_by_name (for manually paired devices):
-           - Used if pairing fails or server lacks root privileges
-           - Requires device to be manually paired beforehand
+        3. Attempt automated pairing via REST server (requires root on server)
+        4. If pairing succeeds, connect by MAC address
 
         Args:
-            timeout: Server-side timeout for pairing/connection operations (default 40s).
+            timeout: Server-side timeout for pairing/connection operations (default 30s).
                     HTTP requests use timeout + buffer to allow for network overhead.
             bt_pin: PIN code for pairing (default "1234").
 
@@ -1329,33 +1258,31 @@ class SkellyClient:
         # Step 1: Get device name via BLE
         live_name = await self._get_live_name_for_connection()
         if not live_name:
+            logger.error("Failed to get device live name")
             return None
 
         # Step 2: Enable classic Bluetooth advertising
         if not await self._enable_bt_advertising():
+            logger.error("Failed to enable classic Bluetooth advertising")
             return None
 
         logger.info(
-            "Requesting REST server to connect to classic BT device: %s",
+            "Requesting REST server to pair and connect to classic BT device: %s",
             live_name,
         )
 
-        # Step 3: Try automated pairing (requires root privileges on server)
-        mac_address, pairing_succeeded = await self._attempt_automated_pairing(
+        # Step 3: Attempt automated pairing (requires root privileges on server)
+        mac_address = await self._attempt_automated_pairing(
             live_name,
             bt_pin,
             timeout,
         )
-
-        # Step 4: If pairing succeeded, connect by MAC address
-        if pairing_succeeded and mac_address:
-            connected_mac = await self._connect_by_mac_after_pairing(
-                mac_address,
-                bt_pin,
-                timeout,
+        if not mac_address:
+            logger.error(
+                "Failed to pair device %s. Ensure REST server has or can gain root privileges for pairing.",
+                live_name,
             )
-            if connected_mac:
-                return connected_mac
+            return None
 
-        # Step 5: Fallback to connect_by_name (for manually paired devices)
-        return await self._connect_by_name_with_retry(live_name, bt_pin, timeout)
+        # Step 4: Connect by MAC address
+        return await self._connect_by_mac(mac_address, bt_pin, timeout)
