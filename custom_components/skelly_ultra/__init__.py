@@ -69,6 +69,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
 
+        # Immediately enable BT classic mode so that live mode can connect
+        try:
+            await adapter.client.enable_classic_bt()
+        except Exception:
+            _LOGGER.exception("Failed to enable classic Bluetooth")
+
         # Perform immediate initial coordinator refresh after successful connection
         try:
             await coordinator.async_refresh()
