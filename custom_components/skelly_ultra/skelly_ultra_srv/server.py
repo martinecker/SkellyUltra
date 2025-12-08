@@ -11,7 +11,7 @@ from aiohttp import web
 
 from .audio_player import AudioPlayer
 from .ble_session_manager import BLESessionManager
-from .bluetooth_manager import BluetoothManager
+from .bluetooth_manager import BluetoothManager, DeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -80,6 +80,16 @@ class SkellyUltraServer:
                 "📤 RESPONSE from %s:\n%s", endpoint, json.dumps(data, indent=2)
             )
 
+    @staticmethod
+    def _serialize_device_info(device: DeviceInfo | None) -> dict[str, str | None]:
+        """Return a JSON-friendly representation of a DeviceInfo."""
+
+        return {
+            "name": device.name if device else None,
+            "mac": device.mac if device else None,
+            "adapter_path": device.adapter_path if device else None,
+        }
+
     def _setup_routes(self) -> None:
         """Set up API routes."""
         # Classic Bluetooth A2DP speaker endpoints
@@ -125,6 +135,7 @@ class SkellyUltraServer:
             "success": true/false,
             "device_name": "Skelly Speaker",
             "mac": "AA:BB:CC:DD:EE:FF",
+            "adapter_path": "/org/bluez/hci0",
             "error": "error message if failed"
         }
         """
@@ -142,11 +153,18 @@ class SkellyUltraServer:
 
             _LOGGER.info("Received connect_by_name request for: %s", device_name)
             success, mac = await self.bt_manager.connect_by_name(device_name, pin)
+            device_info = self.bt_manager.get_device_by_mac(mac) if mac else None
+            adapter_path = (
+                device_info.adapter_path
+                if device_info
+                else self.bt_manager.get_device_adapter_path(mac)
+            )
 
             response_data = {
                 "success": success,
-                "device_name": self.bt_manager.get_connected_device_name(),
+                "device_name": (device_info.name if device_info else device_name),
                 "mac": mac,
+                "adapter_path": adapter_path,
             }
             self._log_response("connect_by_name", response_data)
             return web.json_response(response_data)
@@ -181,6 +199,7 @@ class SkellyUltraServer:
             "success": true/false,
             "device_name": "Skelly Speaker",
             "mac": "AA:BB:CC:DD:EE:FF",
+            "adapter_path": "/org/bluez/hci0",
             "error": "error message if failed"
         }
         """
@@ -197,12 +216,19 @@ class SkellyUltraServer:
                 return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received connect_by_mac request for: %s", mac)
-            await self.bt_manager.connect_by_mac(mac, pin)
+            success = await self.bt_manager.connect_by_mac(mac, pin)
+            device_info = self.bt_manager.get_device_by_mac(mac)
+            adapter_path = (
+                device_info.adapter_path
+                if device_info
+                else self.bt_manager.get_device_adapter_path(mac)
+            )
 
             response_data = {
-                "success": True,
-                "device_name": self.bt_manager.get_connected_device_name(),
-                "mac": self.bt_manager.get_connected_device_mac(),
+                "success": success,
+                "device_name": device_info.name if device_info else None,
+                "mac": mac,
+                "adapter_path": adapter_path,
             }
             self._log_response("connect_by_mac", response_data)
             return web.json_response(response_data)
@@ -233,17 +259,19 @@ class SkellyUltraServer:
         {
             "device_name": "Skelly Speaker",
             "pin": "1234",
-            "timeout": 30  # optional, default 30 seconds
+            "timeout": 30,  # optional, default 30 seconds
+            "adapter_path": "/org/bluez/hci0"  # optional adapter override
         }
 
         Returns:
         {
             "success": true/false,
             "error": "error message if failed",
-            "paired": true,
-            "trusted": true,
+            "paired": true/false,
+            "trusted": true/false,
             "device_name": "Skelly Speaker",
-            "mac": "AA:BB:CC:DD:EE:FF"
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "adapter_path": "/org/bluez/hci0"
         }
         """
         try:
@@ -253,6 +281,7 @@ class SkellyUltraServer:
             device_name = data.get("device_name")
             pin = data.get("pin", "1234")
             timeout = data.get("timeout", 30.0)
+            adapter_path = data.get("adapter_path")
 
             if not device_name:
                 response_data = {"success": False, "error": "device_name is required"}
@@ -266,15 +295,18 @@ class SkellyUltraServer:
 
             _LOGGER.info("Received pair_and_trust_by_name request for: %s", device_name)
             success, mac = await self.bt_manager.pair_and_trust_by_name(
-                device_name, pin, timeout
+                device_name, pin, timeout, adapter_path=adapter_path
             )
+
+            mapped_adapter = self.bt_manager.get_device_adapter_path(mac)
 
             response_data = {
                 "success": success,
-                "paired": True,
-                "trusted": True,
+                "paired": success,
+                "trusted": success,
                 "device_name": device_name,
                 "mac": mac,
+                "adapter_path": mapped_adapter,
             }
             self._log_response("pair_and_trust_by_name", response_data)
             return web.json_response(response_data)
@@ -319,16 +351,18 @@ class SkellyUltraServer:
         {
             "mac": "AA:BB:CC:DD:EE:FF",
             "pin": "1234",
-            "timeout": 30  # optional, default 30 seconds
+            "timeout": 30,  # optional, default 30 seconds
+            "adapter_path": "/org/bluez/hci0"  # optional adapter override
         }
 
         Returns:
         {
             "success": true/false,
             "error": "error message if failed",
-            "paired": true,
-            "trusted": true,
-            "mac": "AA:BB:CC:DD:EE:FF"
+            "paired": true/false,
+            "trusted": true/false,
+            "mac": "AA:BB:CC:DD:EE:FF",
+            "adapter_path": "/org/bluez/hci0"
         }
         """
         try:
@@ -338,6 +372,7 @@ class SkellyUltraServer:
             mac = data.get("mac")
             pin = data.get("pin", "1234")
             timeout = data.get("timeout", 30.0)
+            adapter_path = data.get("adapter_path")
 
             if not mac:
                 response_data = {"success": False, "error": "mac is required"}
@@ -350,13 +385,18 @@ class SkellyUltraServer:
                 return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received pair_and_trust_by_mac request for: %s", mac)
-            success = await self.bt_manager.pair_and_trust_by_mac(mac, pin, timeout)
+            success = await self.bt_manager.pair_and_trust_by_mac(
+                mac, pin, timeout, adapter_path=adapter_path
+            )
+
+            mapped_adapter = self.bt_manager.get_device_adapter_path(mac)
 
             response_data = {
                 "success": success,
-                "paired": True,
-                "trusted": True,
+                "paired": success,
+                "trusted": success,
                 "mac": mac,
+                "adapter_path": mapped_adapter,
             }
             self._log_response("pair_and_trust_by_mac", response_data)
             return web.json_response(response_data)
@@ -400,11 +440,12 @@ class SkellyUltraServer:
         {
             "device_name": "Skelly Speaker",  # If mac param provided
             "mac": "AA:BB:CC:DD:EE:FF",
-            "connected": true/false
+            "connected": true/false,
+            "adapter_path": "/org/bluez/hci0"
         }
         or
         {
-            "devices": [{"name": "...", "mac": "..."}],
+            "devices": [{"name": "...", "mac": "...", "adapter_path": "..."}],
             "count": 1
         }
         """
@@ -418,6 +459,7 @@ class SkellyUltraServer:
                 "device_name": device.name if device else None,
                 "mac": mac,
                 "connected": device is not None,
+                "adapter_path": device.adapter_path if device else None,
             }
             self._log_response("get_name", response_data)
             return web.json_response(response_data)
@@ -425,7 +467,7 @@ class SkellyUltraServer:
         # Return all connected devices
         devices = self.bt_manager.get_connected_devices()
         response_data = {
-            "devices": [{"name": dev.name, "mac": dev.mac} for dev in devices.values()],
+            "devices": [self._serialize_device_info(dev) for dev in devices.values()],
             "count": len(devices),
         }
         self._log_response("get_name", response_data)
@@ -441,11 +483,12 @@ class SkellyUltraServer:
         {
             "mac": "AA:BB:CC:DD:EE:FF",  # If name param provided
             "device_name": "Skelly Speaker",
-            "connected": true/false
+            "connected": true/false,
+            "adapter_path": "/org/bluez/hci0"
         }
         or
         {
-            "devices": [{"name": "...", "mac": "..."}],
+            "devices": [{"name": "...", "mac": "...", "adapter_path": "..."}],
             "count": 1
         }
         """
@@ -459,6 +502,7 @@ class SkellyUltraServer:
                 "mac": device.mac if device else None,
                 "device_name": name,
                 "connected": device is not None,
+                "adapter_path": device.adapter_path if device else None,
             }
             self._log_response("get_mac", response_data)
             return web.json_response(response_data)
@@ -466,7 +510,7 @@ class SkellyUltraServer:
         # Return all connected devices
         devices = self.bt_manager.get_connected_devices()
         response_data = {
-            "devices": [{"name": dev.name, "mac": dev.mac} for dev in devices.values()],
+            "devices": [self._serialize_device_info(dev) for dev in devices.values()],
             "count": len(devices),
         }
         self._log_response("get_mac", response_data)
@@ -781,7 +825,7 @@ class SkellyUltraServer:
 
             response_data = {
                 "success": success,
-                "connected": self.bt_manager.get_connected_device_mac() is not None,
+                "connected": bool(self.bt_manager.get_connected_devices()),
             }
             self._log_response("disconnect", response_data)
             return web.json_response(response_data)
@@ -801,7 +845,7 @@ class SkellyUltraServer:
         {
             "bluetooth": {
                 "connected_count": 1,
-                "devices": [{"name": "...", "mac": "..."}]
+                "devices": [{"name": "...", "mac": "...", "adapter_path": "..."}]
             },
             "audio": {
                 "is_playing": true/false,
@@ -819,7 +863,7 @@ class SkellyUltraServer:
             "bluetooth": {
                 "connected_count": len(connected_devices),
                 "devices": [
-                    {"name": dev.name, "mac": dev.mac}
+                    self._serialize_device_info(dev)
                     for dev in connected_devices.values()
                 ],
             },

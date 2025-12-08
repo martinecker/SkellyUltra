@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
-from typing import Any, NamedTuple
+import sys
+from pathlib import Path
+from typing import Any, NamedTuple, cast
+import traceback
 
 from dbus_next import BusType, Variant
 from dbus_next.aio import MessageBus
+from dbus_next.errors import DBusError
 from dbus_next.service import ServiceInterface, method, signal
 
 _LOGGER = logging.getLogger(__name__)
@@ -19,6 +24,7 @@ class DeviceInfo(NamedTuple):
 
     name: str | None
     mac: str | None
+    adapter_path: str | None
 
 
 class PairingAgent(ServiceInterface):
@@ -75,11 +81,12 @@ class PairingAgent(ServiceInterface):
         _LOGGER.info("Passkey requested for device: %s", device)
         try:
             passkey = int(self.pin_code)
-            _LOGGER.debug("Returning passkey: %d", passkey)
-            return passkey
         except ValueError:
             _LOGGER.error("PIN code %s is not a valid integer passkey", self.pin_code)
             raise
+        else:
+            _LOGGER.debug("Returning passkey: %d", passkey)
+            return passkey
 
     @method()
     def DisplayPasskey(self, device: "o", passkey: "u", entered: "q"):
@@ -138,8 +145,6 @@ class PairingAgent(ServiceInterface):
     def Cancel(self):
         """Handle cancellation of pairing."""
         _LOGGER.warning("Pairing cancelled by BlueZ or device")
-        import traceback
-
         _LOGGER.debug("Cancel called from:\n%s", "".join(traceback.format_stack()))
 
     @method()
@@ -163,10 +168,165 @@ class BluetoothManager:
         self._scanner_running = False
         self._allow_scanner = allow_scanner
         self._bus: MessageBus | None = None
-        self._adapter_path = "/org/bluez/hci0"
-        self._adapter = None
-        self._adapter_props = None
         self._object_manager = None
+        self._adapter_paths: list[str] = []
+        self._adapter_lock = asyncio.Lock()
+        self._adapter_interfaces: dict[str, Any] = {}
+        self._adapter_props: dict[str, Any] = {}
+        self._adapter_connections: dict[str, str | None] = {}
+        self._device_adapter_map: dict[str, str] = {}
+        self._adapter_rr_index = 0
+        self._active_pairing_agent: PairingAgent | None = None
+
+    @staticmethod
+    def _normalize_mac(mac: str) -> str:
+        """Return MAC address in upper-case format."""
+
+        return mac.upper()
+
+    @staticmethod
+    def _adapter_label(adapter_path: str) -> str:
+        """Human friendly adapter name for logs."""
+
+        return adapter_path.rsplit("/", maxsplit=1)[-1]
+
+    async def _async_refresh_adapters(self) -> list[str]:
+        """Discover available Bluetooth adapters."""
+
+        obj_manager = await self._async_get_object_manager()
+        objects = await obj_manager.call_get_managed_objects()
+        adapter_paths = sorted(
+            path
+            for path, interfaces in objects.items()
+            if "org.bluez.Adapter1" in interfaces
+        )
+        if not adapter_paths:
+            raise RuntimeError("No Bluetooth adapters found")
+
+        removed = set(self._adapter_connections) - set(adapter_paths)
+        for path in removed:
+            self._adapter_connections.pop(path, None)
+            self._adapter_interfaces.pop(path, None)
+            self._adapter_props.pop(path, None)
+
+        for path in adapter_paths:
+            self._adapter_connections.setdefault(path, None)
+
+        self._adapter_paths = adapter_paths
+        return adapter_paths
+
+    async def _async_get_adapter_paths(self) -> list[str]:
+        """Return cached adapter paths, refreshing if necessary."""
+
+        if not self._adapter_paths:
+            return await self._async_refresh_adapters()
+        return self._adapter_paths
+
+    async def _async_get_adapter(
+        self, adapter_path: str | None = None
+    ) -> tuple[Any, Any]:
+        """Return Adapter1 and Property interfaces for specified adapter."""
+
+        adapter_paths = await self._async_get_adapter_paths()
+        if adapter_path is None:
+            adapter_path = adapter_paths[0]
+
+        if (
+            adapter_path not in self._adapter_interfaces
+            or adapter_path not in self._adapter_props
+        ):
+            bus = await self._async_get_bus()
+            introspection = await bus.introspect("org.bluez", adapter_path)
+            proxy = bus.get_proxy_object("org.bluez", adapter_path, introspection)
+            self._adapter_interfaces[adapter_path] = self._proxy_interface(
+                proxy, "org.bluez.Adapter1"
+            )
+            self._adapter_props[adapter_path] = self._proxy_interface(
+                proxy, "org.freedesktop.DBus.Properties"
+            )
+
+        return self._adapter_interfaces[adapter_path], self._adapter_props[adapter_path]
+
+    async def _async_find_device_path(self, mac: str) -> str | None:
+        """Return the BlueZ object path for the given MAC address."""
+
+        normalized_mac = self._normalize_mac(mac)
+        obj_manager = await self._async_get_object_manager()
+        objects = await obj_manager.call_get_managed_objects()
+        for path, interfaces in objects.items():
+            device_props = interfaces.get("org.bluez.Device1")
+            if not device_props:
+                continue
+            address_variant = device_props.get("Address")
+            address = self._variant_value(address_variant) if address_variant else None
+            if address and address.upper() == normalized_mac:
+                adapter_variant = device_props.get("Adapter")
+                adapter_path = (
+                    self._variant_value(adapter_variant) if adapter_variant else None
+                )
+                if adapter_path:
+                    self._device_adapter_map[normalized_mac] = adapter_path
+                return path
+        return None
+
+    async def _async_get_device_adapter_path(self, mac: str) -> str | None:
+        """Return adapter path associated with device if known."""
+
+        normalized_mac = self._normalize_mac(mac)
+        if normalized_mac in self._device_adapter_map:
+            return self._device_adapter_map[normalized_mac]
+
+        device_path = await self._async_find_device_path(normalized_mac)
+        if not device_path:
+            return None
+
+        bus = await self._async_get_bus()
+        introspection = await bus.introspect("org.bluez", device_path)
+        assert device_path is not None
+        proxy = bus.get_proxy_object("org.bluez", device_path, introspection)
+        device_props = self._proxy_interface(proxy, "org.freedesktop.DBus.Properties")
+        adapter_variant = await device_props.call_get("org.bluez.Device1", "Adapter")
+        adapter_path = self._variant_value(adapter_variant)
+        self._device_adapter_map[normalized_mac] = adapter_path
+        return adapter_path
+
+    async def _async_select_adapter_for_pairing(self, mac: str | None = None) -> str:
+        """Select adapter to use for pairing a device."""
+
+        await self._async_get_adapter_paths()
+        normalized_mac = self._normalize_mac(mac) if mac else None
+
+        if normalized_mac:
+            adapter_path = await self._async_get_device_adapter_path(normalized_mac)
+            if adapter_path:
+                return adapter_path
+
+        assignments: dict[str, int] = {}
+        for adapter_path in self._adapter_paths:
+            assignments[adapter_path] = 0
+
+        for mapped_adapter in self._device_adapter_map.values():
+            if mapped_adapter in assignments:
+                assignments[mapped_adapter] += 1
+
+        min_count = min(assignments.values())
+        candidates = [path for path, count in assignments.items() if count == min_count]
+        candidates.sort()
+        if not candidates:
+            raise RuntimeError("No Bluetooth adapters available for pairing")
+
+        index = self._adapter_rr_index % len(candidates)
+        adapter_path = candidates[index]
+        self._adapter_rr_index = (self._adapter_rr_index + 1) % len(self._adapter_paths)
+        if normalized_mac:
+            self._device_adapter_map[normalized_mac] = adapter_path
+        return adapter_path
+
+    @staticmethod
+    def _device_path_for_adapter(adapter_path: str, mac: str) -> str:
+        """Return deterministic device path for adapter and MAC."""
+
+        return f"{adapter_path}/dev_{mac.replace(':', '_')}"
 
     async def start_background_scanner(self) -> None:
         """Start background Bluetooth scanning to populate device cache."""
@@ -182,10 +342,8 @@ class BluetoothManager:
         if self._scanner_task:
             self._scanner_running = False
             self._scanner_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await self._scanner_task
-            except asyncio.CancelledError:
-                pass
             self._scanner_task = None
             _LOGGER.info("Stopped background Bluetooth scanner")
 
@@ -195,12 +353,16 @@ class BluetoothManager:
             try:
                 self._bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
                 _LOGGER.debug("Connected to D-Bus system bus")
-            except Exception as exc:  # pragma: no cover - connection errors are rare
-                raise RuntimeError(f"Failed to connect to D-Bus system bus: {exc}")
+            except (
+                DBusError,
+                OSError,
+            ) as exc:  # pragma: no cover - connection errors are rare
+                raise RuntimeError("Failed to connect to D-Bus system bus") from exc
             # Reset cached interfaces when reconnecting
-            self._adapter = None
-            self._adapter_props = None
             self._object_manager = None
+            self._adapter_interfaces.clear()
+            self._adapter_props.clear()
+            self._adapter_paths = []
         return self._bus
 
     async def _async_get_object_manager(self) -> Any:
@@ -209,29 +371,15 @@ class BluetoothManager:
             bus = await self._async_get_bus()
             introspection = await bus.introspect("org.bluez", "/")
             proxy = bus.get_proxy_object("org.bluez", "/", introspection)
-            self._object_manager = proxy.get_interface(
-                "org.freedesktop.DBus.ObjectManager"
+            self._object_manager = self._proxy_interface(
+                proxy, "org.freedesktop.DBus.ObjectManager"
             )
         return self._object_manager
-
-    async def _async_get_adapter(self) -> tuple[Any, Any]:
-        """Return Adapter1 and its property interface."""
-        if self._adapter is None or self._adapter_props is None:
-            bus = await self._async_get_bus()
-            introspection = await bus.introspect("org.bluez", self._adapter_path)
-            proxy = bus.get_proxy_object("org.bluez", self._adapter_path, introspection)
-            self._adapter = proxy.get_interface("org.bluez.Adapter1")
-            self._adapter_props = proxy.get_interface("org.freedesktop.DBus.Properties")
-        return self._adapter, self._adapter_props
 
     @staticmethod
     def _variant_value(value: Any) -> Any:
         """Unwrap Variant objects returned by dbus_next."""
         return value.value if hasattr(value, "value") else value
-
-    def _device_path_from_mac(self, mac: str) -> str:
-        """Return the BlueZ object path for the given MAC address."""
-        return f"{self._adapter_path}/dev_{mac.replace(':', '_')}"
 
     async def _async_collect_discovered_devices(self) -> dict[str, str | None]:
         """Return mapping of MAC -> device name for all known devices."""
@@ -252,31 +400,35 @@ class BluetoothManager:
 
     async def _async_device_known(self, mac: str) -> bool:
         """Return True if BlueZ currently knows about the device."""
-        device_path = self._device_path_from_mac(mac)
-        obj_manager = await self._async_get_object_manager()
-        objects = await obj_manager.call_get_managed_objects()
-        return device_path in objects
+        return (await self._async_find_device_path(mac)) is not None
 
     async def _async_discover_device(self, mac: str, timeout: float = 8.0) -> None:
         """Start discovery and wait for the device to appear."""
-        adapter, _ = await self._async_get_adapter()
-        await adapter.call_start_discovery()
+        adapter_paths = await self._async_get_adapter_paths()
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
-        try:
-            while True:
-                if await self._async_device_known(mac):
-                    _LOGGER.debug("Device %s discovered", mac)
-                    return
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    break
-                await asyncio.sleep(min(0.5, remaining))
-        finally:
+
+        for adapter_path in adapter_paths:
+            adapter, _ = await self._async_get_adapter(adapter_path)
+            await adapter.call_start_discovery()
             try:
-                await adapter.call_stop_discovery()
-            except Exception:  # pragma: no cover - best effort cleanup
-                pass
+                while True:
+                    if await self._async_device_known(mac):
+                        _LOGGER.debug(
+                            "Device %s discovered on %s",
+                            mac,
+                            self._adapter_label(adapter_path),
+                        )
+                        return
+                    remaining = deadline - loop.time()
+                    if remaining <= 0:
+                        break
+                    await asyncio.sleep(min(0.5, remaining))
+            finally:
+                with contextlib.suppress(
+                    Exception
+                ):  # pragma: no cover - best effort cleanup
+                    await adapter.call_stop_discovery()
         raise RuntimeError(
             f"Device {mac} was not discovered within {timeout} seconds. "
             "Ensure it is in pairing mode and in range."
@@ -290,34 +442,67 @@ class BluetoothManager:
         discovery_timeout: float = 8.0,
     ) -> tuple[Any, Any]:
         """Return Device1 and property interfaces for a MAC address."""
-        normalized_mac = mac.upper()
-        device_path = self._device_path_from_mac(normalized_mac)
+        normalized_mac = self._normalize_mac(mac)
+        device_path = await self._async_find_device_path(normalized_mac)
         bus = await self._async_get_bus()
-        try:
-            introspection = await bus.introspect("org.bluez", device_path)
-        except Exception as exc:
+        last_exc: Exception | None = None
+        if device_path:
+            try:
+                introspection = await bus.introspect("org.bluez", device_path)
+            except DBusError as exc:  # pragma: no cover - dbus errors handled
+                last_exc = exc
+                introspection = None
+        else:
+            introspection = None
+
+        if introspection is None:
+            message = (
+                f"Device {normalized_mac} is unknown to BlueZ. Pair it first or "
+                "trigger discovery before connecting."
+            )
             if not ensure_discovered:
-                raise RuntimeError(
-                    f"Device {normalized_mac} is unknown to BlueZ. Pair it first or "
-                    "trigger discovery before connecting."
-                ) from exc
+                if last_exc is not None:
+                    raise RuntimeError(message) from last_exc
+                raise RuntimeError(message)
             await self._async_discover_device(normalized_mac, discovery_timeout)
+            device_path = await self._async_find_device_path(normalized_mac)
+            if device_path is None:
+                raise RuntimeError(
+                    f"Device {normalized_mac} is unknown to BlueZ after discovery."
+                )
             introspection = await bus.introspect("org.bluez", device_path)
 
         proxy = bus.get_proxy_object("org.bluez", device_path, introspection)
-        device = proxy.get_interface("org.bluez.Device1")
-        device_props = proxy.get_interface("org.freedesktop.DBus.Properties")
+        device = self._proxy_interface(proxy, "org.bluez.Device1")
+        device_props = self._proxy_interface(proxy, "org.freedesktop.DBus.Properties")
         return device, device_props
 
-    async def _async_ensure_adapter_powered(self) -> None:
-        """Power on the adapter when necessary."""
-        _, adapter_props = await self._async_get_adapter()
-        try:
-            await adapter_props.call_set(
-                "org.bluez.Adapter1", "Powered", Variant("b", True)
-            )
-        except Exception as exc:
-            _LOGGER.debug("Adapter already powered or cannot power on: %s", exc)
+    @staticmethod
+    def _proxy_interface(proxy_obj: Any, interface: str) -> Any:
+        """Return a proxy interface with loose typing for dbus_next."""
+
+        return cast(Any, proxy_obj.get_interface(interface))
+
+    async def _async_ensure_adapter_powered(
+        self, adapter_path: str | None = None
+    ) -> None:
+        """Power on one or all adapters when necessary."""
+
+        adapter_paths = (
+            [adapter_path] if adapter_path else await self._async_get_adapter_paths()
+        )
+        for path in adapter_paths:
+            _, adapter_props = await self._async_get_adapter(path)
+            try:
+                await adapter_props.call_set(
+                    "org.bluez.Adapter1", "Powered", Variant("b", True)
+                )
+            except DBusError as exc:  # pragma: no cover - harmless failures
+                _LOGGER.debug(
+                    "Adapter %s already powered or cannot power on: %s",
+                    self._adapter_label(path),
+                    exc,
+                )
 
     async def _async_device_property(
         self, device_props: Any, property_name: str
@@ -336,25 +521,29 @@ class BluetoothManager:
             stop_scan: Whether to stop scanning after getting results
         """
         await self._async_ensure_adapter_powered()
-        adapter, _ = await self._async_get_adapter()
+        adapter_paths = await self._async_get_adapter_paths()
 
-        _LOGGER.debug("Starting discovery for %.1f seconds", scan_duration)
-        await adapter.call_start_discovery()
+        for adapter_path in adapter_paths:
+            adapter, _ = await self._async_get_adapter(adapter_path)
+            _LOGGER.debug(
+                "Starting discovery on %s for %.1f seconds",
+                self._adapter_label(adapter_path),
+                scan_duration,
+            )
+            await adapter.call_start_discovery()
 
-        try:
-            await asyncio.sleep(scan_duration)
-            devices = await self._async_collect_discovered_devices()
-            for mac_address, device_name in devices.items():
-                if not device_name:
-                    continue
-                self._device_cache[device_name] = mac_address
-                _LOGGER.debug("Cached device: %s -> %s", device_name, mac_address)
-        finally:
-            if stop_scan:
-                try:
-                    await adapter.call_stop_discovery()
-                except Exception:
-                    _LOGGER.debug("Discovery already stopped")
+            try:
+                await asyncio.sleep(scan_duration)
+                devices = await self._async_collect_discovered_devices()
+                for mac_address, device_name in devices.items():
+                    if not device_name:
+                        continue
+                    self._device_cache[device_name] = mac_address
+                    _LOGGER.debug("Cached device: %s -> %s", device_name, mac_address)
+            finally:
+                if stop_scan:
+                    with contextlib.suppress(DBusError):
+                        await adapter.call_stop_discovery()
 
     async def _background_scanner(self) -> None:
         """Continuously scan for Bluetooth devices and update cache."""
@@ -372,16 +561,16 @@ class BluetoothManager:
             except asyncio.CancelledError:
                 _LOGGER.info("Background scanner cancelled")
                 break
-            except Exception:
+            except (DBusError, RuntimeError):
                 _LOGGER.exception("Error in background scanner, will retry")
                 await asyncio.sleep(10)
 
         # Cleanup: stop scanning
-        try:
-            adapter, _ = await self._async_get_adapter()
-            await adapter.call_stop_discovery()
-        except Exception:
-            pass
+        adapter_paths = await self._async_get_adapter_paths()
+        for adapter_path in adapter_paths:
+            with contextlib.suppress(DBusError):
+                adapter, _ = await self._async_get_adapter(adapter_path)
+                await adapter.call_stop_discovery()
 
         _LOGGER.info("Background Bluetooth scanner stopped")
 
@@ -433,24 +622,25 @@ class BluetoothManager:
         try:
             # Scan and update cache (5 second scan, then stop)
             await self._scan_and_update_cache(scan_duration=5.0, stop_scan=True)
-
-            # Check cache again after manual scan
-            if device_name in self._device_cache:
-                mac_address = self._device_cache[device_name]
-                _LOGGER.info("Found device %s with MAC: %s", device_name, mac_address)
-                return mac_address
-
-            error_msg = f"Could not find device with name: {device_name}"
-            _LOGGER.error(error_msg)
-            raise RuntimeError(error_msg)
-
         except RuntimeError:
             raise
-        except Exception as exc:
+        except (DBusError, OSError) as exc:
             _LOGGER.exception("Failed to discover device by name")
-            raise RuntimeError(f"Failed to discover device by name: {exc}") from exc
+            raise RuntimeError("Failed to discover device by name") from exc
 
-    async def _pair_with_sudo(self, mac: str, pin: str, timeout: float = 30.0) -> bool:
+        # Check cache again after manual scan
+        if device_name in self._device_cache:
+            mac_address = self._device_cache[device_name]
+            _LOGGER.info("Found device %s with MAC: %s", device_name, mac_address)
+            return mac_address
+
+        error_msg = f"Could not find device with name: {device_name}"
+        _LOGGER.error(error_msg)
+        raise RuntimeError(error_msg)
+
+    async def _pair_with_sudo(
+        self, mac: str, pin: str, adapter_path: str, timeout: float = 30.0
+    ) -> bool:
         """Pair device using sudo to elevate privileges only for pairing.
 
         This method invokes a Python subprocess with sudo that performs
@@ -461,6 +651,7 @@ class BluetoothManager:
         Args:
             mac: MAC address of the device to pair
             pin: PIN code for pairing
+            adapter_path: Adapter path that should handle the pairing
             timeout: Maximum time to wait for pairing
 
         Returns:
@@ -469,40 +660,39 @@ class BluetoothManager:
         Raises:
             RuntimeError: If sudo fails or pairing fails
         """
-        import sys
+        component_root = Path(__file__).resolve().parent.parent
 
-        # Create a Python script that will run with sudo
-        # This script will perform the D-Bus pairing
         script = f"""
-import sys
-import os
 import asyncio
 import logging
+import sys
 
-# Configure logging for subprocess
 logging.basicConfig(
     level=logging.DEBUG,
     format='[skelly_ultra_srv.sudo_pairing] %(levelname)s - %(message)s',
-    stream=sys.stderr
+    stream=sys.stderr,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
 _LOGGER.info("Starting sudo pairing subprocess")
 
-# Add parent directory to path for imports
-sys.path.insert(0, {repr(os.path.dirname(os.path.dirname(__file__)))})
+sys.path.insert(0, {component_root.as_posix()!r})
 
 from skelly_ultra_srv.bluetooth_manager import BluetoothManager
 
-async def main():
+
+async def main() -> None:
     manager = BluetoothManager(allow_scanner=False)
     try:
-        success = await manager.pair_and_trust_by_mac({repr(mac)}, {repr(pin)}, {timeout})
-        sys.exit(0 if success else 1)
-    except Exception as e:
-        _LOGGER.error(f"Pairing failed: {{e}}")
+        success = await manager.pair_and_trust_by_mac(
+            {mac!r}, {pin!r}, {timeout}, adapter_path={adapter_path!r}
+        )
+    except Exception as exc:  # pragma: no cover - executed in subproc
+        _LOGGER.error("Pairing failed: %s", exc)
         sys.exit(2)
+    else:
+        sys.exit(0 if success else 1)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
@@ -544,7 +734,7 @@ if __name__ == "__main__":
                     proc.returncode,
                     stdout.decode() if stdout else "",
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 _LOGGER.error(
                     "Subprocess timed out after %s seconds, killing process",
                     timeout + 10,
@@ -584,17 +774,14 @@ if __name__ == "__main__":
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
 
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
             error_msg = (
                 "sudo command not found. Please install sudo or run the server as root. "
                 f"Alternatively, manually pair the device: bluetoothctl -> pair {mac}"
             )
             _LOGGER.error(error_msg)
-            raise RuntimeError(error_msg)
-        except RuntimeError:
-            # Re-raise RuntimeError as-is
-            raise
-        except Exception as exc:
+            raise RuntimeError(error_msg) from exc
+        except OSError as exc:
             error_msg = f"Failed to execute sudo pairing: {exc}"
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg) from exc
@@ -604,8 +791,295 @@ if __name__ == "__main__":
                 _LOGGER.debug("Resuming background scanner after sudo pairing")
                 await self.start_background_scanner()
 
+    async def _async_pair_without_root(
+        self,
+        normalized_mac: str,
+        pin: str,
+        adapter_path: str,
+        adapter_label: str,
+        timeout: float,
+    ) -> bool:
+        """Handle pairing attempts when the process is not running as root."""
+
+        try:
+            _, device_props = await self._async_get_device_interfaces(
+                normalized_mac, ensure_discovered=False
+            )
+        except RuntimeError:
+            device_props = None
+        except DBusError as exc:  # pragma: no cover - defensive logging
+            _LOGGER.debug("Non-root paired check failed: %s", exc)
+            device_props = None
+
+        if device_props is not None:
+            try:
+                paired = await self._async_device_property(device_props, "Paired")
+            except (DBusError, RuntimeError) as exc:
+                _LOGGER.debug(
+                    "Unable to read paired state for %s: %s", normalized_mac, exc
+                )
+                paired = False
+            else:
+                if paired:
+                    _LOGGER.info("Device %s is already paired", normalized_mac)
+                    try:
+                        await device_props.call_set(
+                            "org.bluez.Device1", "Trusted", Variant("b", True)
+                        )
+                    except DBusError as exc:
+                        _LOGGER.debug(
+                            "Failed to set device trusted without root: %s", exc
+                        )
+                    return True
+
+        _LOGGER.info(
+            "Not running as root, attempting to use sudo for pairing %s via %s",
+            normalized_mac,
+            adapter_label,
+        )
+        success = await self._pair_with_sudo(normalized_mac, pin, adapter_path, timeout)
+        if success:
+            self._device_adapter_map[normalized_mac] = adapter_path
+        return success
+
+    async def _async_connect_pairing_bus(self) -> MessageBus:
+        """Create a dedicated system bus connection for pairing."""
+
+        try:
+            bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        except (DBusError, OSError) as exc:
+            raise RuntimeError("Failed to connect to D-Bus system bus") from exc
+
+        try:
+            await bus.introspect("org.bluez", "/")
+        except DBusError as exc:
+            raise RuntimeError(
+                "BlueZ service not available on D-Bus. Ensure bluetooth service is running"
+            ) from exc
+
+        return bus
+
+    async def _async_register_pairing_agent(
+        self, bus: MessageBus, agent_path: str, pin: str
+    ) -> tuple[Any, PairingAgent]:
+        """Register the Skelly pairing agent and set it as default."""
+
+        agent = PairingAgent(pin)
+        try:
+            bus.export(agent_path, agent)
+        except DBusError as exc:
+            raise RuntimeError(f"Failed to register pairing agent: {exc}") from exc
+
+        try:
+            introspection = await bus.introspect("org.bluez", "/org/bluez")
+            proxy_obj = bus.get_proxy_object("org.bluez", "/org/bluez", introspection)
+            agent_manager = self._proxy_interface(proxy_obj, "org.bluez.AgentManager1")
+        except DBusError as exc:
+            raise RuntimeError("Failed to get BlueZ agent manager") from exc
+
+        try:
+            await agent_manager.call_register_agent(agent_path, "KeyboardDisplay")
+            _LOGGER.info("Skelly agent registered with BlueZ at path: %s", agent_path)
+        except DBusError as exc:
+            _LOGGER.warning("Failed to register agent (may already exist): %s", exc)
+            with contextlib.suppress(DBusError):
+                await agent_manager.call_unregister_agent(agent_path)
+            await agent_manager.call_register_agent(agent_path, "KeyboardDisplay")
+            _LOGGER.info("Re-registered Skelly agent after unregistering old one")
+
+        try:
+            await agent_manager.call_request_default_agent(agent_path)
+            _LOGGER.info("Skelly agent set as default")
+        except DBusError as exc:
+            raise RuntimeError(
+                f"Failed to set Skelly agent as default agent: {exc}"
+            ) from exc
+
+        return agent_manager, agent
+
+    async def _async_prepare_adapter_for_pairing(
+        self, bus: MessageBus, adapter_path: str, adapter_label: str
+    ) -> tuple[Any, Any]:
+        """Return adapter interfaces ready for discovery."""
+
+        try:
+            introspection = await bus.introspect("org.bluez", adapter_path)
+            proxy_obj = bus.get_proxy_object("org.bluez", adapter_path, introspection)
+        except DBusError as exc:
+            raise RuntimeError(
+                f"Failed to get Bluetooth adapter {adapter_label}: {exc}. "
+                "Ensure Bluetooth hardware is available and enabled."
+            ) from exc
+
+        adapter = self._proxy_interface(proxy_obj, "org.bluez.Adapter1")
+        adapter_props = self._proxy_interface(
+            proxy_obj, "org.freedesktop.DBus.Properties"
+        )
+
+        try:
+            await adapter_props.call_set(
+                "org.bluez.Adapter1", "Powered", Variant("b", True)
+            )
+        except DBusError as exc:
+            _LOGGER.warning("Failed to power on adapter (may already be on): %s", exc)
+
+        return cast(Any, adapter), adapter_props
+
+    async def _async_discover_device_on_adapter(
+        self,
+        bus: MessageBus,
+        adapter: Any,
+        adapter_path: str,
+        adapter_label: str,
+        device_path: str,
+        normalized_mac: str,
+    ) -> None:
+        """Run discovery on the adapter and ensure the target device appears."""
+
+        _LOGGER.info(
+            "Starting device discovery for %s on %s (this may take 5-10 seconds)",
+            normalized_mac,
+            adapter_label,
+        )
+        await adapter.call_start_discovery()
+        await asyncio.sleep(8)
+        with contextlib.suppress(DBusError):
+            await adapter.call_stop_discovery()
+        _LOGGER.debug("Discovery stopped on %s", adapter_label)
+
+        try:
+            introspection = await bus.introspect("org.bluez", "/")
+            proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
+            obj_manager = self._proxy_interface(
+                proxy_obj, "org.freedesktop.DBus.ObjectManager"
+            )
+            objects = await obj_manager.call_get_managed_objects()
+        except DBusError as exc:
+            _LOGGER.warning("Could not verify device discovery: %s", exc)
+            return
+
+        if device_path in objects:
+            _LOGGER.debug("Device %s found in discovery", device_path)
+            return
+
+        device_paths = [path for path in objects if "/dev_" in path]
+        _LOGGER.error(
+            "Device path %s not found on %s. Available: %s",
+            device_path,
+            adapter_label,
+            device_paths if device_paths else "none",
+        )
+        raise RuntimeError(
+            f"Device {normalized_mac} was not discovered on {adapter_label}. "
+            "Ensure device is in pairing mode and in range. "
+            f"Available devices: {device_paths if device_paths else 'none'}"
+        )
+
+    async def _async_get_device_proxies_for_pairing(
+        self, bus: MessageBus, device_path: str, adapter_label: str, normalized_mac: str
+    ) -> tuple[Any, Any]:
+        """Return device interfaces for pairing via the dedicated bus."""
+
+        try:
+            introspection = await bus.introspect("org.bluez", device_path)
+            proxy_obj = bus.get_proxy_object("org.bluez", device_path, introspection)
+        except DBusError as exc:
+            await self._async_log_available_device_paths(bus)
+            raise RuntimeError(
+                f"Device {normalized_mac} not found at path {device_path}. "
+                "Ensure device is in pairing mode, powered on, and in range. "
+                "The device may need more time to be discovered - try increasing discovery time."
+            ) from exc
+
+        adapter = self._proxy_interface(proxy_obj, "org.bluez.Device1")
+        adapter_props = self._proxy_interface(
+            proxy_obj, "org.freedesktop.DBus.Properties"
+        )
+        _LOGGER.debug(
+            "Got device object for path: %s on %s", device_path, adapter_label
+        )
+        return adapter, adapter_props
+
+    async def _async_log_available_device_paths(self, bus: MessageBus) -> None:
+        """Log available device paths to help debug discovery issues."""
+
+        with contextlib.suppress(DBusError):
+            introspection = await bus.introspect("org.bluez", "/")
+            proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
+            obj_manager = self._proxy_interface(
+                proxy_obj, "org.freedesktop.DBus.ObjectManager"
+            )
+            objects = await obj_manager.call_get_managed_objects()
+            device_paths = [path for path in objects if "/dev_" in path]
+            _LOGGER.error(
+                "Available device paths: %s",
+                device_paths if device_paths else "none found",
+            )
+
+    async def _async_handle_existing_pairing(
+        self,
+        device_props: Any,
+        normalized_mac: str,
+        adapter_path: str,
+    ) -> bool:
+        """Return True if the device is already paired and trusted."""
+
+        try:
+            paired_variant = await device_props.call_get("org.bluez.Device1", "Paired")
+        except DBusError as exc:
+            _LOGGER.debug("Could not check paired status: %s", exc)
+            return False
+
+        paired = (
+            paired_variant.value if hasattr(paired_variant, "value") else paired_variant
+        )
+        if not paired:
+            return False
+
+        _LOGGER.info("Device %s is already paired", normalized_mac)
+        trusted_variant = await device_props.call_get("org.bluez.Device1", "Trusted")
+        trusted = (
+            trusted_variant.value
+            if hasattr(trusted_variant, "value")
+            else trusted_variant
+        )
+        if not trusted:
+            await device_props.call_set(
+                "org.bluez.Device1", "Trusted", Variant("b", True)
+            )
+            _LOGGER.info("Device %s trusted", normalized_mac)
+        self._device_adapter_map[normalized_mac] = adapter_path
+        return True
+
+    async def _async_pair_device(self, device: Any, timeout: float) -> None:
+        """Run the BlueZ pair command with a timeout."""
+
+        try:
+            await asyncio.wait_for(device.call_pair(), timeout=timeout)
+        except TimeoutError as exc:
+            raise RuntimeError(f"Pairing timed out after {timeout} seconds") from exc
+        except DBusError as exc:
+            raise RuntimeError(f"Pairing failed: {exc}") from exc
+
+    async def _async_trust_device(self, device_props: Any, normalized_mac: str) -> None:
+        """Set the BlueZ device as trusted."""
+
+        try:
+            await device_props.call_set(
+                "org.bluez.Device1", "Trusted", Variant("b", True)
+            )
+        except DBusError as exc:
+            _LOGGER.warning(
+                "Failed to set device %s as trusted: %s", normalized_mac, exc
+            )
+
     async def pair_and_trust_by_name(
-        self, device_name: str, pin: str, timeout: float = 30.0
+        self,
+        device_name: str,
+        pin: str,
+        timeout: float = 30.0,
+        *,
+        adapter_path: str | None = None,
     ) -> tuple[bool, str | None]:
         """Pair and trust a Bluetooth device by name using D-Bus agent.
 
@@ -616,6 +1090,8 @@ if __name__ == "__main__":
             device_name: Name of the Bluetooth device
             pin: PIN code for pairing
             timeout: Maximum time to wait for pairing to complete
+            adapter_path: Optional adapter path override to force pairing via
+                a specific adapter
 
         Returns:
             Tuple of (success: bool, mac_address: str | None)
@@ -632,18 +1108,24 @@ if __name__ == "__main__":
             mac_address = await self._discover_device_mac_by_name(device_name)
 
             # Now pair using the MAC address
-            success = await self.pair_and_trust_by_mac(mac_address, pin, timeout)
+            success = await self.pair_and_trust_by_mac(
+                mac_address, pin, timeout, adapter_path=adapter_path
+            )
+        except RuntimeError:
+            raise
+        except (DBusError, OSError) as exc:
+            _LOGGER.exception("Failed to pair by name")
+            raise RuntimeError("Failed to pair by name") from exc
+        else:
             return (success, mac_address if success else None)
 
-        except RuntimeError:
-            # Re-raise RuntimeError with specific message
-            raise
-        except Exception as exc:
-            _LOGGER.exception("Failed to pair by name")
-            raise RuntimeError(f"Failed to pair by name: {exc}") from exc
-
     async def pair_and_trust_by_mac(
-        self, mac: str, pin: str, timeout: float = 30.0
+        self,
+        mac: str,
+        pin: str,
+        timeout: float = 30.0,
+        *,
+        adapter_path: str | None = None,
     ) -> bool:
         """Pair and trust a Bluetooth device by MAC address using D-Bus agent.
 
@@ -663,6 +1145,7 @@ if __name__ == "__main__":
             mac: MAC address of the device to pair (format: XX:XX:XX:XX:XX:XX)
             pin: PIN code for pairing
             timeout: Maximum time to wait for pairing to complete
+            adapter_path: Optional adapter path override
 
         Returns:
             True if pairing and trust successful, False otherwise
@@ -670,329 +1153,82 @@ if __name__ == "__main__":
         Raises:
             RuntimeError: If D-Bus not available or pairing fails
         """
-        # Check if running as root (required for D-Bus agent registration)
-        if os.geteuid() != 0:
-            # Check if device is already paired
-            try:
-                device, device_props = await self._async_get_device_interfaces(
-                    mac, ensure_discovered=False
-                )
-                paired = await self._async_device_property(device_props, "Paired")
-                if paired:
-                    _LOGGER.info("Device %s is already paired", mac)
-                    try:
-                        await device_props.call_set(
-                            "org.bluez.Device1", "Trusted", Variant("b", True)
-                        )
-                    except Exception as exc:
-                        _LOGGER.debug(
-                            "Failed to set device trusted without root: %s", exc
-                        )
-                    return True
-            except RuntimeError:
-                pass
-            except Exception as exc:  # pragma: no cover - defensive logging
-                _LOGGER.debug("Non-root paired check failed: %s", exc)
-
-            # Not running as root and device not paired - try using sudo
-            _LOGGER.info(
-                "Not running as root, attempting to use sudo for pairing %s", mac
+        normalized_mac = self._normalize_mac(mac)
+        existing_adapter = await self._async_get_device_adapter_path(normalized_mac)
+        target_adapter = adapter_path or existing_adapter
+        if target_adapter is None:
+            target_adapter = await self._async_select_adapter_for_pairing(
+                normalized_mac
             )
-            return await self._pair_with_sudo(mac, pin, timeout)
+        adapter_label = self._adapter_label(target_adapter)
 
-        _LOGGER.info("Starting D-Bus pairing for device: %s", mac)
+        _LOGGER.info(
+            "Starting pairing workflow for %s using %s", normalized_mac, adapter_label
+        )
+
+        if os.geteuid() != 0:
+            return await self._async_pair_without_root(
+                normalized_mac, pin, target_adapter, adapter_label, timeout
+            )
 
         agent_path = "/org/bluez/agent_skelly"
-        bus = None
+        bus: MessageBus | None = None
+        agent_manager: Any | None = None
+        agent: PairingAgent | None = None
 
         try:
-            # Get the system bus
-            try:
-                bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
-                _LOGGER.debug("Connected to D-Bus system bus")
-            except Exception as exc:
-                error_msg = (
-                    f"Failed to connect to D-Bus system bus: {exc}. "
-                    "Ensure D-Bus service is running and accessible."
-                )
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Verify BlueZ is available
-            try:
-                introspection = await bus.introspect("org.bluez", "/")
-                _LOGGER.debug("BlueZ service is available on D-Bus")
-            except Exception as exc:
-                error_msg = (
-                    f"BlueZ service not available on D-Bus: {exc}. "
-                    "Ensure bluetooth service is running: sudo systemctl status bluetooth"
-                )
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Create and register the pairing agent
-            agent = PairingAgent(pin)
-            try:
-                # Export the agent object at the specified path
-                bus.export(agent_path, agent)
-                _LOGGER.debug("Registered pairing agent at %s", agent_path)
-            except Exception as exc:
-                error_msg = f"Failed to register pairing agent: {exc}"
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Get the agent manager proxy
-            try:
-                introspection = await bus.introspect("org.bluez", "/org/bluez")
-                proxy_obj = bus.get_proxy_object(
-                    "org.bluez", "/org/bluez", introspection
-                )
-                agent_manager = proxy_obj.get_interface("org.bluez.AgentManager1")
-                _LOGGER.debug("Got BlueZ agent manager")
-            except Exception as exc:
-                error_msg = f"Failed to get BlueZ agent manager: {exc}"
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Register agent with capability "KeyboardDisplay" (supports PIN entry and display)
-            try:
-                await agent_manager.call_register_agent(agent_path, "KeyboardDisplay")
-                _LOGGER.info(
-                    "Skelly Agent registered with BlueZ at path: %s", agent_path
-                )
-            except Exception as exc:
-                _LOGGER.warning("Failed to register agent (may already exist): %s", exc)
-                # Try to unregister old agent and re-register
-                try:
-                    await agent_manager.call_unregister_agent(agent_path)
-                    _LOGGER.debug("Unregistered old Skelly agent")
-                    await agent_manager.call_register_agent(
-                        agent_path, "KeyboardDisplay"
-                    )
-                    _LOGGER.info(
-                        "Re-registered Skelly agent after unregistering old one"
-                    )
-                except Exception as rereg_exc:
-                    error_msg = f"Failed to register/re-register agent: {rereg_exc}"
-                    _LOGGER.error(error_msg)
-                    raise RuntimeError(error_msg) from rereg_exc
-
-            # Request to make this the default agent
-            try:
-                await agent_manager.call_request_default_agent(agent_path)
-                _LOGGER.info(
-                    "Skelly Agent set as DEFAULT - BlueZ will use this for pairing"
-                )
-            except Exception as exc:
-                _LOGGER.error(
-                    "Failed to set Skelly agent as default agent - pairing may fail! Error: %s",
-                    exc,
-                )
-                # This is actually critical for automated pairing to work
-                raise RuntimeError(
-                    f"Failed to set Skelly agent as default agent: {exc}"
-                ) from exc
-
-            # Get the adapter (usually hci0)
-            adapter_path = "/org/bluez/hci0"
-            try:
-                introspection = await bus.introspect("org.bluez", adapter_path)
-                proxy_obj = bus.get_proxy_object(
-                    "org.bluez", adapter_path, introspection
-                )
-                adapter = proxy_obj.get_interface("org.bluez.Adapter1")
-                adapter_props = proxy_obj.get_interface(
-                    "org.freedesktop.DBus.Properties"
-                )
-                _LOGGER.debug("Got Bluetooth adapter at %s", adapter_path)
-            except Exception as exc:
-                error_msg = (
-                    f"Failed to get Bluetooth adapter at {adapter_path}: {exc}. "
-                    "Ensure Bluetooth hardware is available and enabled."
-                )
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Power on the adapter
-            try:
-                await adapter_props.call_set(
-                    "org.bluez.Adapter1", "Powered", Variant("b", True)
-                )
-                _LOGGER.debug("Adapter powered on")
-            except Exception as exc:
-                _LOGGER.warning(
-                    "Failed to power on adapter (may already be on): %s", exc
-                )
-
-            # Format device path from MAC address
-            # BlueZ uses format: /org/bluez/hci0/dev_XX_XX_XX_XX_XX_XX
-            device_path = f"{adapter_path}/dev_{mac.replace(':', '_')}"
-
-            # Start discovery to find the device
-            _LOGGER.info(
-                "Starting device discovery for %s (this may take 5-10 seconds)", mac
+            bus = await self._async_connect_pairing_bus()
+            agent_manager, agent = await self._async_register_pairing_agent(
+                bus, agent_path, pin
             )
-            await adapter.call_start_discovery()
+            self._active_pairing_agent = agent
+            adapter, _ = await self._async_prepare_adapter_for_pairing(
+                bus, target_adapter, adapter_label
+            )
+            device_path = self._device_path_for_adapter(target_adapter, normalized_mac)
+            await self._async_discover_device_on_adapter(
+                bus,
+                adapter,
+                target_adapter,
+                adapter_label,
+                device_path,
+                normalized_mac,
+            )
+            device, device_props = await self._async_get_device_proxies_for_pairing(
+                bus, device_path, adapter_label, normalized_mac
+            )
 
-            # Wait for device to be discovered
-            # Increased from 3 to 8 seconds to give more time
-            await asyncio.sleep(8)
+            if await self._async_handle_existing_pairing(
+                device_props, normalized_mac, target_adapter
+            ):
+                return True
 
-            # Stop discovery
-            await adapter.call_stop_discovery()
-            _LOGGER.debug("Discovery stopped")
+            _LOGGER.info("Initiating pairing with device: %s", normalized_mac)
+            await self._async_pair_device(device, timeout)
+            await self._async_trust_device(device_props, normalized_mac)
 
-            # Verify device was discovered before trying to access it
-            try:
-                introspection = await bus.introspect("org.bluez", "/")
-                proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
-                obj_manager = proxy_obj.get_interface(
-                    "org.freedesktop.DBus.ObjectManager"
-                )
-                objects = await obj_manager.call_get_managed_objects()
-                if device_path not in objects:
-                    device_paths = [path for path in objects if "/dev_" in path]
-                    _LOGGER.error(
-                        "Device path %s not found in discovered devices. Available: %s",
-                        device_path,
-                        device_paths if device_paths else "none",
-                    )
-                    raise RuntimeError(
-                        f"Device {mac} was not discovered. "
-                        "Ensure device is in pairing mode and in range. "
-                        f"Available devices: {device_paths if device_paths else 'none'}"
-                    )
-                _LOGGER.debug("Device %s found in discovery", device_path)
-            except RuntimeError:
-                raise
-            except Exception as exc:
-                _LOGGER.warning("Could not verify device discovery: %s", exc)
-
-            # Get the device
-            try:
-                introspection = await bus.introspect("org.bluez", device_path)
-                proxy_obj = bus.get_proxy_object(
-                    "org.bluez", device_path, introspection
-                )
-                device = proxy_obj.get_interface("org.bluez.Device1")
-                device_props = proxy_obj.get_interface(
-                    "org.freedesktop.DBus.Properties"
-                )
-                _LOGGER.debug("Got device object for path: %s", device_path)
-            except Exception as exc:
-                _LOGGER.error(
-                    "Failed to get device at path %s: %s (type: %s)",
-                    device_path,
-                    exc,
-                    type(exc).__name__,
-                )
-                # Try to list available devices for debugging
-                try:
-                    introspection = await bus.introspect("org.bluez", "/")
-                    proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
-                    obj_manager = proxy_obj.get_interface(
-                        "org.freedesktop.DBus.ObjectManager"
-                    )
-                    objects = await obj_manager.call_get_managed_objects()
-                    device_paths = [path for path in objects.keys() if "/dev_" in path]
-                    _LOGGER.error(
-                        "Available device paths: %s",
-                        device_paths if device_paths else "none found",
-                    )
-                except Exception as list_exc:
-                    _LOGGER.debug("Could not list devices: %s", list_exc)
-
-                error_msg = (
-                    f"Device {mac} not found at path {device_path}. "
-                    "Ensure device is in pairing mode, powered on, and in range. "
-                    "The device may need more time to be discovered - try increasing discovery time."
-                )
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg) from exc
-
-            # Check if already paired
-            try:
-                paired_variant = await device_props.call_get(
-                    "org.bluez.Device1", "Paired"
-                )
-                paired = (
-                    paired_variant.value
-                    if hasattr(paired_variant, "value")
-                    else paired_variant
-                )
-                _LOGGER.debug(
-                    "Device %s paired status: %s (type: %s)", mac, paired, type(paired)
-                )
-                if paired:
-                    _LOGGER.info("Device %s is already paired", mac)
-                    trusted_variant = await device_props.call_get(
-                        "org.bluez.Device1", "Trusted"
-                    )
-                    trusted = (
-                        trusted_variant.value
-                        if hasattr(trusted_variant, "value")
-                        else trusted_variant
-                    )
-                    if not trusted:
-                        await device_props.call_set(
-                            "org.bluez.Device1", "Trusted", Variant("b", True)
-                        )
-                        _LOGGER.info("Device %s trusted", mac)
-                    return True
-            except Exception as exc:
-                _LOGGER.debug("Could not check paired status: %s", exc)
-
-            # Pair the device (this will trigger PIN code request)
-            _LOGGER.info("Initiating pairing with device: %s", mac)
-
-            try:
-                # Run pairing with timeout
-                await asyncio.wait_for(
-                    device.call_pair(),
-                    timeout=timeout,
-                )
-                _LOGGER.info("Pairing successful for device: %s", mac)
-            except asyncio.TimeoutError:
-                error_msg = f"Pairing timed out after {timeout} seconds"
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg)
-            except Exception as exc:
-                _LOGGER.error("Pairing failed: %s", exc)
-                raise RuntimeError(f"Pairing failed: {exc}") from exc
-
-            # Trust the device
-            _LOGGER.info("Trusting device: %s", mac)
-            try:
-                await device_props.call_set(
-                    "org.bluez.Device1", "Trusted", Variant("b", True)
-                )
-                _LOGGER.info("Device %s trusted", mac)
-            except Exception as exc:
-                _LOGGER.warning("Failed to set device as trusted: %s", exc)
-
-            _LOGGER.info("Successfully paired and trusted device: %s", mac)
-            return True
-
+            _LOGGER.info(
+                "Successfully paired and trusted device: %s on %s",
+                normalized_mac,
+                adapter_label,
+            )
         except RuntimeError:
             raise
-        except Exception as exc:
+        except (DBusError, OSError) as exc:
             _LOGGER.exception("D-Bus pairing failed")
-            raise RuntimeError(f"D-Bus pairing failed: {exc}") from exc
+            raise RuntimeError("D-Bus pairing failed") from exc
+        else:
+            self._device_adapter_map[normalized_mac] = target_adapter
+            return True
         finally:
-            # Unregister the agent
-            try:
-                if "agent_manager" in locals():
+            if agent_manager is not None:
+                with contextlib.suppress(DBusError):
                     await agent_manager.call_unregister_agent(agent_path)
                     _LOGGER.debug("Agent unregistered")
-            except Exception:
-                pass
-
-            # Disconnect the bus
             if bus is not None:
-                try:
+                with contextlib.suppress(DBusError):
                     bus.disconnect()
-                except Exception:
-                    pass
+            self._active_pairing_agent = None
 
     async def connect_by_name(
         self, device_name: str, pin: str
@@ -1015,14 +1251,13 @@ if __name__ == "__main__":
 
             # Now connect using the MAC address
             success = await self.connect_by_mac(mac_address, pin)
-            return (success, mac_address if success else None)
-
         except RuntimeError:
-            # Re-raise RuntimeError with specific message
             raise
-        except Exception as exc:
+        except (DBusError, OSError) as exc:
             _LOGGER.exception("Failed to connect by name")
-            raise RuntimeError(f"Failed to connect by name: {exc}") from exc
+            raise RuntimeError("Failed to connect by name") from exc
+        else:
+            return (success, mac_address if success else None)
 
     async def connect_by_mac(self, mac: str, pin: str) -> bool:
         """Connect and pair to a Bluetooth device by MAC address.
@@ -1056,7 +1291,7 @@ if __name__ == "__main__":
 
         try:
             paired = await self._async_device_property(device_props, "Paired")
-        except Exception as exc:
+        except DBusError as exc:
             raise RuntimeError(
                 f"Failed to determine paired state for {mac}: {exc}"
             ) from exc
@@ -1071,7 +1306,7 @@ if __name__ == "__main__":
 
         try:
             trusted = await self._async_device_property(device_props, "Trusted")
-        except Exception as exc:
+        except DBusError as exc:
             _LOGGER.debug("Failed to read trusted state for %s: %s", mac, exc)
             trusted = False
 
@@ -1081,21 +1316,21 @@ if __name__ == "__main__":
                 await device_props.call_set(
                     "org.bluez.Device1", "Trusted", Variant("b", True)
                 )
-            except Exception as exc:
+            except DBusError as exc:
                 raise RuntimeError(f"Failed to trust device {mac}: {exc}") from exc
 
         connected = False
         try:
             await asyncio.wait_for(device.call_connect(), timeout=30.0)
             connected = True
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             raise RuntimeError(f"Connection timed out for device {mac}") from exc
-        except Exception as exc:
-            _LOGGER.warning("connect() raised for %s: %s", mac, exc)
+        except DBusError as exc:
+            _LOGGER.warning("Connect() raised for %s: %s", mac, exc)
         finally:
             try:
                 connected = await self._async_device_property(device_props, "Connected")
-            except Exception as exc:
+            except DBusError as exc:
                 _LOGGER.debug("Failed to read Connected state for %s: %s", mac, exc)
 
         if not connected:
@@ -1106,10 +1341,13 @@ if __name__ == "__main__":
         device_name = None
         try:
             device_name = await self._async_device_property(device_props, "Name")
-        except Exception as exc:
+        except DBusError as exc:
             _LOGGER.debug("Failed to read device name for %s: %s", mac, exc)
 
-        self._connected_devices[mac] = DeviceInfo(name=device_name, mac=mac)
+        adapter_path = self._device_adapter_map.get(self._normalize_mac(mac))
+        self._connected_devices[mac] = DeviceInfo(
+            name=device_name, mac=mac, adapter_path=adapter_path
+        )
         _LOGGER.info("Successfully connected to %s (%s)", device_name or "Unknown", mac)
         return True
 
@@ -1153,7 +1391,7 @@ if __name__ == "__main__":
         try:
             await device.call_disconnect()
             _LOGGER.info("Successfully disconnected device: %s", mac)
-        except Exception as exc:
+        except DBusError as exc:
             _LOGGER.debug("Disconnect call failed for %s: %s", mac, exc)
 
         self._connected_devices.pop(mac, None)
@@ -1213,3 +1451,10 @@ if __name__ == "__main__":
             # Return first device MAC
             return next(iter(self._connected_devices.values())).mac
         return None
+
+    def get_device_adapter_path(self, mac: str | None) -> str | None:
+        """Return the adapter path mapped to the provided MAC if known."""
+
+        if not mac:
+            return None
+        return self._device_adapter_map.get(self._normalize_mac(mac))
