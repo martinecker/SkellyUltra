@@ -410,14 +410,16 @@ class BluetoothManager:
 
         for adapter_path in adapter_paths:
             adapter, _ = await self._async_get_adapter(adapter_path)
+            adapter_label = self._adapter_label(adapter_path)
             await adapter.call_start_discovery()
             try:
                 while True:
                     if await self._async_device_known(mac):
                         _LOGGER.debug(
-                            "Device %s discovered on %s",
+                            "Device %s discovered on %s (%s)",
                             mac,
-                            self._adapter_label(adapter_path),
+                            adapter_label,
+                            adapter_path,
                         )
                         return
                     remaining = deadline - loop.time()
@@ -493,14 +495,16 @@ class BluetoothManager:
         )
         for path in adapter_paths:
             _, adapter_props = await self._async_get_adapter(path)
+            adapter_label = self._adapter_label(path)
             try:
                 await adapter_props.call_set(
                     "org.bluez.Adapter1", "Powered", Variant("b", True)
                 )
             except DBusError as exc:  # pragma: no cover - harmless failures
                 _LOGGER.debug(
-                    "Adapter %s already powered or cannot power on: %s",
-                    self._adapter_label(path),
+                    "Adapter %s (%s) already powered or cannot power on: %s",
+                    adapter_label,
+                    path,
                     exc,
                 )
 
@@ -525,9 +529,11 @@ class BluetoothManager:
 
         for adapter_path in adapter_paths:
             adapter, _ = await self._async_get_adapter(adapter_path)
+            adapter_label = self._adapter_label(adapter_path)
             _LOGGER.debug(
-                "Starting discovery on %s for %.1f seconds",
-                self._adapter_label(adapter_path),
+                "Starting discovery on %s (%s) for %.1f seconds",
+                adapter_label,
+                adapter_path,
                 scan_duration,
             )
             await adapter.call_start_discovery()
@@ -821,21 +827,30 @@ if __name__ == "__main__":
                 paired = False
             else:
                 if paired:
-                    _LOGGER.info("Device %s is already paired", normalized_mac)
+                    _LOGGER.info(
+                        "Device %s is already paired on %s (%s)",
+                        normalized_mac,
+                        adapter_label,
+                        adapter_path,
+                    )
                     try:
                         await device_props.call_set(
                             "org.bluez.Device1", "Trusted", Variant("b", True)
                         )
                     except DBusError as exc:
                         _LOGGER.debug(
-                            "Failed to set device trusted without root: %s", exc
+                            "Failed to set device trusted without root via %s (%s): %s",
+                            adapter_label,
+                            adapter_path,
+                            exc,
                         )
                     return True
 
         _LOGGER.info(
-            "Not running as root, attempting to use sudo for pairing %s via %s",
+            "Not running as root, attempting to use sudo for pairing %s via %s (%s)",
             normalized_mac,
             adapter_label,
+            adapter_path,
         )
         success = await self._pair_with_sudo(normalized_mac, pin, adapter_path, timeout)
         if success:
@@ -921,7 +936,12 @@ if __name__ == "__main__":
                 "org.bluez.Adapter1", "Powered", Variant("b", True)
             )
         except DBusError as exc:
-            _LOGGER.warning("Failed to power on adapter (may already be on): %s", exc)
+            _LOGGER.warning(
+                "Failed to power on adapter %s (%s) (may already be on): %s",
+                adapter_label,
+                adapter_path,
+                exc,
+            )
 
         return cast(Any, adapter), adapter_props
 
@@ -937,15 +957,16 @@ if __name__ == "__main__":
         """Run discovery on the adapter and ensure the target device appears."""
 
         _LOGGER.info(
-            "Starting device discovery for %s on %s (this may take 5-10 seconds)",
+            "Starting device discovery for %s on %s (%s) (this may take 5-10 seconds)",
             normalized_mac,
             adapter_label,
+            adapter_path,
         )
         await adapter.call_start_discovery()
         await asyncio.sleep(8)
         with contextlib.suppress(DBusError):
             await adapter.call_stop_discovery()
-        _LOGGER.debug("Discovery stopped on %s", adapter_label)
+        _LOGGER.debug("Discovery stopped on %s (%s)", adapter_label, adapter_path)
 
         try:
             introspection = await bus.introspect("org.bluez", "/")
@@ -964,13 +985,14 @@ if __name__ == "__main__":
 
         device_paths = [path for path in objects if "/dev_" in path]
         _LOGGER.error(
-            "Device path %s not found on %s. Available: %s",
+            "Device path %s not found on %s (%s). Available: %s",
             device_path,
             adapter_label,
+            adapter_path,
             device_paths if device_paths else "none",
         )
         raise RuntimeError(
-            f"Device {normalized_mac} was not discovered on {adapter_label}. "
+            f"Device {normalized_mac} was not discovered on {adapter_label} ({adapter_path}). "
             "Ensure device is in pairing mode and in range. "
             f"Available devices: {device_paths if device_paths else 'none'}"
         )
@@ -1024,6 +1046,8 @@ if __name__ == "__main__":
     ) -> bool:
         """Return True if the device is already paired and trusted."""
 
+        adapter_label = self._adapter_label(adapter_path)
+
         try:
             paired_variant = await device_props.call_get("org.bluez.Device1", "Paired")
         except DBusError as exc:
@@ -1036,7 +1060,12 @@ if __name__ == "__main__":
         if not paired:
             return False
 
-        _LOGGER.info("Device %s is already paired", normalized_mac)
+        _LOGGER.info(
+            "Device %s is already paired on %s (%s)",
+            normalized_mac,
+            adapter_label,
+            adapter_path,
+        )
         trusted_variant = await device_props.call_get("org.bluez.Device1", "Trusted")
         trusted = (
             trusted_variant.value
@@ -1047,7 +1076,12 @@ if __name__ == "__main__":
             await device_props.call_set(
                 "org.bluez.Device1", "Trusted", Variant("b", True)
             )
-            _LOGGER.info("Device %s trusted", normalized_mac)
+            _LOGGER.info(
+                "Device %s trusted on %s (%s)",
+                normalized_mac,
+                adapter_label,
+                adapter_path,
+            )
         self._device_adapter_map[normalized_mac] = adapter_path
         return True
 
@@ -1163,7 +1197,10 @@ if __name__ == "__main__":
         adapter_label = self._adapter_label(target_adapter)
 
         _LOGGER.info(
-            "Starting pairing workflow for %s using %s", normalized_mac, adapter_label
+            "Starting pairing workflow for %s using %s (%s)",
+            normalized_mac,
+            adapter_label,
+            target_adapter,
         )
 
         if os.geteuid() != 0:
@@ -1208,9 +1245,10 @@ if __name__ == "__main__":
             await self._async_trust_device(device_props, normalized_mac)
 
             _LOGGER.info(
-                "Successfully paired and trusted device: %s on %s",
+                "Successfully paired and trusted device: %s on %s (%s)",
                 normalized_mac,
                 adapter_label,
+                target_adapter,
             )
         except RuntimeError:
             raise
@@ -1277,6 +1315,7 @@ if __name__ == "__main__":
             > <enter PIN when prompted>
         """
         _LOGGER.info("Attempting to connect to device by MAC: %s", mac)
+        normalized_mac = self._normalize_mac(mac)
 
         await self._async_ensure_adapter_powered()
 
@@ -1288,6 +1327,24 @@ if __name__ == "__main__":
             device, device_props = await self._async_get_device_interfaces(
                 mac, ensure_discovered=True, discovery_timeout=10.0
             )
+
+        adapter_path = None
+        try:
+            adapter_variant = await device_props.call_get(
+                "org.bluez.Device1", "Adapter"
+            )
+            adapter_path = self._variant_value(adapter_variant)
+        except DBusError as exc:
+            _LOGGER.debug("Failed to read adapter path for %s: %s", mac, exc)
+            adapter_path = self._device_adapter_map.get(normalized_mac)
+        else:
+            self._device_adapter_map[normalized_mac] = adapter_path
+
+        adapter_display = (
+            f"{self._adapter_label(adapter_path)} ({adapter_path})"
+            if adapter_path
+            else "unknown adapter"
+        )
 
         try:
             paired = await self._async_device_property(device_props, "Paired")
@@ -1326,7 +1383,9 @@ if __name__ == "__main__":
         except TimeoutError as exc:
             raise RuntimeError(f"Connection timed out for device {mac}") from exc
         except DBusError as exc:
-            _LOGGER.warning("Connect() raised for %s: %s", mac, exc)
+            _LOGGER.warning(
+                "Connect() raised for %s via %s: %s", mac, adapter_display, exc
+            )
         finally:
             try:
                 connected = await self._async_device_property(device_props, "Connected")
@@ -1334,7 +1393,10 @@ if __name__ == "__main__":
                 _LOGGER.debug("Failed to read Connected state for %s: %s", mac, exc)
 
         if not connected:
-            error_msg = f"Connection failed for device {mac} (device is paired but connection did not succeed)"
+            error_msg = (
+                f"Connection failed for device {mac} via {adapter_display} "
+                "(device is paired but connection did not succeed)"
+            )
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
 
@@ -1343,12 +1405,15 @@ if __name__ == "__main__":
             device_name = await self._async_device_property(device_props, "Name")
         except DBusError as exc:
             _LOGGER.debug("Failed to read device name for %s: %s", mac, exc)
-
-        adapter_path = self._device_adapter_map.get(self._normalize_mac(mac))
         self._connected_devices[mac] = DeviceInfo(
             name=device_name, mac=mac, adapter_path=adapter_path
         )
-        _LOGGER.info("Successfully connected to %s (%s)", device_name or "Unknown", mac)
+        _LOGGER.info(
+            "Successfully connected to %s (%s) via %s",
+            device_name or "Unknown",
+            mac,
+            adapter_display,
+        )
         return True
 
     async def disconnect(self, mac: str | None = None) -> bool:
