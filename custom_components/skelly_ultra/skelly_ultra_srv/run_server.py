@@ -31,6 +31,11 @@ async def main():
         help="Enable debug logging of JSON requests and responses",
     )
     parser.add_argument(
+        "--log-filter",
+        default="",
+        help="Filter logs to only show modules matching this prefix (e.g., 'skelly_ultra_srv')",
+    )
+    parser.add_argument(
         "--host",
         default="0.0.0.0",
         help="Host address to bind to (default: 0.0.0.0)",
@@ -46,6 +51,23 @@ async def main():
     # Configure colored logging
     log_level = logging.DEBUG if args.verbose else logging.INFO
     setup_colored_logging(level=log_level)
+
+    # Apply log filter if specified
+    if args.log_filter:
+        # Set all loggers to WARNING by default
+        logging.getLogger().setLevel(logging.WARNING)
+
+        # Set matching loggers to the desired level
+        for name in logging.root.manager.loggerDict:
+            if name.startswith(args.log_filter):
+                logging.getLogger(name).setLevel(log_level)
+
+        # Also set the filter prefix logger itself
+        logging.getLogger(args.log_filter).setLevel(log_level)
+
+        print(
+            f"Log filter applied: showing only '{args.log_filter}*' modules at {logging.getLevelName(log_level)} level"
+        )
 
     server = SkellyUltraServer(
         host=args.host, port=args.port, debug_json=args.debug_json
