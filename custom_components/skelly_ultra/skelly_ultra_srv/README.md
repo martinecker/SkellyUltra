@@ -63,11 +63,11 @@ cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 pip3 install .
 ```
 
-On some Linux distributions you may instead have to manually install these dependencies via `sudo apt-get` using distribution-provided packages.
+When using the system Python environment instead of a virtual environment, on some Linux distributions you may instead have to manually install these dependencies via `sudo apt-get` using distribution-provided packages.
 These will often have a `python3-` prefix followed by the package name, for example:
 
 ```bash
-sudo apt-get install python3-pydbus
+sudo apt install python3-dbus-next
 ```
 
 ### 2. Docker Installation (Alternative)

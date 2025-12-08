@@ -16,10 +16,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # D-Bus for automated pairing
     dbus \
     dbus-x11 \
-    # Python GObject bindings (required for pydbus)
-    python3-gi \
-    python3-gi-cairo \
-    gir1.2-glib-2.0 \
     # Audio format support
     ffmpeg \
     # Utilities
@@ -32,19 +28,6 @@ WORKDIR /app
 # Copy package configuration and install Python dependencies
 COPY pyproject.toml .
 COPY . ./skelly_ultra_srv
-
-# Make system-installed gi module available to pip's Python by copying (not symlinking)
-# This is more reliable than symlinks which can break
-RUN echo "Checking for gi module..." && \
-    ls -la /usr/lib/python3/dist-packages/ | grep gi || echo "No gi in dist-packages" && \
-    ls -la /usr/lib/python3.11/dist-packages/ | grep gi || echo "No gi in python3.11/dist-packages" && \
-    echo "Copying gi module..." && \
-    cp -r /usr/lib/python3/dist-packages/gi /usr/local/lib/python3.11/site-packages/ 2>&1 || \
-    cp -r /usr/lib/python3.11/dist-packages/gi /usr/local/lib/python3.11/site-packages/ 2>&1 && \
-    cp /usr/lib/python3/dist-packages/_gi*.so /usr/local/lib/python3.11/site-packages/ 2>/dev/null || \
-    cp /usr/lib/python3.11/dist-packages/_gi*.so /usr/local/lib/python3.11/site-packages/ 2>/dev/null || true && \
-    echo "Verifying gi import..." && \
-    python3 -c "import gi; print('gi module successfully available')"
 
 # Install Python dependencies
 RUN pip install --no-cache-dir -e .

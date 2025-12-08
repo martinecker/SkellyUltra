@@ -13,14 +13,39 @@ _LOGGER = logging.getLogger(__name__)
 
 # Check if we can import dbus-related modules for pairing
 try:
-    import pydbus
+    from dbus_next.aio import MessageBus
+    from dbus_next.service import ServiceInterface, method, signal
+    from dbus_next import Variant
 
     DBUS_AVAILABLE = True
 except ImportError as e:
     DBUS_AVAILABLE = False
     _LOGGER.warning(
-        "pydbus not available, pair_and_trust will not work. Import error: %s", e
+        "dbus_next not available, pair_and_trust will not work. Import error: %s", e
     )
+
+    # Create dummy classes to avoid NameError when dbus_next is not available
+    class ServiceInterface:  # type: ignore[no-redef]
+        """Dummy ServiceInterface for when dbus_next is not available."""
+
+        def __init__(self, interface_name: str) -> None:
+            pass
+
+    def method():  # type: ignore[no-redef]
+        """Dummy method decorator for when dbus_next is not available."""
+
+        def decorator(func):
+            return func
+
+        return decorator
+
+    def signal():  # type: ignore[no-redef]
+        """Dummy signal decorator for when dbus_next is not available."""
+
+        def decorator(func):
+            return func
+
+        return decorator
 
 
 class DeviceInfo(NamedTuple):
@@ -30,49 +55,11 @@ class DeviceInfo(NamedTuple):
     mac: str | None
 
 
-class PairingAgent:
+class PairingAgent(ServiceInterface):
     """D-Bus agent for handling Bluetooth pairing with PIN codes.
 
     This agent implements the org.bluez.Agent1 interface to handle
     pairing requests from BlueZ, allowing automated PIN code entry.
-    """
-
-    # D-Bus interface XML for BlueZ Agent1
-    dbus = """
-    <node>
-        <interface name='org.bluez.Agent1'>
-            <method name='RequestPinCode'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='s' name='pincode' direction='out'/>
-            </method>
-            <method name='DisplayPinCode'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='s' name='pincode' direction='in'/>
-            </method>
-            <method name='RequestPasskey'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='u' name='passkey' direction='out'/>
-            </method>
-            <method name='DisplayPasskey'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='u' name='passkey' direction='in'/>
-                <arg type='q' name='entered' direction='in'/>
-            </method>
-            <method name='RequestConfirmation'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='u' name='passkey' direction='in'/>
-            </method>
-            <method name='RequestAuthorization'>
-                <arg type='o' name='device' direction='in'/>
-            </method>
-            <method name='AuthorizeService'>
-                <arg type='o' name='device' direction='in'/>
-                <arg type='s' name='uuid' direction='in'/>
-            </method>
-            <method name='Cancel'/>
-            <method name='Release'/>
-        </interface>
-    </node>
     """
 
     def __init__(self, pin_code: str) -> None:
@@ -81,10 +68,12 @@ class PairingAgent:
         Args:
             pin_code: PIN code to use for pairing
         """
+        super().__init__("org.bluez.Agent1")
         self.pin_code = pin_code
         _LOGGER.debug("PairingAgent initialized with PIN: %s", pin_code)
 
-    def RequestPinCode(self, device: str) -> str:
+    @method()
+    def RequestPinCode(self, device: "o") -> "s":
         """Handle PIN code request from BlueZ.
 
         Args:
@@ -97,7 +86,8 @@ class PairingAgent:
         _LOGGER.debug("Returning PIN code: %s", self.pin_code)
         return self.pin_code
 
-    def DisplayPinCode(self, device: str, pincode: str) -> None:
+    @method()
+    def DisplayPinCode(self, device: "o", pincode: "s"):
         """Display PIN code (informational).
 
         Args:
@@ -106,7 +96,8 @@ class PairingAgent:
         """
         _LOGGER.info("Display PIN code %s for device: %s", pincode, device)
 
-    def RequestPasskey(self, device: str) -> int:
+    @method()
+    def RequestPasskey(self, device: "o") -> "u":
         """Handle passkey request from BlueZ.
 
         Args:
@@ -124,7 +115,8 @@ class PairingAgent:
             _LOGGER.error("PIN code %s is not a valid integer passkey", self.pin_code)
             raise
 
-    def DisplayPasskey(self, device: str, passkey: int, entered: int) -> None:
+    @method()
+    def DisplayPasskey(self, device: "o", passkey: "u", entered: "q"):
         """Display passkey (informational).
 
         Args:
@@ -139,7 +131,8 @@ class PairingAgent:
             entered,
         )
 
-    def RequestConfirmation(self, device: str, passkey: int) -> None:
+    @method()
+    def RequestConfirmation(self, device: "o", passkey: "u"):
         """Handle confirmation request from BlueZ.
 
         Args:
@@ -152,7 +145,8 @@ class PairingAgent:
         _LOGGER.debug("Auto-confirming passkey")
         # Auto-confirm by not raising an exception
 
-    def RequestAuthorization(self, device: str) -> None:
+    @method()
+    def RequestAuthorization(self, device: "o"):
         """Handle authorization request from BlueZ.
 
         Args:
@@ -161,7 +155,8 @@ class PairingAgent:
         _LOGGER.info("Authorization requested for device: %s", device)
         # Auto-authorize by not raising an exception
 
-    def AuthorizeService(self, device: str, uuid: str) -> None:
+    @method()
+    def AuthorizeService(self, device: "o", uuid: "s"):
         """Handle service authorization request from BlueZ.
 
         Args:
@@ -173,14 +168,16 @@ class PairingAgent:
         )
         # Auto-authorize by not raising an exception
 
-    def Cancel(self) -> None:
+    @method()
+    def Cancel(self):
         """Handle cancellation of pairing."""
         _LOGGER.warning("Pairing cancelled by BlueZ or device")
         import traceback
 
         _LOGGER.debug("Cancel called from:\n%s", "".join(traceback.format_stack()))
 
-    def Release(self) -> None:
+    @method()
+    def Release(self):
         """Handle agent release."""
         _LOGGER.info("Agent released")
 
@@ -574,8 +571,8 @@ if __name__ == "__main__":
         """
         if not DBUS_AVAILABLE:
             error_msg = (
-                "D-Bus pairing not available: pydbus is required. "
-                "Install with: pip install pydbus"
+                "D-Bus pairing not available: dbus_next is required. "
+                "Install with: pip install dbus_next"
             )
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
@@ -604,14 +601,16 @@ if __name__ == "__main__":
         _LOGGER.info("Starting D-Bus pairing for device: %s", mac)
 
         # Import here to avoid errors if not available
-        import pydbus
+        from dbus_next.aio import MessageBus
+        from dbus_next import BusType, Variant
 
         agent_path = "/org/bluez/agent_skelly"
+        bus = None
 
         try:
             # Get the system bus
             try:
-                bus = pydbus.SystemBus()
+                bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
                 _LOGGER.debug("Connected to D-Bus system bus")
             except Exception as exc:
                 error_msg = (
@@ -623,7 +622,7 @@ if __name__ == "__main__":
 
             # Verify BlueZ is available
             try:
-                bluez_obj = bus.get("org.bluez", "/")
+                introspection = await bus.introspect("org.bluez", "/")
                 _LOGGER.debug("BlueZ service is available on D-Bus")
             except Exception as exc:
                 error_msg = (
@@ -636,17 +635,21 @@ if __name__ == "__main__":
             # Create and register the pairing agent
             agent = PairingAgent(pin)
             try:
-                # Register the agent object at the specified path with its XML interface
-                bus.register_object(agent_path, agent, PairingAgent.dbus)
+                # Export the agent object at the specified path
+                bus.export(agent_path, agent)
                 _LOGGER.debug("Registered pairing agent at %s", agent_path)
             except Exception as exc:
                 error_msg = f"Failed to register pairing agent: {exc}"
                 _LOGGER.error(error_msg)
                 raise RuntimeError(error_msg) from exc
 
-            # Get the agent manager
+            # Get the agent manager proxy
             try:
-                agent_manager = bus.get("org.bluez", "/org/bluez")
+                introspection = await bus.introspect("org.bluez", "/org/bluez")
+                proxy_obj = bus.get_proxy_object(
+                    "org.bluez", "/org/bluez", introspection
+                )
+                agent_manager = proxy_obj.get_interface("org.bluez.AgentManager1")
                 _LOGGER.debug("Got BlueZ agent manager")
             except Exception as exc:
                 error_msg = f"Failed to get BlueZ agent manager: {exc}"
@@ -655,16 +658,22 @@ if __name__ == "__main__":
 
             # Register agent with capability "KeyboardDisplay" (supports PIN entry and display)
             try:
-                agent_manager.RegisterAgent(agent_path, "KeyboardDisplay")
-                _LOGGER.info("Skelly Agent registered with BlueZ at path: %s", agent_path)
+                await agent_manager.call_register_agent(agent_path, "KeyboardDisplay")
+                _LOGGER.info(
+                    "Skelly Agent registered with BlueZ at path: %s", agent_path
+                )
             except Exception as exc:
                 _LOGGER.warning("Failed to register agent (may already exist): %s", exc)
                 # Try to unregister old agent and re-register
                 try:
-                    agent_manager.UnregisterAgent(agent_path)
+                    await agent_manager.call_unregister_agent(agent_path)
                     _LOGGER.debug("Unregistered old Skelly agent")
-                    agent_manager.RegisterAgent(agent_path, "KeyboardDisplay")
-                    _LOGGER.info("Re-registered Skelly agent after unregistering old one")
+                    await agent_manager.call_register_agent(
+                        agent_path, "KeyboardDisplay"
+                    )
+                    _LOGGER.info(
+                        "Re-registered Skelly agent after unregistering old one"
+                    )
                 except Exception as rereg_exc:
                     error_msg = f"Failed to register/re-register agent: {rereg_exc}"
                     _LOGGER.error(error_msg)
@@ -672,19 +681,31 @@ if __name__ == "__main__":
 
             # Request to make this the default agent
             try:
-                agent_manager.RequestDefaultAgent(agent_path)
-                _LOGGER.info("Skelly Agent set as DEFAULT - BlueZ will use this for pairing")
+                await agent_manager.call_request_default_agent(agent_path)
+                _LOGGER.info(
+                    "Skelly Agent set as DEFAULT - BlueZ will use this for pairing"
+                )
             except Exception as exc:
                 _LOGGER.error(
-                    "Failed to set Skelly agent as default agent - pairing may fail! Error: %s", exc
+                    "Failed to set Skelly agent as default agent - pairing may fail! Error: %s",
+                    exc,
                 )
                 # This is actually critical for automated pairing to work
-                raise RuntimeError(f"Failed to set Skelly agent as default agent: {exc}") from exc
+                raise RuntimeError(
+                    f"Failed to set Skelly agent as default agent: {exc}"
+                ) from exc
 
             # Get the adapter (usually hci0)
             adapter_path = "/org/bluez/hci0"
             try:
-                adapter = bus.get("org.bluez", adapter_path)
+                introspection = await bus.introspect("org.bluez", adapter_path)
+                proxy_obj = bus.get_proxy_object(
+                    "org.bluez", adapter_path, introspection
+                )
+                adapter = proxy_obj.get_interface("org.bluez.Adapter1")
+                adapter_props = proxy_obj.get_interface(
+                    "org.freedesktop.DBus.Properties"
+                )
                 _LOGGER.debug("Got Bluetooth adapter at %s", adapter_path)
             except Exception as exc:
                 error_msg = (
@@ -696,7 +717,9 @@ if __name__ == "__main__":
 
             # Power on the adapter
             try:
-                adapter.Powered = True
+                await adapter_props.call_set(
+                    "org.bluez.Adapter1", "Powered", Variant("b", True)
+                )
                 _LOGGER.debug("Adapter powered on")
             except Exception as exc:
                 _LOGGER.warning(
@@ -711,20 +734,24 @@ if __name__ == "__main__":
             _LOGGER.info(
                 "Starting device discovery for %s (this may take 5-10 seconds)", mac
             )
-            adapter.StartDiscovery()
+            await adapter.call_start_discovery()
 
             # Wait for device to be discovered
             # Increased from 3 to 8 seconds to give more time
             await asyncio.sleep(8)
 
             # Stop discovery
-            adapter.StopDiscovery()
+            await adapter.call_stop_discovery()
             _LOGGER.debug("Discovery stopped")
 
             # Verify device was discovered before trying to access it
             try:
-                obj_manager = bus.get("org.bluez", "/")
-                objects = obj_manager.GetManagedObjects()
+                introspection = await bus.introspect("org.bluez", "/")
+                proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
+                obj_manager = proxy_obj.get_interface(
+                    "org.freedesktop.DBus.ObjectManager"
+                )
+                objects = await obj_manager.call_get_managed_objects()
                 if device_path not in objects:
                     device_paths = [path for path in objects if "/dev_" in path]
                     _LOGGER.error(
@@ -745,7 +772,14 @@ if __name__ == "__main__":
 
             # Get the device
             try:
-                device = bus.get("org.bluez", device_path)
+                introspection = await bus.introspect("org.bluez", device_path)
+                proxy_obj = bus.get_proxy_object(
+                    "org.bluez", device_path, introspection
+                )
+                device = proxy_obj.get_interface("org.bluez.Device1")
+                device_props = proxy_obj.get_interface(
+                    "org.freedesktop.DBus.Properties"
+                )
                 _LOGGER.debug("Got device object for path: %s", device_path)
             except Exception as exc:
                 _LOGGER.error(
@@ -756,11 +790,12 @@ if __name__ == "__main__":
                 )
                 # Try to list available devices for debugging
                 try:
-                    from pydbus import SystemBus
-
-                    bus_obj = SystemBus()
-                    obj_manager = bus_obj.get("org.bluez", "/")
-                    objects = obj_manager.GetManagedObjects()
+                    introspection = await bus.introspect("org.bluez", "/")
+                    proxy_obj = bus.get_proxy_object("org.bluez", "/", introspection)
+                    obj_manager = proxy_obj.get_interface(
+                        "org.freedesktop.DBus.ObjectManager"
+                    )
+                    objects = await obj_manager.call_get_managed_objects()
                     device_paths = [path for path in objects.keys() if "/dev_" in path]
                     _LOGGER.error(
                         "Available device paths: %s",
@@ -779,47 +814,60 @@ if __name__ == "__main__":
 
             # Check if already paired
             try:
-                if device.Paired:
+                paired_variant = await device_props.call_get(
+                    "org.bluez.Device1", "Paired"
+                )
+                paired = (
+                    paired_variant.value
+                    if hasattr(paired_variant, "value")
+                    else paired_variant
+                )
+                _LOGGER.debug(
+                    "Device %s paired status: %s (type: %s)", mac, paired, type(paired)
+                )
+                if paired:
                     _LOGGER.info("Device %s is already paired", mac)
-                    if not device.Trusted:
-                        device.Trusted = True
+                    trusted_variant = await device_props.call_get(
+                        "org.bluez.Device1", "Trusted"
+                    )
+                    trusted = (
+                        trusted_variant.value
+                        if hasattr(trusted_variant, "value")
+                        else trusted_variant
+                    )
+                    if not trusted:
+                        await device_props.call_set(
+                            "org.bluez.Device1", "Trusted", Variant("b", True)
+                        )
                         _LOGGER.info("Device %s trusted", mac)
                     return True
-            except Exception:
-                pass
+            except Exception as exc:
+                _LOGGER.debug("Could not check paired status: %s", exc)
 
             # Pair the device (this will trigger PIN code request)
             _LOGGER.info("Initiating pairing with device: %s", mac)
 
-            # Run the pairing operation in executor to avoid blocking asyncio event loop
-            # The D-Bus Pair() call is synchronous and may take several seconds
-            def do_pair_sync():
-                try:
-                    device.Pair()
-                    _LOGGER.info("Pairing successful for device: %s", mac)
-                    return True
-                except Exception as exc:
-                    _LOGGER.error("Pairing failed: %s", exc)
-                    raise RuntimeError(f"Pairing failed: {exc}") from exc
-
             try:
                 # Run pairing with timeout
-                pair_success = await asyncio.wait_for(
-                    asyncio.get_event_loop().run_in_executor(None, do_pair_sync),
+                await asyncio.wait_for(
+                    device.call_pair(),
                     timeout=timeout,
                 )
+                _LOGGER.info("Pairing successful for device: %s", mac)
             except asyncio.TimeoutError:
                 error_msg = f"Pairing timed out after {timeout} seconds"
                 _LOGGER.error(error_msg)
                 raise RuntimeError(error_msg)
-
-            if not pair_success:
-                raise RuntimeError("Pairing failed with unknown error")
+            except Exception as exc:
+                _LOGGER.error("Pairing failed: %s", exc)
+                raise RuntimeError(f"Pairing failed: {exc}") from exc
 
             # Trust the device
             _LOGGER.info("Trusting device: %s", mac)
             try:
-                device.Trusted = True
+                await device_props.call_set(
+                    "org.bluez.Device1", "Trusted", Variant("b", True)
+                )
                 _LOGGER.info("Device %s trusted", mac)
             except Exception as exc:
                 _LOGGER.warning("Failed to set device as trusted: %s", exc)
@@ -836,10 +884,17 @@ if __name__ == "__main__":
             # Unregister the agent
             try:
                 if "agent_manager" in locals():
-                    agent_manager.UnregisterAgent(agent_path)
+                    await agent_manager.call_unregister_agent(agent_path)
                     _LOGGER.debug("Agent unregistered")
             except Exception:
                 pass
+
+            # Disconnect the bus
+            if bus is not None:
+                try:
+                    bus.disconnect()
+                except Exception:
+                    pass
 
     async def _run_bluetoothctl(
         self, commands: list[str], timeout: float = 30.0, wait_after: float = 0.0
