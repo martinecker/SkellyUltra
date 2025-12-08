@@ -76,7 +76,19 @@ class AudioPlayer:
         try:
             cmd = ["pw-play"]
             if target:
-                cmd.extend(["--target", target])
+                # Convert MAC address to PipeWire/BlueZ output format
+                # MAC addresses use underscores instead of colons in PipeWire
+                if ":" in target:
+                    # Convert MAC address like F5:A1:BC:80:63:EC to bluez_output.F5_A1_BC_80_63_EC.1
+                    pipewire_target = f"bluez_output.{target.replace(':', '_')}.1"
+                    _LOGGER.debug(
+                        "Converted MAC %s to PipeWire target: %s",
+                        target,
+                        pipewire_target,
+                    )
+                else:
+                    pipewire_target = target
+                cmd.extend(["--target", pipewire_target])
             cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
 
