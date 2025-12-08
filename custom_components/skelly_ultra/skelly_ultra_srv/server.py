@@ -1206,9 +1206,13 @@ class SkellyUltraServer:
         """Called when application starts."""
         await self.ble_manager.start()
         _LOGGER.info("BLE session manager started")
+        await self.bt_manager.start_background_scanner()
+        _LOGGER.info("Bluetooth Classic background scanner started")
 
     async def _on_cleanup(self, app: web.Application) -> None:
         """Called when application shuts down."""
+        await self.bt_manager.stop_background_scanner()
+        _LOGGER.info("Bluetooth Classic background scanner stopped")
         await self.ble_manager.stop()
         _LOGGER.info("BLE session manager stopped")
 

@@ -82,6 +82,7 @@ class PairingAgent:
             pin_code: PIN code to use for pairing
         """
         self.pin_code = pin_code
+        _LOGGER.debug("PairingAgent initialized with PIN: %s", pin_code)
 
     def RequestPinCode(self, device: str) -> str:
         """Handle PIN code request from BlueZ.
@@ -93,6 +94,7 @@ class PairingAgent:
             PIN code as string
         """
         _LOGGER.info("PIN code requested for device: %s", device)
+        _LOGGER.debug("Returning PIN code: %s", self.pin_code)
         return self.pin_code
 
     def DisplayPinCode(self, device: str, pincode: str) -> None:
@@ -115,7 +117,9 @@ class PairingAgent:
         """
         _LOGGER.info("Passkey requested for device: %s", device)
         try:
-            return int(self.pin_code)
+            passkey = int(self.pin_code)
+            _LOGGER.debug("Returning passkey: %d", passkey)
+            return passkey
         except ValueError:
             _LOGGER.error("PIN code %s is not a valid integer passkey", self.pin_code)
             raise
@@ -145,6 +149,7 @@ class PairingAgent:
         _LOGGER.info(
             "Confirmation requested for device %s with passkey: %06d", device, passkey
         )
+        _LOGGER.debug("Auto-confirming passkey")
         # Auto-confirm by not raising an exception
 
     def RequestAuthorization(self, device: str) -> None:
@@ -170,7 +175,10 @@ class PairingAgent:
 
     def Cancel(self) -> None:
         """Handle cancellation of pairing."""
-        _LOGGER.info("Pairing cancelled")
+        _LOGGER.warning("Pairing cancelled by BlueZ or device")
+        import traceback
+
+        _LOGGER.debug("Cancel called from:\n%s", "".join(traceback.format_stack()))
 
     def Release(self) -> None:
         """Handle agent release."""
@@ -180,9 +188,104 @@ class PairingAgent:
 class BluetoothManager:
     """Manager for Bluetooth classic device connections via bluetoothctl."""
 
-    def __init__(self) -> None:
-        """Initialize the Bluetooth manager."""
+    def __init__(self, allow_scanner: bool = True) -> None:
+        """Initialize the Bluetooth manager.
+
+        Args:
+            allow_scanner: Whether to allow background scanner (False for subprocess operations)
+        """
         self._connected_devices: dict[str, DeviceInfo] = {}  # MAC -> DeviceInfo
+        self._device_cache: dict[str, str] = {}  # Device name -> MAC address
+        self._scanner_task: asyncio.Task | None = None
+        self._scanner_running = False
+        self._allow_scanner = allow_scanner
+
+    async def start_background_scanner(self) -> None:
+        """Start background Bluetooth scanning to populate device cache."""
+        if not self._allow_scanner:
+            _LOGGER.debug("Background scanner disabled for this instance")
+            return
+        if self._scanner_task is None:
+            self._scanner_task = asyncio.create_task(self._background_scanner())
+            _LOGGER.info("Started background Bluetooth scanner")
+
+    async def stop_background_scanner(self) -> None:
+        """Stop background Bluetooth scanning."""
+        if self._scanner_task:
+            self._scanner_running = False
+            self._scanner_task.cancel()
+            try:
+                await self._scanner_task
+            except asyncio.CancelledError:
+                pass
+            self._scanner_task = None
+            _LOGGER.info("Stopped background Bluetooth scanner")
+
+    async def _scan_and_update_cache(
+        self, scan_duration: float = 15.0, stop_scan: bool = True
+    ) -> None:
+        """Scan for Bluetooth devices and update cache.
+
+        Args:
+            scan_duration: How long to scan for devices (in seconds)
+            stop_scan: Whether to stop scanning after getting results
+        """
+        # Start scanning
+        await self._run_bluetoothctl(
+            ["power on", "agent on", "default-agent", "scan on"], timeout=5.0
+        )
+
+        # Wait for scan results
+        await asyncio.sleep(scan_duration)
+
+        # Get results and update cache
+        stdout, _ = await self._run_bluetoothctl(["devices"], timeout=5.0)
+
+        # Parse devices and update cache
+        # Format: "Device XX:XX:XX:XX:XX:XX Device Name"
+        for line in stdout.split("\n"):
+            if "Device" in line:
+                match = re.search(r"Device\s+([0-9A-Fa-f:]{17})\s+(.+)", line.strip())
+                if match:
+                    mac_address = match.group(1)
+                    device_name = match.group(2).strip()
+                    if device_name:  # Only cache if name is not empty
+                        self._device_cache[device_name] = mac_address
+                        _LOGGER.debug(
+                            "Cached device: %s -> %s", device_name, mac_address
+                        )
+
+        # Stop scanning if requested
+        if stop_scan:
+            await self._run_bluetoothctl(["scan off"], timeout=5.0)
+
+    async def _background_scanner(self) -> None:
+        """Continuously scan for Bluetooth devices and update cache."""
+        _LOGGER.info("Background Bluetooth scanner started")
+        self._scanner_running = True
+
+        while self._scanner_running:
+            try:
+                # Scan and update cache
+                await self._scan_and_update_cache(scan_duration=15.0, stop_scan=True)
+
+                # Wait before next scan cycle
+                await asyncio.sleep(5)
+
+            except asyncio.CancelledError:
+                _LOGGER.info("Background scanner cancelled")
+                break
+            except Exception:
+                _LOGGER.exception("Error in background scanner, will retry")
+                await asyncio.sleep(10)
+
+        # Cleanup: stop scanning
+        try:
+            await self._run_bluetoothctl(["scan off"], timeout=5.0)
+        except Exception:
+            pass
+
+        _LOGGER.info("Background Bluetooth scanner stopped")
 
     async def _discover_device_mac_by_name(self, device_name: str) -> str:
         """Discover a Bluetooth device's MAC address by name.
@@ -196,34 +299,48 @@ class BluetoothManager:
         Raises:
             RuntimeError: If device not found or scan fails
         """
-        _LOGGER.debug("Scanning for device by name: %s", device_name)
+        _LOGGER.debug("Looking up device by name: %s", device_name)
+
+        # Check cache first
+        if device_name in self._device_cache:
+            mac_address = self._device_cache[device_name]
+            _LOGGER.info(
+                "Found device %s in cache with MAC: %s", device_name, mac_address
+            )
+            return mac_address
+
+        # Cache miss - wait for cache to populate if scanner is running
+        if self._scanner_running:
+            _LOGGER.info(
+                "Device %s not in cache, waiting up to 10 seconds for background scan",
+                device_name,
+            )
+            for i in range(20):  # Check every 0.5 seconds for 10 seconds
+                await asyncio.sleep(0.5)
+                if device_name in self._device_cache:
+                    mac_address = self._device_cache[device_name]
+                    _LOGGER.info(
+                        "Found device %s in cache with MAC: %s (after %s seconds)",
+                        device_name,
+                        mac_address,
+                        (i + 1) * 0.5,
+                    )
+                    return mac_address
+
+        # Still not found - do a manual scan
+        _LOGGER.info(
+            "Device %s not found in cache, performing manual scan", device_name
+        )
 
         try:
-            # Scan for devices
-            stdout, _ = await self._run_bluetoothctl(
-                ["power on", "agent on", "default-agent", "scan on"], timeout=25.0
-            )
+            # Scan and update cache (5 second scan, then stop)
+            await self._scan_and_update_cache(scan_duration=5.0, stop_scan=True)
 
-            # Wait a bit for scan results
-            await asyncio.sleep(5)
-
-            # Get scan results and stop scanning
-            stdout2, _ = await self._run_bluetoothctl(["devices", "scan off"])
-            combined_output = stdout + "\n" + stdout2
-
-            # Parse devices to find matching name
-            # Format: "Device XX:XX:XX:XX:XX:XX Device Name"
-            for line in combined_output.split("\n"):
-                if "Device" in line and device_name in line:
-                    match = re.search(
-                        r"Device\s+([0-9A-Fa-f:]{17})\s+(.+)", line.strip()
-                    )
-                    if match:
-                        mac_address = match.group(1)
-                        _LOGGER.info(
-                            "Found device %s with MAC: %s", device_name, mac_address
-                        )
-                        return mac_address
+            # Check cache again after manual scan
+            if device_name in self._device_cache:
+                mac_address = self._device_cache[device_name]
+                _LOGGER.info("Found device %s with MAC: %s", device_name, mac_address)
+                return mac_address
 
             error_msg = f"Could not find device with name: {device_name}"
             _LOGGER.error(error_msg)
@@ -262,6 +379,18 @@ class BluetoothManager:
 import sys
 import os
 import asyncio
+import logging
+
+# Configure logging for subprocess
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='[skelly_ultra_srv.sudo_pairing] %(levelname)s - %(message)s',
+    stream=sys.stderr
+)
+
+_LOGGER = logging.getLogger(__name__)
+
+_LOGGER.info("Starting sudo pairing subprocess")
 
 # Add parent directory to path for imports
 sys.path.insert(0, {repr(os.path.dirname(os.path.dirname(__file__)))})
@@ -269,50 +398,93 @@ sys.path.insert(0, {repr(os.path.dirname(os.path.dirname(__file__)))})
 from skelly_ultra_srv.bluetooth_manager import BluetoothManager
 
 async def main():
-    manager = BluetoothManager()
+    manager = BluetoothManager(allow_scanner=False)
     try:
         success = await manager.pair_and_trust_by_mac({repr(mac)}, {repr(pin)}, {timeout})
         sys.exit(0 if success else 1)
     except Exception as e:
-        print(f"Pairing failed: {{e}}", file=sys.stderr)
+        _LOGGER.error(f"Pairing failed: {{e}}")
         sys.exit(2)
 
 if __name__ == "__main__":
     asyncio.run(main())
 """
 
-        _LOGGER.info("Attempting pairing with sudo elevation for %s", mac)
+        cmd_line = f'sudo -n {sys.executable} -c "<python script>"'
+        _LOGGER.info(
+            "Attempting pairing with sudo elevation for %s - Command: %s", mac, cmd_line
+        )
+        _LOGGER.debug("Sudo script content:\n%s", script)
+
+        # Pause background scanner during sudo pairing to avoid bluetoothctl conflicts
+        scanner_was_running = self._scanner_task is not None
+        if scanner_was_running:
+            _LOGGER.debug("Pausing background scanner during sudo pairing")
+            await self.stop_background_scanner()
 
         try:
-            # Run the script with sudo
+            # Run the script with sudo -n (non-interactive, fail if password required)
+            # Note: stderr is NOT captured so subprocess output flows immediately to console
             proc = await asyncio.create_subprocess_exec(
                 "sudo",
+                "-n",  # Non-interactive mode - fail if password required
                 sys.executable,
                 "-c",
                 script,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=None,  # Let stderr flow to parent for real-time output
             )
 
+            _LOGGER.debug("Subprocess started with PID: %s", proc.pid)
+
             try:
-                stdout, stderr = await asyncio.wait_for(
+                stdout, _ = await asyncio.wait_for(
                     proc.communicate(), timeout=timeout + 10
                 )
-            except TimeoutError:
+                _LOGGER.debug(
+                    "Subprocess completed with returncode: %s, stdout: %s",
+                    proc.returncode,
+                    stdout.decode() if stdout else "",
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.error(
+                    "Subprocess timed out after %s seconds, killing process",
+                    timeout + 10,
+                )
                 proc.kill()
                 await proc.wait()
                 error_msg = f"Sudo pairing timed out after {timeout + 10}s"
                 _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg)
+                raise RuntimeError(error_msg) from None
+
+            stdout_str = stdout.decode() if stdout else ""
 
             if proc.returncode == 0:
                 _LOGGER.info("Sudo pairing successful for %s", mac)
+                if stdout_str:
+                    _LOGGER.debug("Sudo stdout: %s", stdout_str)
                 return True
-            else:
-                error_output = stderr.decode() if stderr else "Unknown error"
-                error_msg = f"Sudo pairing failed: {error_output}"
+
+            # Exit code 1 from sudo -n typically means password required
+            # Exit code 2 is what our subprocess uses for exceptions
+            if proc.returncode == 1:
+                error_msg = (
+                    f"Sudo requires password but cannot prompt interactively. "
+                    f"To fix this, configure passwordless sudo for Python/bluetoothctl:\n"
+                    f"1. Run: sudo visudo\n"
+                    f"2. Add line: {os.getenv('USER', 'youruser')} ALL=(ALL) NOPASSWD: /usr/bin/python3, /usr/bin/bluetoothctl\n"
+                    f"3. Save and try again.\n"
+                    f"Alternatively, run the server as root or manually pair: bluetoothctl -> pair {mac}"
+                )
                 _LOGGER.error(error_msg)
                 raise RuntimeError(error_msg)
+
+            # Exit code 2 means our subprocess caught an exception (stderr has details)
+            error_msg = f"Sudo pairing failed (exit code {proc.returncode})"
+            if stdout_str:
+                error_msg += f" - stdout: {stdout_str}"
+            _LOGGER.error(error_msg)
+            raise RuntimeError(error_msg)
 
         except FileNotFoundError:
             error_msg = (
@@ -321,10 +493,18 @@ if __name__ == "__main__":
             )
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
+        except RuntimeError:
+            # Re-raise RuntimeError as-is
+            raise
         except Exception as exc:
             error_msg = f"Failed to execute sudo pairing: {exc}"
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg) from exc
+        finally:
+            # Resume background scanner if it was running before
+            if scanner_was_running:
+                _LOGGER.debug("Resuming background scanner after sudo pairing")
+                await self.start_background_scanner()
 
     async def pair_and_trust_by_name(
         self, device_name: str, pin: str, timeout: float = 30.0
@@ -373,6 +553,13 @@ if __name__ == "__main__":
         then initiates pairing with the device. If not running as root,
         it will attempt to use sudo to elevate privileges only for the
         pairing operation.
+
+        Note: Some devices (like Animated Skelly) may time out with automated
+        pairing because they don't properly request the PIN from the agent.
+        For such devices, manual pairing may be required:
+            bluetoothctl
+            > pair MAC_ADDRESS
+            > (enter PIN when prompted)
 
         Args:
             mac: MAC address of the device to pair (format: XX:XX:XX:XX:XX:XX)
@@ -469,14 +656,15 @@ if __name__ == "__main__":
             # Register agent with capability "KeyboardDisplay" (supports PIN entry and display)
             try:
                 agent_manager.RegisterAgent(agent_path, "KeyboardDisplay")
-                _LOGGER.debug("Agent registered with BlueZ")
+                _LOGGER.info("Skelly Agent registered with BlueZ at path: %s", agent_path)
             except Exception as exc:
                 _LOGGER.warning("Failed to register agent (may already exist): %s", exc)
                 # Try to unregister old agent and re-register
                 try:
                     agent_manager.UnregisterAgent(agent_path)
+                    _LOGGER.debug("Unregistered old Skelly agent")
                     agent_manager.RegisterAgent(agent_path, "KeyboardDisplay")
-                    _LOGGER.debug("Re-registered agent after unregistering old one")
+                    _LOGGER.info("Re-registered Skelly agent after unregistering old one")
                 except Exception as rereg_exc:
                     error_msg = f"Failed to register/re-register agent: {rereg_exc}"
                     _LOGGER.error(error_msg)
@@ -485,11 +673,13 @@ if __name__ == "__main__":
             # Request to make this the default agent
             try:
                 agent_manager.RequestDefaultAgent(agent_path)
-                _LOGGER.debug("Agent set as default")
+                _LOGGER.info("Skelly Agent set as DEFAULT - BlueZ will use this for pairing")
             except Exception as exc:
-                _LOGGER.warning(
-                    "Failed to set default agent (may not be critical): %s", exc
+                _LOGGER.error(
+                    "Failed to set Skelly agent as default agent - pairing may fail! Error: %s", exc
                 )
+                # This is actually critical for automated pairing to work
+                raise RuntimeError(f"Failed to set Skelly agent as default agent: {exc}") from exc
 
             # Get the adapter (usually hci0)
             adapter_path = "/org/bluez/hci0"
