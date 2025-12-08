@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "aiohttp>=3.9.0",
-    "pydbus-next>=0.2.0",
+    "dbus-next>=0.2.0",
     "bleak>=0.21.0",
 ]
 
