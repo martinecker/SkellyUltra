@@ -190,6 +190,37 @@ class BluetoothManager:
 
         return adapter_path.rsplit("/", maxsplit=1)[-1]
 
+    def _adapter_is_available(
+        self, adapter_path: str, normalized_mac: str | None = None
+    ) -> bool:
+        """Return True if adapter is not connected or already assigned to mac."""
+
+        occupant = self._adapter_connections.get(adapter_path)
+        return occupant is None or (
+            normalized_mac is not None and occupant == normalized_mac
+        )
+
+    def _find_available_adapter(self, normalized_mac: str | None = None) -> str | None:
+        """Return the next adapter that is not currently connected."""
+
+        if not self._adapter_paths:
+            return None
+
+        for offset in range(len(self._adapter_paths)):
+            index = (self._adapter_rr_index + offset) % len(self._adapter_paths)
+            adapter_path = self._adapter_paths[index]
+            if self._adapter_is_available(adapter_path, normalized_mac):
+                self._adapter_rr_index = (index + 1) % len(self._adapter_paths)
+                return adapter_path
+        return None
+
+    def _format_adapter(self, adapter_path: str | None) -> str:
+        """Return a friendly adapter label with path for logging."""
+
+        if not adapter_path:
+            return "unknown adapter"
+        return f"{self._adapter_label(adapter_path)} ({adapter_path})"
+
     async def _async_refresh_adapters(self) -> list[str]:
         """Discover available Bluetooth adapters."""
 
@@ -301,9 +332,18 @@ class BluetoothManager:
             if adapter_path:
                 return adapter_path
 
-        assignments: dict[str, int] = {}
-        for adapter_path in self._adapter_paths:
-            assignments[adapter_path] = 0
+        available_adapters = [
+            path
+            for path in self._adapter_paths
+            if self._adapter_is_available(path, normalized_mac)
+        ]
+        if not available_adapters:
+            raise RuntimeError(
+                "All Bluetooth adapters are currently connected to other devices. "
+                "Disconnect one before pairing another speaker."
+            )
+
+        assignments: dict[str, int] = dict.fromkeys(available_adapters, 0)
 
         for mapped_adapter in self._device_adapter_map.values():
             if mapped_adapter in assignments:
@@ -1085,6 +1125,46 @@ if __name__ == "__main__":
         self._device_adapter_map[normalized_mac] = adapter_path
         return True
 
+    async def _async_unpair_device(
+        self, mac: str, adapter_path: str | None = None
+    ) -> None:
+        """Remove a paired device from BlueZ and clear internal mappings."""
+
+        normalized_mac = self._normalize_mac(mac)
+        device_path = await self._async_find_device_path(normalized_mac)
+        if device_path is None:
+            self._device_adapter_map.pop(normalized_mac, None)
+            return
+
+        target_adapter = adapter_path or self._device_adapter_map.get(normalized_mac)
+        if target_adapter is None:
+            target_adapter = await self._async_get_device_adapter_path(normalized_mac)
+
+        if target_adapter is None:
+            self._device_adapter_map.pop(normalized_mac, None)
+            return
+
+        try:
+            adapter, _ = await self._async_get_adapter(target_adapter)
+        except RuntimeError:
+            self._device_adapter_map.pop(normalized_mac, None)
+        else:
+            with contextlib.suppress(DBusError):
+                await adapter.call_remove_device(device_path)
+
+        self._device_adapter_map.pop(normalized_mac, None)
+
+        device_info = self._connected_devices.pop(mac, None)
+        connected_adapter = device_info.adapter_path if device_info else None
+        if (
+            connected_adapter
+            and self._adapter_connections.get(connected_adapter) == normalized_mac
+        ):
+            self._adapter_connections[connected_adapter] = None
+
+        if self._adapter_connections.get(target_adapter) == normalized_mac:
+            self._adapter_connections[target_adapter] = None
+
     async def _async_pair_device(self, device: Any, timeout: float) -> None:
         """Run the BlueZ pair command with a timeout."""
 
@@ -1188,12 +1268,33 @@ if __name__ == "__main__":
             RuntimeError: If D-Bus not available or pairing fails
         """
         normalized_mac = self._normalize_mac(mac)
+        await self._async_get_adapter_paths()
         existing_adapter = await self._async_get_device_adapter_path(normalized_mac)
-        target_adapter = adapter_path or existing_adapter
-        if target_adapter is None:
-            target_adapter = await self._async_select_adapter_for_pairing(
-                normalized_mac
-            )
+
+        busy_error = (
+            "All Bluetooth adapters are currently connected to other devices. "
+            "Disconnect one before pairing another speaker."
+        )
+
+        target_adapter: str | None
+        if adapter_path:
+            if adapter_path not in self._adapter_paths:
+                raise RuntimeError(f"Adapter {adapter_path} is not available")
+            if not self._adapter_is_available(adapter_path, normalized_mac):
+                raise RuntimeError(busy_error)
+            target_adapter = adapter_path
+        else:
+            candidate = existing_adapter
+            if candidate and candidate not in self._adapter_paths:
+                candidate = None
+            if candidate and not self._adapter_is_available(candidate, normalized_mac):
+                candidate = None
+            if candidate is None:
+                candidate = self._find_available_adapter(normalized_mac)
+                if candidate is None:
+                    raise RuntimeError(busy_error)
+            target_adapter = candidate
+
         adapter_label = self._adapter_label(target_adapter)
 
         _LOGGER.info(
@@ -1318,6 +1419,7 @@ if __name__ == "__main__":
         normalized_mac = self._normalize_mac(mac)
 
         await self._async_ensure_adapter_powered()
+        await self._async_get_adapter_paths()
 
         try:
             device, device_props = await self._async_get_device_interfaces(
@@ -1340,11 +1442,37 @@ if __name__ == "__main__":
         else:
             self._device_adapter_map[normalized_mac] = adapter_path
 
-        adapter_display = (
-            f"{self._adapter_label(adapter_path)} ({adapter_path})"
-            if adapter_path
-            else "unknown adapter"
-        )
+        adapter_display = self._format_adapter(adapter_path)
+
+        if adapter_path:
+            self._adapter_connections.setdefault(adapter_path, None)
+            for path, occupant in list(self._adapter_connections.items()):
+                if occupant == normalized_mac and path != adapter_path:
+                    self._adapter_connections[path] = None
+
+            if not self._adapter_is_available(adapter_path, normalized_mac):
+                occupant_mac = self._adapter_connections.get(adapter_path)
+                occupant_display = occupant_mac or "another device"
+                if occupant_mac:
+                    for device in self._connected_devices.values():
+                        device_mac = device.mac
+                        if (
+                            device_mac
+                            and self._normalize_mac(device_mac) == occupant_mac
+                        ):
+                            occupant_display = (
+                                f"{device.name} ({device_mac})"
+                                if device.name
+                                else device_mac
+                            )
+                            break
+
+                error_msg = (
+                    f"{adapter_display} is already connected to {occupant_display}. "
+                    "Disconnect it before connecting another speaker."
+                )
+                _LOGGER.error(error_msg)
+                raise RuntimeError(error_msg)
 
         try:
             paired = await self._async_device_property(device_props, "Paired")
@@ -1400,6 +1528,10 @@ if __name__ == "__main__":
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
 
+        if adapter_path:
+            self._adapter_connections[adapter_path] = normalized_mac
+            self._device_adapter_map[normalized_mac] = adapter_path
+
         device_name = None
         try:
             device_name = await self._async_device_property(device_props, "Name")
@@ -1438,8 +1570,19 @@ if __name__ == "__main__":
             return success
 
         # Disconnect specific device
-        if mac not in self._connected_devices:
+        normalized_mac = self._normalize_mac(mac)
+        device_info = self._connected_devices.get(mac)
+        adapter_path = self._device_adapter_map.get(normalized_mac)
+        if not adapter_path and device_info and device_info.adapter_path:
+            adapter_path = device_info.adapter_path
+
+        if device_info is None:
             _LOGGER.info("Device %s not in connected list", mac)
+            if (
+                adapter_path
+                and self._adapter_connections.get(adapter_path) == normalized_mac
+            ):
+                self._adapter_connections[adapter_path] = None
             return True
 
         _LOGGER.info("Disconnecting device: %s", mac)
@@ -1451,6 +1594,11 @@ if __name__ == "__main__":
         except RuntimeError:
             _LOGGER.info("Device %s unknown to BlueZ, assuming disconnected", mac)
             self._connected_devices.pop(mac, None)
+            if (
+                adapter_path
+                and self._adapter_connections.get(adapter_path) == normalized_mac
+            ):
+                self._adapter_connections[adapter_path] = None
             return True
 
         try:
@@ -1460,6 +1608,11 @@ if __name__ == "__main__":
             _LOGGER.debug("Disconnect call failed for %s: %s", mac, exc)
 
         self._connected_devices.pop(mac, None)
+        if (
+            adapter_path
+            and self._adapter_connections.get(adapter_path) == normalized_mac
+        ):
+            self._adapter_connections[adapter_path] = None
         return True
 
     def get_connected_devices(self) -> dict[str, DeviceInfo]:
