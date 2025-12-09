@@ -108,9 +108,6 @@ class SkellyConnectedSwitch(SwitchEntity):
             # Resume coordinator updates
             self.coordinator.resume_updates()
 
-            # Trigger immediate refresh to get current state
-            await self.coordinator.async_request_refresh()
-
             # Update and persist state
             self._is_on = True
             self.hass.config_entries.async_update_entry(
@@ -121,6 +118,8 @@ class SkellyConnectedSwitch(SwitchEntity):
             _LOGGER.debug(
                 "Connected switch turned on - devices connected and polling resumed"
             )
+
+            await self.coordinator.async_request_refresh(force_immediate=True)
 
         except Exception:
             _LOGGER.exception("Failed to turn on Connected switch")
@@ -149,6 +148,8 @@ class SkellyConnectedSwitch(SwitchEntity):
             _LOGGER.debug(
                 "Connected switch turned off - devices disconnected and polling paused"
             )
+
+            await self.coordinator.async_request_refresh(force_immediate=True)
 
         except Exception:
             _LOGGER.exception("Failed to turn off Connected switch")

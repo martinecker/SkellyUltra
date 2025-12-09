@@ -123,7 +123,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         """
         return self._file_list
 
-    async def async_request_refresh(self) -> None:
+    async def async_request_refresh(self, force_immediate: bool = False) -> None:
         """Request a refresh with debouncing and delay.
 
         Waits 2 seconds before actually refreshing to allow multiple rapid
@@ -141,25 +141,33 @@ class SkellyCoordinator(DataUpdateCoordinator):
             return
 
         self._last_refresh_request = now
-        _LOGGER.debug("Delaying coordinator refresh by 2s to allow changes to settle")
 
-        # Wait 2 seconds to give the device time to process the change
-        # and allow any rapid consecutive changes to complete
-        await asyncio.sleep(2.0)
+        if force_immediate:
+            _LOGGER.debug("Requesting immediate coordinator refresh")
+        else:
+            _LOGGER.debug(
+                "Delaying coordinator refresh by 2s to allow changes to settle"
+            )
 
-        _LOGGER.debug("Requesting coordinator refresh after delay")
+            # Wait 2 seconds to give the device time to process the change
+            # and allow any rapid consecutive changes to complete
+            await asyncio.sleep(2.0)
+
+            _LOGGER.debug("Requesting coordinator refresh after delay")
+
         await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
+        if not self.adapter.client.is_connected:
+            _LOGGER.debug("Skipping coordinator update - device not connected")
+            raise UpdateFailed("Device not connected")
+
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
             _LOGGER.debug("Coordinator updates paused - skipping poll")
-            # Return last known data or empty dict to avoid raising UpdateFailed
-            return self.data if self.data else {}
-
-        if not self.adapter.client.is_connected:
-            _LOGGER.debug("Skipping coordinator update - device not connected")
-            return self.data if self.data else {}
+            raise UpdateFailed(
+                "Device updates paused due to turned off Connected switch"
+            )
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
