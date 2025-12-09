@@ -36,7 +36,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     adapter = SkellyClientAdapter(
         hass, address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
     )
-    coordinator = SkellyCoordinator(hass, adapter)
+    coordinator = SkellyCoordinator(hass, entry, adapter)
 
     # Check if Connected switch is on (defaults to True)
     is_connected = entry.options.get("connected", True)

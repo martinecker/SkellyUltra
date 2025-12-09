@@ -10,13 +10,25 @@ import asyncio
 import logging
 import time
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
 from .const import DOMAIN
+from .helpers import get_device_info
+
+
+class _DeviceLoggerAdapter(logging.LoggerAdapter):
+    """Logger adapter that prefixes messages with the device name."""
+
+    def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        extra = cast(dict[str, Any], self.extra or {})
+        device_name = extra.get("device_name") or "Unknown Skelly"
+        return f"[{device_name}] {msg}", kwargs
+
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,7 +44,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
         Adapter used to communicate with the Skelly device
     """
 
-    def __init__(self, hass: HomeAssistant, adapter: SkellyClientAdapter) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, adapter: SkellyClientAdapter
+    ) -> None:
         """Initialize the coordinator and set polling interval."""
         super().__init__(
             hass,
@@ -42,11 +56,20 @@ class SkellyCoordinator(DataUpdateCoordinator):
         )
         self.adapter = adapter
         self.action_lock = asyncio.Lock()
+        self.device_info = get_device_info(hass, entry)
+        device_name = None
+        if self.device_info:
+            device_name = self.device_info.get("name")
+        if not device_name:
+            device_name = entry.title
+        if not device_name:
+            device_name = "Skelly Ultra"
+        self._logger = _DeviceLoggerAdapter(_LOGGER, {"device_name": device_name})
         self._last_refresh_request = 0.0
         self._updates_paused = False
         self._file_list: list[Any] = []
         self._initial_update_done = False
-        _LOGGER.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+        self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def pause_updates(self) -> None:
         """Pause coordinator polling.
@@ -54,7 +77,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         Sets a flag that causes _async_update_data to skip updates.
         The coordinator timer continues running but updates are skipped.
         """
-        _LOGGER.info("Pausing coordinator updates")
+        self._logger.info("Pausing coordinator updates")
         self._updates_paused = True
 
     def resume_updates(self) -> None:
@@ -62,7 +85,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         Clears the pause flag to allow updates to proceed normally.
         """
-        _LOGGER.info("Resuming coordinator updates")
+        self._logger.info("Resuming coordinator updates")
         self._updates_paused = False
 
     async def async_refresh_file_list(self) -> None:
@@ -76,14 +99,14 @@ class SkellyCoordinator(DataUpdateCoordinator):
         """
         # Check if we have a connection before attempting to fetch
         if not self.adapter.client.is_connected:
-            _LOGGER.debug("Skipping file list refresh - device not connected")
+            self._logger.debug("Skipping file list refresh - device not connected")
             return
 
         async with self.action_lock:
-            _LOGGER.debug("Acquiring lock for file list refresh")
+            self._logger.debug("Acquiring lock for file list refresh")
             try:
                 self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
-                _LOGGER.debug("Loaded %d files from device", len(self._file_list))
+                self._logger.debug("Loaded %d files from device", len(self._file_list))
 
                 # Also fetch file order and capacity to get updated device state
                 file_order = await self.adapter.client.get_file_order(timeout=5.0)
@@ -104,12 +127,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     }
                     self.async_set_updated_data(updated_data)
             except TimeoutError:
-                _LOGGER.warning("Timeout loading file list from device")
+                self._logger.warning("Timeout loading file list from device")
                 self._file_list = []
                 if self.data:
                     self.async_set_updated_data({**self.data, "file_count_received": 0})
             except Exception:
-                _LOGGER.exception("Failed to load file list from device")
+                self._logger.exception("Failed to load file list from device")
                 self._file_list = []
                 if self.data:
                     self.async_set_updated_data({**self.data, "file_count_received": 0})
@@ -134,7 +157,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         # Debounce: ignore requests within 3 seconds of last request
         if time_since_last < 3.0:
-            _LOGGER.debug(
+            self._logger.debug(
                 "Ignoring refresh request - last request was %.3fs ago (debounce: 3.0s)",
                 time_since_last,
             )
@@ -143,9 +166,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._last_refresh_request = now
 
         if force_immediate:
-            _LOGGER.debug("Requesting immediate coordinator refresh")
+            self._logger.debug("Requesting immediate coordinator refresh")
         else:
-            _LOGGER.debug(
+            self._logger.debug(
                 "Delaying coordinator refresh by 2s to allow changes to settle"
             )
 
@@ -153,25 +176,25 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # and allow any rapid consecutive changes to complete
             await asyncio.sleep(2.0)
 
-            _LOGGER.debug("Requesting coordinator refresh after delay")
+            self._logger.debug("Requesting coordinator refresh after delay")
 
         await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
         if not self.adapter.client.is_connected:
-            _LOGGER.debug("Skipping coordinator update - device not connected")
+            self._logger.debug("Skipping coordinator update - device not connected")
             raise UpdateFailed("Device not connected")
 
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
-            _LOGGER.debug("Coordinator updates paused - skipping poll")
+            self._logger.debug("Coordinator updates paused - skipping poll")
             raise UpdateFailed(
                 "Device updates paused due to turned off Connected switch"
             )
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
-            _LOGGER.debug("Coordinator polling Skelly device for updates")
+            self._logger.debug("Coordinator polling Skelly device for updates")
 
             try:
                 # Query device state with staggered delays to avoid overwhelming the device.
@@ -180,7 +203,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 # Use longer timeout for initial update to allow file list refresh to complete
                 timeout_seconds = 30.0 if not self._initial_update_done else 15.0
                 if not self._initial_update_done:
-                    _LOGGER.debug(
+                    self._logger.debug(
                         "Initial update - using extended timeout of %s seconds",
                         timeout_seconds,
                     )
@@ -219,7 +242,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                             timeout=timeout_seconds
                         )
                 except TimeoutError as ex:
-                    _LOGGER.warning(
+                    self._logger.warning(
                         "Coordinator update timed out after %s seconds", timeout_seconds
                     )
                     raise UpdateFailed(
@@ -245,7 +268,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 # Check REST server status if we think live mode is connected
                 expected_mac = self.adapter.client.live_mode_client_address
                 if expected_mac:
-                    _LOGGER.debug(
+                    self._logger.debug(
                         "Coordinator checking REST server for live mode device: %s",
                         expected_mac,
                     )
@@ -259,7 +282,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         bluetooth_info = rest_status.get("bluetooth", {})
                         connected_devices = bluetooth_info.get("devices", [])
 
-                        _LOGGER.debug(
+                        self._logger.debug(
                             "REST server reports %d connected devices: %s",
                             len(connected_devices),
                             connected_devices,
@@ -274,21 +297,21 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         )
 
                         if not mac_still_connected:
-                            _LOGGER.warning(
+                            self._logger.warning(
                                 "Live mode device %s is no longer connected to REST server, cleaning up",
                                 expected_mac,
                             )
                             # Disconnect on our side to sync state
                             await self.adapter.disconnect_live_mode()
                         else:
-                            _LOGGER.debug(
+                            self._logger.debug(
                                 "Live mode device %s is still connected to REST server",
                                 expected_mac,
                             )
 
                     except Exception as ex:
                         # REST server may be down or unreachable
-                        _LOGGER.warning(
+                        self._logger.warning(
                             "Failed to check REST server status for live mode device %s: %s. Assuming disconnected",
                             expected_mac,
                             ex,
@@ -316,13 +339,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         mtu_chunk_size = (
                             FileTransferManager.calculate_chunk_size_from_mtu(mtu)
                         )
-                        _LOGGER.debug(
+                        self._logger.debug(
                             "Calculated MTU-based chunk size: %d bytes (MTU: %d)",
                             mtu_chunk_size,
                             mtu,
                         )
                 except Exception:
-                    _LOGGER.debug(
+                    self._logger.debug(
                         "Could not calculate MTU-based chunk size, using default: %d bytes",
                         mtu_chunk_size,
                     )
@@ -337,7 +360,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
                 # Check if device is in show mode (show_mode=1) on initial update
                 if show_mode == 1 and self.data is None:
-                    _LOGGER.error(
+                    self._logger.error(
                         "Device is in SHOW MODE - This integration requires the device to be in normal mode. "
                         "To switch out of show mode, hold the button on the Skelly device for about 10 seconds until it beeps."
                     )
@@ -395,16 +418,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         },
                     ],
                 }
-                _LOGGER.debug("Coordinator fetched data: %s", data)
+                self._logger.debug("Coordinator fetched data: %s", data)
 
                 # On initial update, also fetch the file list
                 if not self._initial_update_done:
-                    _LOGGER.debug("Initial update - refreshing file list")
+                    self._logger.debug("Initial update - refreshing file list")
                     self._initial_update_done = True
                     # Schedule file list refresh as background task to not block coordinator update
                     self.hass.async_create_task(self.async_refresh_file_list())
             except Exception:
-                _LOGGER.exception("Coordinator update failed")
+                self._logger.exception("Coordinator update failed")
                 raise UpdateFailed("Failed to update Skelly data") from None
             else:
                 return data
