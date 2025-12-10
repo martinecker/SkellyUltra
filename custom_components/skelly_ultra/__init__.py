@@ -8,6 +8,7 @@ from __future__ import annotations
 import logging
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant
 
 from .client_adapter import SkellyClientAdapter
@@ -16,6 +17,16 @@ from .coordinator import SkellyCoordinator
 from .services import register_services, unregister_services
 
 _LOGGER = logging.getLogger(__name__)
+
+PLATFORMS: list[Platform] = [
+    Platform.SENSOR,
+    Platform.SELECT,
+    Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.IMAGE,
+    Platform.SWITCH,
+    Platform.MEDIA_PLAYER,
+]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -95,18 +106,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if len(hass.data[DOMAIN]) == 1:
         register_services(hass)
 
-    # forward async_setup_entry calls to other platforms to create entities
-    await hass.config_entries.async_forward_entry_setups(
-        entry,
-        ["sensor", "select", "light", "number", "image", "switch", "media_player"],
-    )
+    # Forward setup to entity platforms
+    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Unload a config entry and disconnect the adapter."""
-    data = hass.data[DOMAIN].pop(entry.entry_id)
+    if entry.entry_id not in hass.data.get(DOMAIN, {}):
+        return True
+
+    data = hass.data[DOMAIN][entry.entry_id]
+
+    unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    if not unload_ok:
+        return False
+
+    hass.data[DOMAIN].pop(entry.entry_id)
     # Ensure any live-mode classic BT client is disconnected first
     try:
         await data["adapter"].disconnect_live_mode()
