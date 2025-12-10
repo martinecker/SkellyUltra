@@ -174,7 +174,7 @@ class BluetoothManager:
         self._adapter_interfaces: dict[str, Any] = {}
         self._adapter_props: dict[str, Any] = {}
         self._adapter_connections: dict[str, str | None] = {}
-        self._device_adapter_map: dict[str, str] = {}
+        self._device_adapter_map: dict[str, list[str]] = {}
         self._adapter_rr_index = 0
         self._active_pairing_agent: PairingAgent | None = None
 
@@ -189,6 +189,53 @@ class BluetoothManager:
         """Human friendly adapter name for logs."""
 
         return adapter_path.rsplit("/", maxsplit=1)[-1]
+
+    def _remember_device_adapter(
+        self, normalized_mac: str, adapter_path: str | None
+    ) -> None:
+        """Track that a device is paired on the provided adapter."""
+
+        if not adapter_path:
+            return
+        adapters = self._device_adapter_map.setdefault(normalized_mac, [])
+        if adapter_path not in adapters:
+            adapters.append(adapter_path)
+
+    def _forget_device_adapter(
+        self, normalized_mac: str, adapter_path: str | None = None
+    ) -> None:
+        """Remove adapter mapping(s) for a device."""
+
+        if adapter_path is None:
+            self._device_adapter_map.pop(normalized_mac, None)
+            return
+
+        adapters = self._device_adapter_map.get(normalized_mac)
+        if not adapters:
+            return
+
+        if adapter_path in adapters:
+            adapters.remove(adapter_path)
+
+        if not adapters:
+            self._device_adapter_map.pop(normalized_mac, None)
+
+    def _known_device_adapters(self, normalized_mac: str) -> list[str]:
+        """Return adapters currently cached for the device."""
+
+        return list(self._device_adapter_map.get(normalized_mac, []))
+
+    def _adapters_reserved_for_other_devices(
+        self, normalized_mac: str | None = None
+    ) -> set[str]:
+        """Return adapters assigned to devices other than normalized_mac."""
+
+        excluded: set[str] = set()
+        for mapped_mac, adapters in self._device_adapter_map.items():
+            if normalized_mac is not None and mapped_mac == normalized_mac:
+                continue
+            excluded.update(adapters)
+        return excluded
 
     def _adapter_is_available(
         self, adapter_path: str, normalized_mac: str | None = None
@@ -206,9 +253,12 @@ class BluetoothManager:
         if not self._adapter_paths:
             return None
 
+        reserved = self._adapters_reserved_for_other_devices(normalized_mac)
         for offset in range(len(self._adapter_paths)):
             index = (self._adapter_rr_index + offset) % len(self._adapter_paths)
             adapter_path = self._adapter_paths[index]
+            if adapter_path in reserved:
+                continue
             if self._adapter_is_available(adapter_path, normalized_mac):
                 self._adapter_rr_index = (index + 1) % len(self._adapter_paths)
                 return adapter_path
@@ -296,16 +346,38 @@ class BluetoothManager:
                     self._variant_value(adapter_variant) if adapter_variant else None
                 )
                 if adapter_path:
-                    self._device_adapter_map[normalized_mac] = adapter_path
+                    self._remember_device_adapter(normalized_mac, adapter_path)
                 return path
         return None
+
+    async def _async_get_device_path_for_adapter(
+        self, normalized_mac: str, adapter_path: str
+    ) -> str | None:
+        """Return the device path for a specific adapter if it exists."""
+
+        expected_path = self._device_path_for_adapter(adapter_path, normalized_mac)
+        obj_manager = await self._async_get_object_manager()
+        objects = await obj_manager.call_get_managed_objects()
+        interfaces = objects.get(expected_path)
+        if not interfaces:
+            return None
+        device_props = interfaces.get("org.bluez.Device1")
+        if not device_props:
+            return None
+        address_variant = device_props.get("Address")
+        address = self._variant_value(address_variant) if address_variant else None
+        if not address or address.upper() != normalized_mac:
+            return None
+        self._remember_device_adapter(normalized_mac, adapter_path)
+        return expected_path
 
     async def _async_get_device_adapter_path(self, mac: str) -> str | None:
         """Return adapter path associated with device if known."""
 
         normalized_mac = self._normalize_mac(mac)
-        if normalized_mac in self._device_adapter_map:
-            return self._device_adapter_map[normalized_mac]
+        adapters = self._known_device_adapters(normalized_mac)
+        if adapters:
+            return adapters[0]
 
         device_path = await self._async_find_device_path(normalized_mac)
         if not device_path:
@@ -318,7 +390,7 @@ class BluetoothManager:
         device_props = self._proxy_interface(proxy, "org.freedesktop.DBus.Properties")
         adapter_variant = await device_props.call_get("org.bluez.Device1", "Adapter")
         adapter_path = self._variant_value(adapter_variant)
-        self._device_adapter_map[normalized_mac] = adapter_path
+        self._remember_device_adapter(normalized_mac, adapter_path)
         return adapter_path
 
     async def _async_select_adapter_for_pairing(self, mac: str | None = None) -> str:
@@ -345,9 +417,10 @@ class BluetoothManager:
 
         assignments: dict[str, int] = dict.fromkeys(available_adapters, 0)
 
-        for mapped_adapter in self._device_adapter_map.values():
-            if mapped_adapter in assignments:
-                assignments[mapped_adapter] += 1
+        for mapped_adapters in self._device_adapter_map.values():
+            for mapped_adapter in mapped_adapters:
+                if mapped_adapter in assignments:
+                    assignments[mapped_adapter] += 1
 
         min_count = min(assignments.values())
         candidates = [path for path, count in assignments.items() if count == min_count]
@@ -359,7 +432,7 @@ class BluetoothManager:
         adapter_path = candidates[index]
         self._adapter_rr_index = (self._adapter_rr_index + 1) % len(self._adapter_paths)
         if normalized_mac:
-            self._device_adapter_map[normalized_mac] = adapter_path
+            self._remember_device_adapter(normalized_mac, adapter_path)
         return adapter_path
 
     @staticmethod
@@ -480,12 +553,19 @@ class BluetoothManager:
         self,
         mac: str,
         *,
+        adapter_path: str | None = None,
         ensure_discovered: bool = False,
         discovery_timeout: float = 8.0,
     ) -> tuple[Any, Any]:
         """Return Device1 and property interfaces for a MAC address."""
         normalized_mac = self._normalize_mac(mac)
-        device_path = await self._async_find_device_path(normalized_mac)
+        device_path: str | None = None
+        if adapter_path:
+            device_path = await self._async_get_device_path_for_adapter(
+                normalized_mac, adapter_path
+            )
+        if device_path is None:
+            device_path = await self._async_find_device_path(normalized_mac)
         bus = await self._async_get_bus()
         last_exc: Exception | None = None
         if device_path:
@@ -513,6 +593,15 @@ class BluetoothManager:
                     f"Device {normalized_mac} is unknown to BlueZ after discovery."
                 )
             introspection = await bus.introspect("org.bluez", device_path)
+
+        if (
+            adapter_path
+            and device_path
+            and not device_path.startswith(f"{adapter_path}/")
+        ):
+            raise RuntimeError(
+                f"Device {normalized_mac} is not paired on adapter {adapter_path}"
+            )
 
         proxy = bus.get_proxy_object("org.bluez", device_path, introspection)
         device = self._proxy_interface(proxy, "org.bluez.Device1")
@@ -554,6 +643,125 @@ class BluetoothManager:
         """Read a Device1 property and unwrap the Variant."""
         value = await device_props.call_get("org.bluez.Device1", property_name)
         return self._variant_value(value)
+
+    async def _async_record_connection(
+        self,
+        normalized_mac: str,
+        mac: str,
+        adapter_path: str,
+        device_props: Any,
+    ) -> str | None:
+        """Track a successful connection and populate metadata."""
+
+        for path, occupant in list(self._adapter_connections.items()):
+            if path != adapter_path and occupant == normalized_mac:
+                self._adapter_connections[path] = None
+
+        self._adapter_connections[adapter_path] = normalized_mac
+        self._remember_device_adapter(normalized_mac, adapter_path)
+
+        device_name: str | None = None
+        try:
+            device_name = await self._async_device_property(device_props, "Name")
+        except DBusError as exc:
+            _LOGGER.debug("Failed to read device name for %s: %s", mac, exc)
+
+        self._connected_devices[mac] = DeviceInfo(
+            name=device_name, mac=mac, adapter_path=adapter_path
+        )
+        return device_name
+
+    async def _async_confirm_existing_connection(
+        self,
+        normalized_mac: str,
+        mac: str,
+    ) -> bool:
+        """Return True if the device is already connected via a known adapter."""
+
+        existing_connection = next(
+            (
+                path
+                for path, occupant in self._adapter_connections.items()
+                if occupant == normalized_mac
+            ),
+            None,
+        )
+        if not existing_connection:
+            return False
+
+        adapter_display = self._format_adapter(existing_connection)
+        try:
+            device, device_props = await self._async_get_device_interfaces(
+                normalized_mac,
+                adapter_path=existing_connection,
+                ensure_discovered=False,
+            )
+        except RuntimeError as exc:
+            _LOGGER.debug(
+                "Existing connection on %s invalid for %s: %s",
+                adapter_display,
+                mac,
+                exc,
+            )
+            self._adapter_connections[existing_connection] = None
+            return False
+
+        try:
+            already_connected = await self._async_device_property(
+                device_props, "Connected"
+            )
+        except DBusError as exc:
+            _LOGGER.debug("Failed to read Connected state for %s: %s", mac, exc)
+            already_connected = False
+
+        if not already_connected:
+            self._adapter_connections[existing_connection] = None
+            return False
+
+        device_name = await self._async_record_connection(
+            normalized_mac, mac, existing_connection, device_props
+        )
+        _LOGGER.info(
+            "Device %s (%s) already connected via %s",
+            device_name or "Unknown",
+            mac,
+            adapter_display,
+        )
+        return True
+
+    async def _async_get_paired_adapter_interfaces(
+        self, normalized_mac: str
+    ) -> tuple[list[str], dict[str, tuple[Any, Any]]]:
+        """Return adapters and cached interfaces for paired-but-idle adapters."""
+
+        ordered: list[str] = []
+        interfaces: dict[str, tuple[Any, Any]] = {}
+        for adapter_path in self._known_device_adapters(normalized_mac):
+            if adapter_path not in self._adapter_paths:
+                self._forget_device_adapter(normalized_mac, adapter_path)
+                continue
+            if self._adapter_connections.get(adapter_path):
+                continue
+            try:
+                interface_pair = await self._async_get_device_interfaces(
+                    normalized_mac,
+                    adapter_path=adapter_path,
+                    ensure_discovered=False,
+                )
+            except RuntimeError as exc:
+                adapter_label = self._adapter_label(adapter_path)
+                _LOGGER.debug(
+                    "Device %s not available on %s (%s): %s",
+                    normalized_mac,
+                    adapter_label,
+                    adapter_path,
+                    exc,
+                )
+                continue
+            ordered.append(adapter_path)
+            interfaces[adapter_path] = interface_pair
+
+        return ordered, interfaces
 
     async def _scan_and_update_cache(
         self, scan_duration: float = 15.0, stop_scan: bool = True
@@ -849,7 +1057,9 @@ if __name__ == "__main__":
 
         try:
             _, device_props = await self._async_get_device_interfaces(
-                normalized_mac, ensure_discovered=False
+                normalized_mac,
+                adapter_path=adapter_path,
+                ensure_discovered=False,
             )
         except RuntimeError:
             device_props = None
@@ -894,7 +1104,7 @@ if __name__ == "__main__":
         )
         success = await self._pair_with_sudo(normalized_mac, pin, adapter_path, timeout)
         if success:
-            self._device_adapter_map[normalized_mac] = adapter_path
+            self._remember_device_adapter(normalized_mac, adapter_path)
         return success
 
     async def _async_connect_pairing_bus(self) -> MessageBus:
@@ -1122,7 +1332,7 @@ if __name__ == "__main__":
                 adapter_label,
                 adapter_path,
             )
-        self._device_adapter_map[normalized_mac] = adapter_path
+        self._remember_device_adapter(normalized_mac, adapter_path)
         return True
 
     async def _async_unpair_device(
@@ -1133,26 +1343,26 @@ if __name__ == "__main__":
         normalized_mac = self._normalize_mac(mac)
         device_path = await self._async_find_device_path(normalized_mac)
         if device_path is None:
-            self._device_adapter_map.pop(normalized_mac, None)
+            self._forget_device_adapter(normalized_mac)
             return
 
-        target_adapter = adapter_path or self._device_adapter_map.get(normalized_mac)
+        target_adapter = adapter_path
         if target_adapter is None:
-            target_adapter = await self._async_get_device_adapter_path(normalized_mac)
-
+            adapters = self._known_device_adapters(normalized_mac)
+            target_adapter = adapters[0] if adapters else None
         if target_adapter is None:
-            self._device_adapter_map.pop(normalized_mac, None)
+            self._forget_device_adapter(normalized_mac)
             return
 
         try:
             adapter, _ = await self._async_get_adapter(target_adapter)
         except RuntimeError:
-            self._device_adapter_map.pop(normalized_mac, None)
+            self._forget_device_adapter(normalized_mac, target_adapter)
         else:
             with contextlib.suppress(DBusError):
                 await adapter.call_remove_device(device_path)
 
-        self._device_adapter_map.pop(normalized_mac, None)
+        self._forget_device_adapter(normalized_mac, target_adapter)
 
         device_info = self._connected_devices.pop(mac, None)
         connected_adapter = device_info.adapter_path if device_info else None
@@ -1269,7 +1479,17 @@ if __name__ == "__main__":
         """
         normalized_mac = self._normalize_mac(mac)
         await self._async_get_adapter_paths()
-        existing_adapter = await self._async_get_device_adapter_path(normalized_mac)
+
+        known_adapters = self._known_device_adapters(normalized_mac)
+        if not known_adapters:
+            adapter_from_bluez = await self._async_get_device_adapter_path(
+                normalized_mac
+            )
+            if adapter_from_bluez:
+                known_adapters = self._known_device_adapters(normalized_mac)
+
+        existing_adapter = known_adapters[0] if known_adapters else None
+        reserved_adapters = self._adapters_reserved_for_other_devices(normalized_mac)
 
         busy_error = (
             "All Bluetooth adapters are currently connected to other devices. "
@@ -1280,15 +1500,27 @@ if __name__ == "__main__":
         if adapter_path:
             if adapter_path not in self._adapter_paths:
                 raise RuntimeError(f"Adapter {adapter_path} is not available")
-            if not self._adapter_is_available(adapter_path, normalized_mac):
+            occupant = self._adapter_connections.get(adapter_path)
+            if occupant and occupant != normalized_mac:
                 raise RuntimeError(busy_error)
+            if adapter_path in reserved_adapters:
+                adapter_label = self._adapter_label(adapter_path)
+                raise RuntimeError(
+                    f"{adapter_label} ({adapter_path}) is reserved for another speaker. "
+                    "Disconnect and unpair it before pairing a new device."
+                )
             target_adapter = adapter_path
         else:
-            candidate = existing_adapter
-            if candidate and candidate not in self._adapter_paths:
-                candidate = None
-            if candidate and not self._adapter_is_available(candidate, normalized_mac):
-                candidate = None
+            candidate: str | None = None
+            for adapter in known_adapters:
+                if adapter not in self._adapter_paths:
+                    self._forget_device_adapter(normalized_mac, adapter)
+                    continue
+                if self._adapter_connections.get(adapter) is not None:
+                    continue
+                candidate = adapter
+                break
+
             if candidate is None:
                 candidate = self._find_available_adapter(normalized_mac)
                 if candidate is None:
@@ -1296,6 +1528,17 @@ if __name__ == "__main__":
             target_adapter = candidate
 
         adapter_label = self._adapter_label(target_adapter)
+        if existing_adapter and existing_adapter != target_adapter:
+            old_label = self._adapter_label(existing_adapter)
+            _LOGGER.info(
+                "Device %s currently mapped to %s (%s) - moving to %s (%s)",
+                normalized_mac,
+                old_label,
+                existing_adapter,
+                adapter_label,
+                target_adapter,
+            )
+            await self._async_unpair_device(normalized_mac, existing_adapter)
 
         _LOGGER.info(
             "Starting pairing workflow for %s using %s (%s)",
@@ -1357,7 +1600,7 @@ if __name__ == "__main__":
             _LOGGER.exception("D-Bus pairing failed")
             raise RuntimeError("D-Bus pairing failed") from exc
         else:
-            self._device_adapter_map[normalized_mac] = target_adapter
+            self._remember_device_adapter(normalized_mac, target_adapter)
             return True
         finally:
             if agent_manager is not None:
@@ -1420,59 +1663,48 @@ if __name__ == "__main__":
 
         await self._async_ensure_adapter_powered()
         await self._async_get_adapter_paths()
+        if not self._known_device_adapters(normalized_mac):
+            await self._async_get_device_adapter_path(normalized_mac)
 
-        try:
-            device, device_props = await self._async_get_device_interfaces(
-                mac, ensure_discovered=False
-            )
-        except RuntimeError:
-            device, device_props = await self._async_get_device_interfaces(
-                mac, ensure_discovered=True, discovery_timeout=10.0
-            )
+        if await self._async_confirm_existing_connection(normalized_mac, mac):
+            return True
 
-        adapter_path = None
-        try:
-            adapter_variant = await device_props.call_get(
-                "org.bluez.Device1", "Adapter"
-            )
-            adapter_path = self._variant_value(adapter_variant)
-        except DBusError as exc:
-            _LOGGER.debug("Failed to read adapter path for %s: %s", mac, exc)
-            adapter_path = self._device_adapter_map.get(normalized_mac)
-        else:
-            self._device_adapter_map[normalized_mac] = adapter_path
+        (
+            ordered_candidates,
+            candidate_interfaces,
+        ) = await self._async_get_paired_adapter_interfaces(normalized_mac)
 
+        if not ordered_candidates:
+            error_msg = (
+                f"Device {mac} is NOT paired. You must manually pair it first "
+                f"(typically via bluetoothctl -> pair {mac} -> enter PIN: {pin} when prompted)"
+            )
+            _LOGGER.error(error_msg)
+            raise RuntimeError(error_msg)
+
+        adapter_path = ordered_candidates[0]
+        device, device_props = candidate_interfaces[adapter_path]
         adapter_display = self._format_adapter(adapter_path)
 
-        if adapter_path:
-            self._adapter_connections.setdefault(adapter_path, None)
-            for path, occupant in list(self._adapter_connections.items()):
-                if occupant == normalized_mac and path != adapter_path:
-                    self._adapter_connections[path] = None
+        occupant_mac = self._adapter_connections.get(adapter_path)
+        if occupant_mac and occupant_mac != normalized_mac:
+            occupant_display: str = occupant_mac
+            for device_info in self._connected_devices.values():
+                device_mac = device_info.mac
+                if device_mac and self._normalize_mac(device_mac) == occupant_mac:
+                    occupant_display = (
+                        f"{device_info.name} ({device_mac})"
+                        if device_info.name
+                        else device_mac
+                    )
+                    break
 
-            if not self._adapter_is_available(adapter_path, normalized_mac):
-                occupant_mac = self._adapter_connections.get(adapter_path)
-                occupant_display = occupant_mac or "another device"
-                if occupant_mac:
-                    for device in self._connected_devices.values():
-                        device_mac = device.mac
-                        if (
-                            device_mac
-                            and self._normalize_mac(device_mac) == occupant_mac
-                        ):
-                            occupant_display = (
-                                f"{device.name} ({device_mac})"
-                                if device.name
-                                else device_mac
-                            )
-                            break
-
-                error_msg = (
-                    f"{adapter_display} is already connected to {occupant_display}. "
-                    "Disconnect it before connecting another speaker."
-                )
-                _LOGGER.error(error_msg)
-                raise RuntimeError(error_msg)
+            error_msg = (
+                f"{adapter_display} is already connected to {occupant_display}. "
+                "Disconnect it before connecting another speaker."
+            )
+            _LOGGER.error(error_msg)
+            raise RuntimeError(error_msg)
 
         try:
             paired = await self._async_device_property(device_props, "Paired")
@@ -1488,6 +1720,31 @@ if __name__ == "__main__":
             )
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
+
+        already_connected = False
+        try:
+            already_connected = await self._async_device_property(
+                device_props, "Connected"
+            )
+        except DBusError as exc:
+            _LOGGER.debug("Failed to read Connected state for %s: %s", mac, exc)
+
+        if already_connected:
+            has_record = (
+                self._adapter_connections.get(adapter_path) == normalized_mac
+                or mac in self._connected_devices
+            )
+            if has_record:
+                device_name = await self._async_record_connection(
+                    normalized_mac, mac, adapter_path, device_props
+                )
+                _LOGGER.info(
+                    "Device %s (%s) already connected via %s",
+                    device_name or "Unknown",
+                    mac,
+                    adapter_display,
+                )
+                return True
 
         try:
             trusted = await self._async_device_property(device_props, "Trusted")
@@ -1528,17 +1785,8 @@ if __name__ == "__main__":
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
 
-        if adapter_path:
-            self._adapter_connections[adapter_path] = normalized_mac
-            self._device_adapter_map[normalized_mac] = adapter_path
-
-        device_name = None
-        try:
-            device_name = await self._async_device_property(device_props, "Name")
-        except DBusError as exc:
-            _LOGGER.debug("Failed to read device name for %s: %s", mac, exc)
-        self._connected_devices[mac] = DeviceInfo(
-            name=device_name, mac=mac, adapter_path=adapter_path
+        device_name = await self._async_record_connection(
+            normalized_mac, mac, adapter_path, device_props
         )
         _LOGGER.info(
             "Successfully connected to %s (%s) via %s",
@@ -1572,7 +1820,8 @@ if __name__ == "__main__":
         # Disconnect specific device
         normalized_mac = self._normalize_mac(mac)
         device_info = self._connected_devices.get(mac)
-        adapter_path = self._device_adapter_map.get(normalized_mac)
+        adapters = self._known_device_adapters(normalized_mac)
+        adapter_path = adapters[0] if adapters else None
         if not adapter_path and device_info and device_info.adapter_path:
             adapter_path = device_info.adapter_path
 
@@ -1675,4 +1924,5 @@ if __name__ == "__main__":
 
         if not mac:
             return None
-        return self._device_adapter_map.get(self._normalize_mac(mac))
+        adapters = self._known_device_adapters(self._normalize_mac(mac))
+        return adapters[0] if adapters else None
