@@ -29,26 +29,18 @@ class AudioPlayer:
     async def play(
         self,
         file_path: str,
-        target: str | None = None,
         targets: list[str] | None = None,
     ) -> bool:
         """Play an audio file using pw-play.
 
         Args:
             file_path: Path to the .wav file to play
-            target: Optional single target device (MAC or device name)
-            targets: Optional list of target devices to play on
+            targets: List of target devices to play on
 
         Returns:
             True if playback started successfully on at least one target, False otherwise
         """
-        target_list = []
-        if targets:
-            target_list = targets
-        elif target:
-            target_list = [target]
-        else:
-            target_list = [None]
+        target_list = list(targets) if targets else [None]
 
         path = Path(file_path)
         if not path.exists():

@@ -90,6 +90,66 @@ class SkellyUltraServer:
             "adapter_path": device.adapter_path if device else None,
         }
 
+    def _validate_connected_targets(self, targets: list[str] | None) -> str | None:
+        """Return an error message if any requested targets are disconnected."""
+
+        if not targets:
+            return None
+
+        connected_devices = self.bt_manager.get_connected_devices()
+        connected_macs = {
+            dev_mac.upper()
+            for dev_mac in (
+                device.mac for device in connected_devices.values() if device.mac
+            )
+        }
+
+        missing: list[str] = []
+        seen: set[str] = set()
+        for mac in targets:
+            if not mac:
+                continue
+            normalized = mac.upper()
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            if normalized not in connected_macs:
+                missing.append(normalized)
+
+        if missing:
+            missing.sort()
+            return "The following devices are not connected: " + ", ".join(missing)
+
+        return None
+
+    def _resolve_play_targets(
+        self,
+        *,
+        target: str | None,
+        targets: list[str] | None,
+        play_all: bool,
+    ) -> tuple[list[str] | None, str | None]:
+        """Normalize requested playback targets and ensure they are connected."""
+
+        resolved_targets: list[str] | None
+        if play_all:
+            connected = self.bt_manager.get_connected_devices()
+            resolved_targets = [dev.mac for dev in connected.values() if dev.mac]
+            _LOGGER.info("Playing on all %d connected devices", len(resolved_targets))
+        elif targets:
+            resolved_targets = list(targets)
+            _LOGGER.info("Playing on %d specified targets", len(resolved_targets))
+        elif target:
+            resolved_targets = [target]
+        else:
+            resolved_targets = None
+
+        validation_error = self._validate_connected_targets(resolved_targets)
+        if validation_error:
+            return resolved_targets, validation_error
+
+        return resolved_targets, None
+
     def _setup_routes(self) -> None:
         """Set up API routes."""
         # Classic Bluetooth A2DP speaker endpoints
@@ -597,18 +657,17 @@ class SkellyUltraServer:
             _LOGGER.info("Saved uploaded file to: %s", file_path)
 
             # Determine target(s)
-            if play_all:
-                # Play on all connected devices
-                connected = self.bt_manager.get_connected_devices()
-                targets = [dev.mac for dev in connected.values()]
-                _LOGGER.info("Playing on all %d connected devices", len(targets))
-            elif targets:
-                # Multiple specific targets already set
-                _LOGGER.info("Playing on %d specified targets", len(targets))
+            final_targets, validation_error = self._resolve_play_targets(
+                target=target, targets=targets, play_all=play_all
+            )
+            if validation_error:
+                response_data = {"success": False, "error": validation_error}
+                self._log_response("play", response_data)
+                return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received play request for uploaded file: %s", filename)
             success = await self.audio_player.play(
-                str(file_path), target=target, targets=targets
+                str(file_path), targets=final_targets
             )
 
             response_data = {
@@ -664,15 +723,10 @@ class SkellyUltraServer:
             target = None
             targets = None
 
-            if data.get("all"):
-                # Play on all connected devices
-                connected = self.bt_manager.get_connected_devices()
-                targets = [dev.mac for dev in connected.values()]
-                _LOGGER.info("Playing on all %d connected devices", len(targets))
-            elif data.get("macs"):
+            play_all = bool(data.get("all"))
+            if not play_all and data.get("macs"):
                 # Multiple specific targets
                 targets = data["macs"]
-                _LOGGER.info("Playing on %d specified targets", len(targets))
             elif data.get("device_name"):
                 # Find device by name
                 device = self.bt_manager.get_device_by_name(data["device_name"])
@@ -692,10 +746,16 @@ class SkellyUltraServer:
                 # Single target by MAC
                 target = data["mac"]
 
-            _LOGGER.info("Received play_filename request for: %s", file_path)
-            success = await self.audio_player.play(
-                file_path, target=target, targets=targets
+            final_targets, validation_error = self._resolve_play_targets(
+                target=target, targets=targets, play_all=play_all
             )
+            if validation_error:
+                response_data = {"success": False, "error": validation_error}
+                self._log_response("play_filename", response_data)
+                return web.json_response(response_data, status=400)
+
+            _LOGGER.info("Received play_filename request for: %s", file_path)
+            success = await self.audio_player.play(file_path, targets=final_targets)
 
             response_data = {
                 "success": success,
