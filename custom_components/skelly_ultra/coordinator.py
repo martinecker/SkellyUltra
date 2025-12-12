@@ -55,6 +55,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=30),
         )
         self.adapter = adapter
+        self._entry = entry
         self.action_lock = asyncio.Lock()
         self.device_info = get_device_info(hass, entry)
         device_name = None
@@ -70,6 +71,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._updates_paused = False
         self._file_list: list[Any] = []
         self._initial_update_done = False
+        self._cached_pin_option: str | None = self._entry.options.get("live_mode_pin")
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def notify_done_initializing(self) -> None:
@@ -367,6 +369,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 pin_code = (
                     getattr(device_params, "pin_code", None) if device_params else None
                 )
+                if pin_code is not None:
+                    pin_code = str(pin_code)
                 show_mode = (
                     getattr(device_params, "show_mode", None) if device_params else None
                 )
@@ -433,6 +437,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 }
                 self._logger.debug("Coordinator fetched data: %s", data)
 
+                self.adapter.cache_live_mode_pin(pin_code)
+                self._maybe_update_stored_pin(pin_code)
+
                 # On initial update, also fetch the file list
                 if not self._initial_update_done:
                     self._logger.debug("Initial update - refreshing file list")
@@ -444,3 +451,15 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed("Failed to update Skelly data") from None
             else:
                 return data
+
+    def _maybe_update_stored_pin(self, pin_code: str | None) -> None:
+        """Persist the current live-mode PIN when it changes."""
+        if not pin_code:
+            return
+
+        if self._cached_pin_option == pin_code:
+            return
+
+        self._cached_pin_option = pin_code
+        options = {**self._entry.options, "live_mode_pin": pin_code}
+        self.hass.config_entries.async_update_entry(self._entry, options=options)

@@ -209,7 +209,9 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
         await super().async_added_to_hass()
         if self.adapter:
             self.adapter.register_live_mode_callback(self._handle_live_mode_change)
-            self.adapter.set_live_mode_preference(self._desired_live_mode_on)
+            self.adapter.set_live_mode_preference(
+                self._desired_live_mode_on, bt_pin=self._get_known_pin()
+            )
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
@@ -225,13 +227,18 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
             return
 
         try:
-            bt_pin = "1234"
-            if self.coordinator.data:
-                bt_pin = self.coordinator.data.get("pin_code", "1234")
+            bt_pin = self._get_known_pin()
 
             self._desired_live_mode_on = True
             self.adapter.set_live_mode_preference(True, bt_pin=bt_pin)
             self._persist_desired_state()
+
+            if not bt_pin:
+                _LOGGER.warning(
+                    "Live mode PIN is not available yet; waiting for the next device update before connecting"
+                )
+                await self.coordinator.async_request_refresh(force_immediate=True)
+                return
 
             result = await self.adapter.connect_live_mode(bt_pin=bt_pin)
             if result:
@@ -268,6 +275,18 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
             "live_mode_connected": self._desired_live_mode_on,
         }
         self.hass.config_entries.async_update_entry(self._entry, options=options)
+
+    def _get_known_pin(self) -> str | None:
+        """Return the most recent PIN from coordinator data or stored options."""
+        pin: str | None = None
+        if self.coordinator.data:
+            pin = self.coordinator.data.get("pin_code")
+            if pin:
+                return str(pin)
+        pin_option = self._entry.options.get("live_mode_pin")
+        if pin_option:
+            return str(pin_option)
+        return None
 
     @callback
     def _handle_live_mode_change(self) -> None:
