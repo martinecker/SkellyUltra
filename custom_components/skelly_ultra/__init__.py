@@ -56,7 +56,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         server_url=server_url,
         use_ble_proxy=use_ble_proxy,
         live_mode_should_connect=options.get("live_mode_connected", False),
-        live_mode_pin=options.get("live_mode_pin"),
     )
     coordinator = SkellyCoordinator(hass, entry, adapter)
 

@@ -874,6 +874,29 @@ class SkellyClient:
             logger.exception("Failed to query live name")
             return None
 
+    async def _get_pin_code_for_connection(self) -> str | None:
+        """Retrieve the PIN code from the device before pairing."""
+        try:
+            params = await self.get_device_params(timeout=5.0)
+        except TimeoutError:
+            logger.debug("Timed out while querying device params for PIN code")
+            return None
+        except Exception:
+            logger.exception("Failed to query device params for PIN code")
+            return None
+
+        pin_code = getattr(params, "pin_code", None)
+        if pin_code is None:
+            logger.error("Device parameters did not include a PIN code")
+            return None
+
+        pin_str = str(pin_code)
+        if not pin_str:
+            logger.error("Retrieved empty PIN code from device")
+            return None
+
+        return pin_str
+
     async def _enable_bt_advertising(self) -> bool:
         """Enable classic Bluetooth advertising on device.
 
@@ -1228,20 +1251,19 @@ class SkellyClient:
     async def connect_live_mode(
         self,
         timeout: float = 30.0,
-        bt_pin: str = "1234",
     ) -> str | None:
         """Enable classic BT and connect via REST server.
 
         Sequence:
         1. Query the device for its live name (uses the existing BLE connection)
-        2. Send the enable_classic_bt command to expose a classic Bluetooth device
-        3. Attempt automated pairing via REST server (requires root on server)
-        4. If pairing succeeds, connect by MAC address
+        2. Retrieve the current PIN code from the device parameters
+        3. Send the enable_classic_bt command to expose a classic Bluetooth device
+        4. Attempt automated pairing via REST server (requires root on server)
+        5. If pairing succeeds, connect by MAC address
 
         Args:
             timeout: Server-side timeout for pairing/connection operations (default 30s).
                     HTTP requests use timeout + buffer to allow for network overhead.
-            bt_pin: PIN code for pairing (default "1234").
 
         Returns:
             The MAC address of the connected classic BT device on success,
@@ -1261,7 +1283,13 @@ class SkellyClient:
             logger.error("Failed to get device live name")
             return None
 
-        # Step 2: Enable classic Bluetooth advertising
+        # Step 2: Retrieve the PIN code from the device params
+        bt_pin = await self._get_pin_code_for_connection()
+        if not bt_pin:
+            logger.error("Failed to retrieve PIN code for classic Bluetooth pairing")
+            return None
+
+        # Step 3: Enable classic Bluetooth advertising
         if not await self._enable_bt_advertising():
             logger.error("Failed to enable classic Bluetooth advertising")
             return None
@@ -1271,7 +1299,7 @@ class SkellyClient:
             live_name,
         )
 
-        # Step 3: Attempt automated pairing (requires root privileges on server)
+        # Step 4: Attempt automated pairing (requires root privileges on server)
         mac_address = await self._attempt_automated_pairing(
             live_name,
             bt_pin,
@@ -1284,5 +1312,5 @@ class SkellyClient:
             )
             return None
 
-        # Step 4: Connect by MAC address
+        # Step 5: Connect by MAC address
         return await self._connect_by_mac(mac_address, bt_pin, timeout)

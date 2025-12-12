@@ -37,7 +37,6 @@ class SkellyClientAdapter:
         server_url: str = "http://localhost:8765",
         use_ble_proxy: bool = False,
         live_mode_should_connect: bool = False,
-        live_mode_pin: str | None = None,
     ) -> None:
         """Initialize the adapter.
 
@@ -53,7 +52,6 @@ class SkellyClientAdapter:
         )
         self._live_mode_callbacks: list = []
         self._live_mode_should_connect = live_mode_should_connect
-        self._live_mode_pin = live_mode_pin
 
     def register_live_mode_callback(self, callback) -> None:
         """Register a callback to be notified when live mode connection state changes."""
@@ -73,29 +71,9 @@ class SkellyClientAdapter:
             except Exception:
                 _LOGGER.exception("Error in live mode callback")
 
-    def set_live_mode_preference(
-        self, should_connect: bool, bt_pin: str | None = None
-    ) -> None:
+    def set_live_mode_preference(self, should_connect: bool) -> None:
         """Remember the desired live-mode state so it can be restored later."""
         self._live_mode_should_connect = should_connect
-        self.cache_live_mode_pin(bt_pin)
-
-    def cache_live_mode_pin(self, bt_pin: str | None) -> None:
-        """Cache the provided live-mode PIN and trigger auto-restore if needed."""
-        if not bt_pin:
-            return
-        if bt_pin == self._live_mode_pin:
-            return
-        self._live_mode_pin = bt_pin
-
-        if not self._live_mode_should_connect:
-            return
-
-        if getattr(self._client, "live_mode_client_address", None):
-            return
-
-        # Attempt automatic restore now that a valid PIN is available
-        self.hass.async_create_task(self._restore_live_mode_if_needed())
 
     async def _restore_live_mode_if_needed(self) -> None:
         """Reconnect live mode if it was previously on."""
@@ -107,14 +85,8 @@ class SkellyClientAdapter:
         if live_mode_address:
             return
 
-        pin = self._live_mode_pin
-        if not pin:
-            _LOGGER.debug(
-                "Skipping live mode restore because no PIN has been cached yet"
-            )
-            return
         _LOGGER.info("Restoring live mode automatically because switch state was on")
-        result = await self.connect_live_mode(bt_pin=pin)
+        result = await self.connect_live_mode()
         if not result:
             _LOGGER.warning("Automatic live-mode restore did not complete successfully")
 
@@ -304,25 +276,15 @@ class SkellyClientAdapter:
         """Return the underlying SkellyClient instance."""
         return self._client
 
-    async def connect_live_mode(
-        self, timeout: float = 30.0, bt_pin: str | None = None
-    ) -> str | None:
+    async def connect_live_mode(self, timeout: float = 30.0) -> str | None:
         """Connect to the classic/live Bluetooth device aka live mode.
 
         Args:
             timeout: Connection timeout in seconds
-            bt_pin: Bluetooth PIN for pairing retrieved from the device
         """
-        if not bt_pin:
-            _LOGGER.warning(
-                "Cannot connect live mode because the Bluetooth PIN is unknown"
-            )
-            return None
-
-        self._live_mode_pin = bt_pin
         try:
             result = await self._client.connect_live_mode(
-                timeout=timeout, bt_pin=bt_pin
+                timeout=timeout,
             )
             # Notify callbacks that connection state changed
             self._notify_live_mode_change()
