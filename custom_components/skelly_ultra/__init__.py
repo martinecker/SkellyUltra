@@ -35,22 +35,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     Create the client adapter and coordinator, start notifications and
     forward setup to platforms.
     """
-    # Ensure "connected" option exists and defaults to True
-    if "connected" not in entry.options:
-        hass.config_entries.async_update_entry(
-            entry, options={**entry.options, "connected": True}
-        )
+    # Ensure config-entry options contain defaults for the connection switches
+    options = dict(entry.options)
+    options_changed = False
+    if "connected" not in options:
+        options["connected"] = True
+        options_changed = True
+    if "live_mode_connected" not in options:
+        options["live_mode_connected"] = False
+        options_changed = True
+    if options_changed:
+        hass.config_entries.async_update_entry(entry, options=options)
 
     address = entry.data.get("address")
     server_url = entry.data.get(CONF_SERVER_URL, DEFAULT_SERVER_URL)
     use_ble_proxy = entry.data.get(CONF_USE_BLE_PROXY, False)
     adapter = SkellyClientAdapter(
-        hass, address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
+        hass,
+        address=address,
+        server_url=server_url,
+        use_ble_proxy=use_ble_proxy,
+        live_mode_should_connect=options.get("live_mode_connected", False),
     )
     coordinator = SkellyCoordinator(hass, entry, adapter)
 
     # Check if Connected switch is on (defaults to True)
-    is_connected = entry.options.get("connected", True)
+    is_connected = options.get("connected", True)
 
     # Start connection and initialization in background to avoid blocking setup
     # This allows the integration to load even if the device is not available

@@ -36,6 +36,7 @@ class SkellyClientAdapter:
         address: str | None = None,
         server_url: str = "http://localhost:8765",
         use_ble_proxy: bool = False,
+        live_mode_should_connect: bool = False,
     ) -> None:
         """Initialize the adapter.
 
@@ -50,6 +51,8 @@ class SkellyClientAdapter:
             address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
         )
         self._live_mode_callbacks: list = []
+        self._live_mode_should_connect = live_mode_should_connect
+        self._live_mode_pin = "1234"
 
     def register_live_mode_callback(self, callback) -> None:
         """Register a callback to be notified when live mode connection state changes."""
@@ -68,6 +71,30 @@ class SkellyClientAdapter:
                 callback()
             except Exception:
                 _LOGGER.exception("Error in live mode callback")
+
+    def set_live_mode_preference(
+        self, should_connect: bool, bt_pin: str | None = None
+    ) -> None:
+        """Remember the desired live-mode state so it can be restored later."""
+        self._live_mode_should_connect = should_connect
+        if bt_pin:
+            self._live_mode_pin = bt_pin
+
+    async def _restore_live_mode_if_needed(self) -> None:
+        """Reconnect live mode if it was previously on."""
+        if not self._live_mode_should_connect:
+            return
+
+        # Skip if the live-mode transport already reports a client address
+        live_mode_address = getattr(self._client, "live_mode_client_address", None)
+        if live_mode_address:
+            return
+
+        pin = self._live_mode_pin or "1234"
+        _LOGGER.info("Restoring live mode automatically because switch state was on")
+        result = await self.connect_live_mode(bt_pin=pin)
+        if not result:
+            _LOGGER.warning("Automatic live-mode restore did not complete successfully")
 
     async def _connect_internal(self, attempts: int, backoff: float) -> bool:
         """Connect using HA's bluetooth helpers when possible, with retries.
@@ -238,6 +265,8 @@ class SkellyClientAdapter:
         except Exception:
             _LOGGER.exception("Failed to enable classic Bluetooth")
 
+        await self._restore_live_mode_if_needed()
+
         return True
 
     async def disconnect(self) -> None:
@@ -262,6 +291,7 @@ class SkellyClientAdapter:
             timeout: Connection timeout in seconds
             bt_pin: Bluetooth PIN for pairing (default: "1234")
         """
+        self._live_mode_pin = bt_pin or "1234"
         try:
             result = await self._client.connect_live_mode(
                 timeout=timeout, bt_pin=bt_pin

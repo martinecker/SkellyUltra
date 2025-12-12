@@ -7,7 +7,7 @@ import logging
 
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -32,7 +32,11 @@ async def async_setup_entry(
                 hass, coordinator, data.get("adapter"), entry, device_info
             ),
             SkellyLiveModeSwitch(
-                coordinator, data.get("adapter"), entry.entry_id, device_info
+                hass,
+                coordinator,
+                data.get("adapter"),
+                entry,
+                device_info,
             ),
             SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=0),
             SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=1),
@@ -162,67 +166,116 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
 
     def __init__(
         self,
+        hass: HomeAssistant,
         coordinator: SkellyCoordinator,
         adapter,
-        entry_id: str,
+        entry: ConfigEntry,
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the live-mode switch for this config entry."""
         super().__init__(coordinator)
+        self.hass = hass
         self.coordinator = coordinator
         self.adapter = adapter
+        self._entry = entry
         self._attr_name = "Live Mode"
-        self._attr_unique_id = f"{entry_id}_live_mode"
+        self._attr_unique_id = f"{entry.entry_id}_live_mode"
         self._attr_device_info = device_info
+        self._desired_live_mode_on = entry.options.get("live_mode_connected", False)
 
     @property
     def available(self) -> bool:
         """The switch is available only after the coordinator has a successful update."""
-        # coordinator.last_update_success is True after initial successful refresh
         return bool(getattr(self.coordinator, "last_update_success", False))
 
     @property
     def is_on(self) -> bool:
-        """Return True if live-mode client is connected."""
-        address = None
-        with contextlib.suppress(Exception):
-            address = self.coordinator.adapter.client.live_mode_client_address
-        return address is not None
+        """Return True if live-mode client is connected or should be restored."""
+        actual_state: bool | None = None
+        if self.adapter:
+            with contextlib.suppress(Exception):
+                address = self.adapter.client.live_mode_client_address
+                if address is not None:
+                    actual_state = True
+                elif getattr(self.adapter.client, "is_connected", False):
+                    actual_state = False
+
+        if actual_state is None:
+            return self._desired_live_mode_on
+        return actual_state
 
     async def async_added_to_hass(self) -> None:
-        """When entity is added, subscribe to coordinator updates."""
+        """When entity is added, subscribe to adapter updates."""
         await super().async_added_to_hass()
-        # ensure initial availability/state is written
+        if self.adapter:
+            self.adapter.register_live_mode_callback(self._handle_live_mode_change)
+            self.adapter.set_live_mode_preference(self._desired_live_mode_on)
         self.async_write_ha_state()
+
+    async def async_will_remove_from_hass(self) -> None:
+        """Unregister adapter callbacks when entity is removed."""
+        if self.adapter:
+            self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
+        await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs) -> None:
         """Connect to the classic/live Bluetooth device exposed by the Skelly."""
+        if not self.adapter:
+            _LOGGER.warning("Live mode adapter not available")
+            return
+
         try:
-            # Get PIN from coordinator data, fallback to default if not available yet
-            bt_pin = "1234"  # Default PIN
+            bt_pin = "1234"
             if self.coordinator.data:
                 bt_pin = self.coordinator.data.get("pin_code", "1234")
 
-            # Use the adapter-level helper so HA can use establish_connection
+            self._desired_live_mode_on = True
+            self.adapter.set_live_mode_preference(True, bt_pin=bt_pin)
+            self._persist_desired_state()
+
             result = await self.adapter.connect_live_mode(bt_pin=bt_pin)
             if result:
                 _LOGGER.info("Live mode connected: %s", result)
-                # Update state immediately
-                self.async_write_ha_state()
             else:
                 _LOGGER.warning("Live mode connection failed")
         except Exception:
             _LOGGER.exception("Failed to connect live mode")
+        finally:
+            self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disconnect the classic/live Bluetooth device."""
+        if not self.adapter:
+            _LOGGER.warning("Live mode adapter not available")
+            return
+
         try:
+            self._desired_live_mode_on = False
+            self.adapter.set_live_mode_preference(False)
+            self._persist_desired_state()
+
             await self.adapter.disconnect_live_mode()
             _LOGGER.info("Live mode disconnected")
-            # Update state immediately
-            self.async_write_ha_state()
         except Exception:
             _LOGGER.exception("Failed to disconnect live mode")
+        finally:
+            self.async_write_ha_state()
+
+    def _persist_desired_state(self) -> None:
+        """Persist the last requested live-mode state in the config entry."""
+        options = {
+            **self._entry.options,
+            "live_mode_connected": self._desired_live_mode_on,
+        }
+        self.hass.config_entries.async_update_entry(self._entry, options=options)
+
+    @callback
+    def _handle_live_mode_change(self) -> None:
+        """Handle live-mode connection state updates from the adapter."""
+        if not self.adapter:
+            return
+
+        self.async_write_ha_state()
 
 
 class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
