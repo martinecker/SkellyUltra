@@ -69,7 +69,7 @@ class SkellyClientAdapter:
             except Exception:
                 _LOGGER.exception("Error in live mode callback")
 
-    async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
+    async def _connect_internal(self, attempts: int, backoff: float) -> bool:
         """Connect using HA's bluetooth helpers when possible, with retries.
 
         Attempts to retrieve a BLE device from HA and connect. Retries on
@@ -214,10 +214,31 @@ class SkellyClientAdapter:
 
         # All attempts exhausted
         if last_exc:
-            _LOGGER.error("All connection attempts failed: %s", last_exc)
+            _LOGGER.warning("All connection attempts failed: %s", last_exc)
         else:
-            _LOGGER.error("All connection attempts failed (no exception available)")
+            _LOGGER.warning("All connection attempts failed (no exception available)")
         return False
+
+    async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
+        """Connect to the Skelly BLE device.
+
+        The connection is established either directly and then using HA's bluetooth helpers
+        when possible or using the REST server as BLE proxy if configured that way.
+
+        Attempts to retrieve a BLE device from HA or the REST server and connect. Retries on
+        transient errors with exponential backoff. Returns True on success,
+        False on failure.
+        """
+        if not await self._connect_internal(attempts, backoff):
+            return False
+
+        # Immediately enable BT classic mode so that live mode can connect
+        try:
+            await self._client.enable_classic_bt()
+        except Exception:
+            _LOGGER.exception("Failed to enable classic Bluetooth")
+
+        return True
 
     async def disconnect(self) -> None:
         """Disconnect the underlying Skelly client and clean up resources."""

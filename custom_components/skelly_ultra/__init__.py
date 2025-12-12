@@ -59,6 +59,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if not is_connected:
             # Switch is off - pause coordinator immediately
             coordinator.pause_updates()
+            coordinator.notify_done_initializing()
             _LOGGER.info(
                 "Connected switch is off - skipping connection and pausing updates"
             )
@@ -72,19 +73,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "Failed to connect to Skelly device during initialization, "
                     "coordinator will retry on next update cycle"
                 )
+                coordinator.notify_done_initializing()
                 return
         except Exception:
             _LOGGER.exception(
                 "Exception while connecting to Skelly device during initialization, "
                 "coordinator will retry on next update cycle"
             )
+            coordinator.notify_done_initializing()
             return
 
-        # Immediately enable BT classic mode so that live mode can connect
-        try:
-            await adapter.client.enable_classic_bt()
-        except Exception:
-            _LOGGER.exception("Failed to enable classic Bluetooth")
+        coordinator.notify_done_initializing()
 
         # Perform immediate initial coordinator refresh after successful connection
         try:

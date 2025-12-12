@@ -65,11 +65,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
         if not device_name:
             device_name = "Skelly Ultra"
         self._logger = _DeviceLoggerAdapter(_LOGGER, {"device_name": device_name})
+        self._is_initializing = True
         self._last_refresh_request = 0.0
         self._updates_paused = False
         self._file_list: list[Any] = []
         self._initial_update_done = False
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    def notify_done_initializing(self) -> None:
+        """Notifies the coordinator that device initialization started in async_setup_entry is done."""
+        self._is_initializing = False
 
     def pause_updates(self) -> None:
         """Pause coordinator polling.
@@ -181,16 +186,24 @@ class SkellyCoordinator(DataUpdateCoordinator):
         await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
-        if not self.adapter.client.is_connected:
-            self._logger.debug("Skipping coordinator update - device not connected")
-            raise UpdateFailed("Device not connected")
-
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
             self._logger.debug("Coordinator updates paused - skipping poll")
             raise UpdateFailed(
                 "Device updates paused due to turned off Connected switch"
             )
+
+        if not self.adapter.client.is_connected:
+            # Try to reconnect unless the device initialization is still running
+            if not self._is_initializing:
+                self._logger.debug(
+                    "Coordinator update with device not connected after initialization - attempting to re-connect"
+                )
+                await self.adapter.connect(attempts=1)
+
+            if not self.adapter.client.is_connected:
+                self._logger.debug("Skipping coordinator update - device not connected")
+                raise UpdateFailed("Device not connected")
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
