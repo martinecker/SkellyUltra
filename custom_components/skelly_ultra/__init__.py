@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
 from .coordinator import SkellyCoordinator
+from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .services import register_services, unregister_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -50,14 +51,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     address = entry.data.get("address")
     server_url = entry.data.get(CONF_SERVER_URL, DEFAULT_SERVER_URL)
     use_ble_proxy = entry.data.get(CONF_USE_BLE_PROXY, False)
+    device_info = get_device_info(hass, entry)
+    device_name = get_device_name(entry, device_info)
+    device_logger = DeviceLoggerAdapter(_LOGGER, {"device_name": device_name})
     adapter = SkellyClientAdapter(
         hass,
         address=address,
         server_url=server_url,
         use_ble_proxy=use_ble_proxy,
         live_mode_should_connect=options.get("live_mode_connected", False),
+        logger=device_logger,
     )
-    coordinator = SkellyCoordinator(hass, entry, adapter)
+    coordinator = SkellyCoordinator(
+        hass,
+        entry,
+        adapter,
+        device_info,
+        device_logger,
+    )
 
     # Check if Connected switch is on (defaults to True)
     is_connected = options.get("connected", True)

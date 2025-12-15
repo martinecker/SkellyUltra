@@ -10,24 +10,16 @@ import asyncio
 import logging
 import time
 from datetime import timedelta
-from typing import Any, cast
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
 from .const import DOMAIN
-from .helpers import get_device_info
-
-
-class _DeviceLoggerAdapter(logging.LoggerAdapter):
-    """Logger adapter that prefixes messages with the device name."""
-
-    def process(self, msg: str, kwargs: dict[str, Any]) -> tuple[str, dict[str, Any]]:
-        extra = cast(dict[str, Any], self.extra or {})
-        device_name = extra.get("device_name") or "Unknown Skelly"
-        return f"[{device_name}] {msg}", kwargs
+from .helpers import DeviceLoggerAdapter
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,7 +37,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
     """
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, adapter: SkellyClientAdapter
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        adapter: SkellyClientAdapter,
+        device_info: DeviceInfo | None,
+        device_logger: DeviceLoggerAdapter | None = None,
     ) -> None:
         """Initialize the coordinator and set polling interval."""
         super().__init__(
@@ -56,15 +53,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
         )
         self.adapter = adapter
         self.action_lock = asyncio.Lock()
-        self.device_info = get_device_info(hass, entry)
-        device_name = None
-        if self.device_info:
-            device_name = self.device_info.get("name")
-        if not device_name:
-            device_name = entry.title
-        if not device_name:
-            device_name = "Skelly Ultra"
-        self._logger = _DeviceLoggerAdapter(_LOGGER, {"device_name": device_name})
+        self.device_info = device_info
+        self._logger = device_logger or DeviceLoggerAdapter(
+            _LOGGER, {"device_name": entry.title or "Skelly Ultra"}
+        )
         self._is_initializing = True
         self._last_refresh_request = 0.0
         self._updates_paused = False

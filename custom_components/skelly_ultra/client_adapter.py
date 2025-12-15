@@ -37,6 +37,7 @@ class SkellyClientAdapter:
         server_url: str = "http://localhost:8765",
         use_ble_proxy: bool = False,
         live_mode_should_connect: bool = False,
+        logger: logging.Logger | logging.LoggerAdapter | None = None,
     ) -> None:
         """Initialize the adapter.
 
@@ -50,6 +51,7 @@ class SkellyClientAdapter:
         self._client = SkellyClient(
             address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
         )
+        self._logger = logger or _LOGGER
         self._live_mode_callbacks: list = []
         self._live_mode_should_connect = live_mode_should_connect
 
@@ -69,7 +71,7 @@ class SkellyClientAdapter:
             try:
                 callback()
             except Exception:
-                _LOGGER.exception("Error in live mode callback")
+                self._logger.exception("Error in live mode callback")
 
     def set_live_mode_preference(self, should_connect: bool) -> None:
         """Remember the desired live-mode state so it can be restored later."""
@@ -85,10 +87,14 @@ class SkellyClientAdapter:
         if live_mode_address:
             return
 
-        _LOGGER.info("Restoring live mode automatically because switch state was on")
+        self._logger.info(
+            "Restoring live mode automatically because switch state was on"
+        )
         result = await self.connect_live_mode()
         if not result:
-            _LOGGER.warning("Automatic live-mode restore did not complete successfully")
+            self._logger.warning(
+                "Automatic live-mode restore did not complete successfully"
+            )
 
     async def _connect_internal(self, attempts: int, backoff: float) -> bool:
         """Connect using HA's bluetooth helpers when possible, with retries.
@@ -105,34 +111,38 @@ class SkellyClientAdapter:
                 try:
                     ok = await self._client.connect()
                     if ok:
-                        _LOGGER.info(
+                        self._logger.info(
                             "Connected to Skelly device via BLE proxy on attempt %d",
                             attempt,
                         )
                         return True
 
-                    _LOGGER.warning(
+                    self._logger.warning(
                         "BLE proxy connection returned False on attempt %d",
                         attempt,
                     )
 
                 except Exception as exc:
                     last_exc = exc
-                    _LOGGER.warning(
-                        "Attempt %d to connect via BLE proxy failed: %s", attempt, exc
+                    self._logger.warning(
+                        "Attempt %d to connect via BLE proxy failed: %s",
+                        attempt,
+                        exc,
                     )
 
                 # Backoff before retrying
                 if attempt < attempts:
                     sleep_for = backoff * (2 ** (attempt - 1))
-                    _LOGGER.debug("Retrying in %.1f seconds", sleep_for)
+                    self._logger.debug("Retrying in %.1f seconds", sleep_for)
                     await asyncio.sleep(sleep_for)
 
             # All attempts exhausted
             if last_exc:
-                _LOGGER.error("All BLE proxy connection attempts failed: %s", last_exc)
+                self._logger.error(
+                    "All BLE proxy connection attempts failed: %s", last_exc
+                )
             else:
-                _LOGGER.error(
+                self._logger.error(
                     "All BLE proxy connection attempts failed (no exception available)"
                 )
             return False
@@ -144,7 +154,7 @@ class SkellyClientAdapter:
             try:
                 await close_stale_connections_by_address(self.address)
             except Exception:
-                _LOGGER.debug(
+                self._logger.debug(
                     "close_stale_connections_by_address failed", exc_info=True
                 )
 
@@ -163,7 +173,7 @@ class SkellyClientAdapter:
                         else:
                             ble_device = result
                     except Exception as exc:
-                        _LOGGER.debug(
+                        self._logger.debug(
                             "HA bluetooth helper couldn't resolve address %s: %s",
                             self.address,
                             exc,
@@ -182,7 +192,7 @@ class SkellyClientAdapter:
                                 ble_device.name or "Animated Skelly",
                             )
                         except Exception:
-                            _LOGGER.debug(
+                            self._logger.debug(
                                 "establish_connection failed for %s, falling back to BleakClient",
                                 self.address,
                                 exc_info=True,
@@ -198,14 +208,14 @@ class SkellyClientAdapter:
 
                         ok = await self._client.connect(client=bleak_client)
                         if ok:
-                            _LOGGER.info(
+                            self._logger.info(
                                 "Connected to Skelly device at %s on attempt %d",
                                 self.address,
                                 attempt,
                             )
                             return True
 
-                        _LOGGER.warning(
+                        self._logger.warning(
                             "SkellyClient.connect returned False for %s on attempt %d",
                             self.address,
                             attempt,
@@ -215,7 +225,7 @@ class SkellyClientAdapter:
                 # Defer notification registration to HA
                 ok = await self._client.connect()
                 if ok:
-                    _LOGGER.info(
+                    self._logger.info(
                         "SkellyClient connected via internal discovery on attempt %d",
                         attempt,
                     )
@@ -223,21 +233,25 @@ class SkellyClientAdapter:
 
             except Exception as exc:  # broad catch so we can retry
                 last_exc = exc
-                _LOGGER.warning(
-                    "Attempt %d to connect to Skelly device failed: %s", attempt, exc
+                self._logger.warning(
+                    "Attempt %d to connect to Skelly device failed: %s",
+                    attempt,
+                    exc,
                 )
 
             # Backoff before retrying
             if attempt < attempts:
                 sleep_for = backoff * (2 ** (attempt - 1))
-                _LOGGER.debug("Retrying in %.1f seconds", sleep_for)
+                self._logger.debug("Retrying in %.1f seconds", sleep_for)
                 await asyncio.sleep(sleep_for)
 
         # All attempts exhausted
         if last_exc:
-            _LOGGER.warning("All connection attempts failed: %s", last_exc)
+            self._logger.warning("All connection attempts failed: %s", last_exc)
         else:
-            _LOGGER.warning("All connection attempts failed (no exception available)")
+            self._logger.warning(
+                "All connection attempts failed (no exception available)"
+            )
         return False
 
     async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
@@ -257,7 +271,7 @@ class SkellyClientAdapter:
         try:
             await self._client.enable_classic_bt()
         except Exception:
-            _LOGGER.exception("Failed to enable classic Bluetooth")
+            self._logger.exception("Failed to enable classic Bluetooth")
 
         await self._restore_live_mode_if_needed()
 
@@ -265,11 +279,11 @@ class SkellyClientAdapter:
 
     async def disconnect(self) -> None:
         """Disconnect the underlying Skelly client and clean up resources."""
-        _LOGGER.info("Disconnecting Skelly adapter/client")
+        self._logger.info("Disconnecting Skelly adapter/client")
         try:
             await self._client.disconnect()
         except Exception:
-            _LOGGER.exception("Error while disconnecting Skelly client")
+            self._logger.exception("Error while disconnecting Skelly client")
 
     @property
     def client(self) -> SkellyClient:
@@ -290,7 +304,7 @@ class SkellyClientAdapter:
             self._notify_live_mode_change()
             return result
         except Exception:
-            _LOGGER.exception("Failed to connect live mode via adapter")
+            self._logger.exception("Failed to connect live mode via adapter")
             return None
 
     async def disconnect_live_mode(self) -> None:
@@ -300,4 +314,4 @@ class SkellyClientAdapter:
             # Notify callbacks that connection state changed
             self._notify_live_mode_change()
         except Exception:
-            _LOGGER.exception("Error while disconnecting live-mode client")
+            self._logger.exception("Error while disconnecting live-mode client")

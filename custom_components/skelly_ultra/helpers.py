@@ -2,12 +2,26 @@
 
 from __future__ import annotations
 
+import logging
+from typing import Any, cast
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DOMAIN
+
+
+class DeviceLoggerAdapter(logging.LoggerAdapter):
+    """Logger adapter that prefixes messages with the device name."""
+
+    def process(
+        self, msg: str, kwargs: dict[str, Any]
+    ) -> tuple[str, dict[str, Any]]:  # pragma: no cover - standard logging behavior
+        extra = cast(dict[str, Any], self.extra or {})
+        device_name = extra.get("device_name") or "Unknown Skelly"
+        return f"[{device_name}] {msg}", kwargs
 
 
 def build_device_identifier(
@@ -80,3 +94,20 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
         manufacturer="Seasonal Visions International/Home Depot",
         model="Ultra Skelly",
     )
+
+
+def get_device_name(entry: ConfigEntry, device_info: DeviceInfo | None) -> str:
+    """Derive a device-friendly name for logging and display."""
+
+    if device_info:
+        # DeviceInfo exposes attributes directly; fall back to mapping access if needed
+        device_name = getattr(device_info, "name", None)
+        if not device_name and hasattr(device_info, "get"):
+            device_name = device_info.get("name")
+        if device_name:
+            return cast(str, device_name)
+
+    if entry.title:
+        return entry.title
+
+    return "Skelly Ultra"
