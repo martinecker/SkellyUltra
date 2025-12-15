@@ -246,7 +246,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_connect_by_mac(self, request: web.Request) -> web.Response:
-        """Handle POST /connect_by_mac endpoint.
+        """Handle POST /classic/connect_by_mac endpoint.
 
         Expected JSON body:
         {
@@ -310,7 +310,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_pair_and_trust_by_name(self, request: web.Request) -> web.Response:
-        """Handle POST /pair_and_trust_by_name endpoint.
+        """Handle POST /classic/pair_and_trust_by_name endpoint.
 
         Uses D-Bus agent to automatically pair and trust a Bluetooth device by name.
         Requires root privileges to register D-Bus agent.
@@ -402,7 +402,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_pair_and_trust_by_mac(self, request: web.Request) -> web.Response:
-        """Handle POST /pair_and_trust_by_mac endpoint.
+        """Handle POST /classic/pair_and_trust_by_mac endpoint.
 
         Uses D-Bus agent to automatically pair and trust a Bluetooth device by MAC.
         Requires root privileges to register D-Bus agent.
@@ -491,7 +491,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_get_name(self, request: web.Request) -> web.Response:
-        """Handle GET /name endpoint.
+        """Handle GET /classic/name endpoint.
 
         Returns names of all connected devices or a specific device.
         Query param: mac=<MAC> for specific device
@@ -534,7 +534,7 @@ class SkellyUltraServer:
         return web.json_response(response_data)
 
     async def handle_get_mac(self, request: web.Request) -> web.Response:
-        """Handle GET /mac endpoint.
+        """Handle GET /classic/mac endpoint.
 
         Returns MAC addresses of all connected devices or search by name.
         Query param: name=<NAME> to search by device name
@@ -577,7 +577,7 @@ class SkellyUltraServer:
         return web.json_response(response_data)
 
     async def handle_play(self, request: web.Request) -> web.Response:
-        """Handle POST /play endpoint with file upload.
+        """Handle POST /classic/play endpoint with file upload.
 
         Expected multipart/form-data with:
         - file: The audio file (required)
@@ -688,7 +688,7 @@ class SkellyUltraServer:
             return web.json_response({"success": False, "error": str(exc)}, status=500)
 
     async def handle_play_filename(self, request: web.Request) -> web.Response:
-        """Handle POST /play_filename endpoint with file path.
+        """Handle POST /classic/play_filename endpoint with file path.
 
         Expected JSON body:
         {
@@ -777,7 +777,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_stop(self, request: web.Request) -> web.Response:
-        """Handle POST /stop endpoint.
+        """Handle POST /classic/stop endpoint.
 
         Expected JSON body (optional):
         {
@@ -840,7 +840,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_disconnect(self, request: web.Request) -> web.Response:
-        """Handle POST /disconnect endpoint.
+        """Handle POST /classic/disconnect endpoint.
 
         Expected JSON body (optional):
         {
@@ -897,7 +897,7 @@ class SkellyUltraServer:
             return web.json_response(response_data, status=500)
 
     async def handle_status(self, request: web.Request) -> web.Response:
-        """Handle GET /status endpoint.
+        """Handle GET /classic/status endpoint.
 
         Returns comprehensive status of both Bluetooth and audio player.
 
