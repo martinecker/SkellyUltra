@@ -881,6 +881,7 @@ class BluetoothManager:
             try:
                 # Scan and update cache
                 await self._scan_and_update_cache(scan_duration=15.0, stop_scan=True)
+                await self._async_validate_connected_devices()
 
                 # Wait before next scan cycle
                 await asyncio.sleep(5)
@@ -900,6 +901,68 @@ class BluetoothManager:
                 await adapter.call_stop_discovery()
 
         _LOGGER.info("Background Bluetooth scanner stopped")
+
+    async def _async_validate_connected_devices(self) -> None:
+        """Ensure tracked connections remain active at both PipeWire and DBus levels."""
+
+        if not self._connected_devices:
+            return
+
+        for mac, info in list(self._connected_devices.items()):
+            normalized_mac = self._normalize_mac(mac)
+
+            node_ok = False
+            try:
+                node_ok = bool(await resolve_bluez_output_node(normalized_mac))
+            except RuntimeError as exc:
+                _LOGGER.debug(
+                    "PipeWire node lookup failed for %s (%s): %s",
+                    mac,
+                    normalized_mac,
+                    exc,
+                )
+
+            dbus_ok = False
+            try:
+                _, device_props = await self._async_get_device_interfaces(
+                    normalized_mac,
+                    adapter_path=info.adapter_path,
+                    ensure_discovered=False,
+                )
+            except RuntimeError as exc:
+                _LOGGER.debug(
+                    "Device interface lookup failed for %s (%s): %s",
+                    mac,
+                    normalized_mac,
+                    exc,
+                )
+            else:
+                try:
+                    dbus_ok = bool(
+                        await self._async_device_property(device_props, "Connected")
+                    )
+                except DBusError as exc:
+                    _LOGGER.debug(
+                        "Failed to read Connected property for %s: %s",
+                        mac,
+                        exc,
+                    )
+
+            if node_ok and dbus_ok:
+                continue
+
+            reasons: list[str] = []
+            if not node_ok:
+                reasons.append("PipeWire node missing")
+            if not dbus_ok:
+                reasons.append("DBus disconnected")
+
+            _LOGGER.warning(
+                "Detected stale Bluetooth connection for %s: %s. Disconnecting",
+                mac,
+                "; ".join(reasons) or "unknown reason",
+            )
+            await self.disconnect(mac)
 
     async def _discover_device_mac_by_name(self, device_name: str) -> str:
         """Discover a Bluetooth device's MAC address by name.
