@@ -88,6 +88,7 @@ class SkellyUltraServer:
             "name": device.name if device else None,
             "mac": device.mac if device else None,
             "adapter_path": device.adapter_path if device else None,
+            "pipewire_node": device.pipewire_node if device else None,
         }
 
     def _validate_connected_targets(self, targets: list[str] | None) -> str | None:
@@ -905,7 +906,7 @@ class SkellyUltraServer:
         {
             "bluetooth": {
                 "connected_count": 1,
-                "devices": [{"name": "...", "mac": "...", "adapter_path": "..."}]
+                "devices": [{"name": "...", "mac": "...", "adapter_path": "...", "pipewire_node": "..."}]
             },
             "audio": {
                 "is_playing": true/false,
