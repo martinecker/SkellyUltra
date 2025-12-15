@@ -7,6 +7,8 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
+from .pipewire_utils import resolve_bluez_output_node
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -68,18 +70,23 @@ class AudioPlayer:
         try:
             cmd = ["pw-play"]
             if target:
-                # Convert MAC address to PipeWire/BlueZ output format
-                # MAC addresses use underscores instead of colons in PipeWire
-                if ":" in target:
-                    # Convert MAC address like F5:A1:BC:80:63:EC to bluez_output.F5_A1_BC_80_63_EC.1
-                    pipewire_target = f"bluez_output.{target.replace(':', '_')}.1"
-                    _LOGGER.debug(
-                        "Converted MAC %s to PipeWire target: %s",
+                try:
+                    pipewire_target = await resolve_bluez_output_node(target)
+                except RuntimeError as exc:
+                    _LOGGER.error(
+                        "Failed to resolve PipeWire node for target %s: %s",
                         target,
-                        pipewire_target,
+                        exc,
                     )
-                else:
-                    pipewire_target = target
+                    return False
+
+                if not pipewire_target:
+                    _LOGGER.error(
+                        "No PipeWire bluez_output node available for target: %s",
+                        target,
+                    )
+                    return False
+
                 cmd.extend(["--target", pipewire_target])
             cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
