@@ -809,15 +809,55 @@ class BluetoothManager:
         adapter_paths = await self._async_get_adapter_paths()
 
         for adapter_path in adapter_paths:
-            adapter, _ = await self._async_get_adapter(adapter_path)
+            adapter, adapter_props = await self._async_get_adapter(adapter_path)
             adapter_label = self._adapter_label(adapter_path)
-            _LOGGER.debug(
-                "Starting discovery on %s (%s) for %.1f seconds",
-                adapter_label,
-                adapter_path,
-                scan_duration,
-            )
-            await adapter.call_start_discovery()
+            started_here = False
+
+            discovering = False
+            try:
+                discovering_variant = await adapter_props.call_get(
+                    "org.bluez.Adapter1", "Discovering"
+                )
+            except DBusError as exc:
+                _LOGGER.debug(
+                    "Failed to read Discovering state for %s (%s): %s",
+                    adapter_label,
+                    adapter_path,
+                    exc,
+                )
+            else:
+                discovering = bool(self._variant_value(discovering_variant))
+
+            if discovering:
+                _LOGGER.debug(
+                    "Adapter %s (%s) already discovering; reusing session",
+                    adapter_label,
+                    adapter_path,
+                )
+            else:
+                _LOGGER.debug(
+                    "Starting discovery on %s (%s) for %.1f seconds",
+                    adapter_label,
+                    adapter_path,
+                    scan_duration,
+                )
+                try:
+                    await adapter.call_start_discovery()
+                except DBusError as exc:
+                    if (
+                        exc.name == "org.bluez.Error.InProgress"
+                        or "in progress" in str(exc).lower()
+                    ):
+                        _LOGGER.debug(
+                            "Adapter %s (%s) reported discovery already running: %s",
+                            adapter_label,
+                            adapter_path,
+                            exc,
+                        )
+                    else:
+                        raise
+                else:
+                    started_here = True
 
             try:
                 await asyncio.sleep(scan_duration)
@@ -828,7 +868,7 @@ class BluetoothManager:
                     self._device_cache[device_name] = mac_address
                     _LOGGER.debug("Cached device: %s -> %s", device_name, mac_address)
             finally:
-                if stop_scan:
+                if stop_scan and started_here:
                     with contextlib.suppress(DBusError):
                         await adapter.call_stop_discovery()
 
