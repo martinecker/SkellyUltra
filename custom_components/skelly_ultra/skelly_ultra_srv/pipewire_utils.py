@@ -5,6 +5,11 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Iterable
 import json
+import logging
+import re
+import tempfile
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _normalize_hex_like(value: str) -> str:
@@ -189,16 +194,7 @@ async def _run_pw_dump() -> list[dict[str, object]]:
     if not payload:
         return []
 
-    def _try_parse(content: str) -> list[dict[str, object]] | None:
-        try:
-            data = json.loads(content)
-        except json.JSONDecodeError:
-            return None
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return [data]
-        return None
+    payload = _remove_lonely_bracket_lines(payload)
 
     data = _try_parse(payload)
     if data is None:
@@ -213,16 +209,203 @@ async def _run_pw_dump() -> list[dict[str, object]]:
             data = _try_parse(payload[start_index:])
 
     if data is None:
-        ndjson_lines = [line for line in payload.splitlines() if line.strip()]
-        parsed: list[dict[str, object]] = []
-        for line in ndjson_lines:
-            obj = _try_parse(line)
-            if obj is None:
-                parsed = []
-                break
-            parsed.extend(entry for entry in obj if isinstance(entry, dict))
-        if not parsed:
-            raise RuntimeError("Failed to parse pw-dump output")
-        return parsed
+        data = _parse_streamed_json(payload)
 
-    return data
+    if data is None:
+        data = _parse_ndjson(payload)
+
+    if data is None:
+        data = _parse_object_segments(payload)
+
+    if data is None:
+        _log_parse_failure(payload)
+
+    assert data is not None
+    return _extend_with_text_nodes(data, payload)
+
+
+def _try_parse(content: str) -> list[dict[str, object]] | None:
+    """Return parsed JSON content if it is a list or dict, else None."""
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError:
+        return None
+    if isinstance(data, list):
+        return [entry for entry in data if isinstance(entry, dict)]
+    if isinstance(data, dict):
+        return [data]
+    return None
+
+
+def _remove_lonely_bracket_lines(payload: str) -> str:
+    """Return payload without lines that only contain stray brackets."""
+
+    cleaned_lines: list[str] = []
+    junk_lines = {"[", "]", "[]", "[ ]"}
+    for line in payload.splitlines():
+        stripped = line.strip()
+        if stripped in junk_lines:
+            continue
+        cleaned_lines.append(line)
+    return "\n".join(cleaned_lines)
+
+
+def _extend_with_text_nodes(
+    entries: list[dict[str, object]], payload: str
+) -> list[dict[str, object]]:
+    """Ensure bluez_output nodes present by scraping raw payload text."""
+
+    existing_names: set[str] = set()
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        info = entry.get("info")
+        if not isinstance(info, dict):
+            continue
+        props = info.get("props") or info.get("properties")
+        if not isinstance(props, dict):
+            continue
+        node_name = props.get("node.name")
+        if isinstance(node_name, str):
+            existing_names.add(node_name)
+
+    for match in re.finditer(r'"node\.name"\s*:\s*"([^"]+)"', payload):
+        node_name = match.group(1)
+        if not node_name.startswith("bluez_output"):
+            continue
+        if node_name in existing_names:
+            continue
+        stub_entry = {
+            "type": "PipeWire:Interface:Node",
+            "info": {
+                "props": {
+                    "node.name": node_name,
+                }
+            },
+        }
+        entries.append(stub_entry)
+        existing_names.add(node_name)
+
+    return entries
+
+
+def _parse_streamed_json(payload: str) -> list[dict[str, object]] | None:
+    """Parse payload containing sequential JSON blobs."""
+
+    decoder = json.JSONDecoder()
+    idx = 0
+    length = len(payload)
+    results: list[dict[str, object]] = []
+    while idx < length:
+        while idx < length and payload[idx].isspace():
+            idx += 1
+        if idx >= length:
+            break
+        if payload[idx] in ",[]":
+            idx += 1
+            continue
+        try:
+            obj, offset = decoder.raw_decode(payload, idx)
+        except json.JSONDecodeError:
+            idx += 1
+            continue
+        results.extend(_ensure_dict_list(obj))
+        idx = offset
+    return results or None
+
+
+def _parse_ndjson(payload: str) -> list[dict[str, object]] | None:
+    """Parse newline-delimited JSON payloads."""
+
+    results: list[dict[str, object]] = []
+    for line in payload.splitlines():
+        if not line.strip():
+            continue
+        obj = _try_parse(line)
+        if obj is None:
+            return None
+        results.extend(entry for entry in obj if isinstance(entry, dict))
+    return results or None
+
+
+def _parse_object_segments(payload: str) -> list[dict[str, object]] | None:
+    """Extract JSON objects by tracking brace depth as a last-resort parser."""
+
+    results: list[dict[str, object]] = []
+    depth = 0
+    start = -1
+    in_string = False
+    escape = False
+    for idx, char in enumerate(payload):
+        if in_string:
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = False
+            continue
+
+        if char == '"':
+            in_string = True
+            continue
+
+        if char == "{":
+            if depth == 0:
+                start = idx
+            depth += 1
+            continue
+
+        if char == "}":
+            if depth == 0:
+                continue
+            depth -= 1
+            if depth == 0 and start != -1:
+                segment = payload[start : idx + 1]
+                segment = _remove_lonely_bracket_lines(segment)
+                try:
+                    parsed = json.loads(segment)
+                except json.JSONDecodeError:
+                    start = -1
+                    continue
+                if isinstance(parsed, dict):
+                    results.append(parsed)
+                start = -1
+            continue
+
+    return results or None
+
+
+def _ensure_dict_list(obj: object) -> list[dict[str, object]]:
+    """Return a list of dictionaries extracted from obj."""
+
+    if isinstance(obj, dict):
+        return [obj]
+    if isinstance(obj, list):
+        return [entry for entry in obj if isinstance(entry, dict)]
+    return []
+
+
+def _log_parse_failure(payload: str) -> None:
+    """Persist payload to temporary file and raise RuntimeError."""
+
+    snippet = payload[:500]
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="skelly_pw_dump_", suffix=".json", delete=False
+        ) as tmp_file:
+            tmp_file.write(payload.encode("utf-8", errors="replace"))
+            tmp_path = tmp_file.name
+    except OSError as exc:
+        _LOGGER.error(
+            "Failed to parse pw-dump output and could not save debug payload: %s",
+            exc,
+        )
+        _LOGGER.error("pw-dump payload snippet: %s", snippet)
+    else:
+        _LOGGER.error("Failed to parse pw-dump output; payload saved to %s", tmp_path)
+
+    raise RuntimeError("Failed to parse pw-dump output")
