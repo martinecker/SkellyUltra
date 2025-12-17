@@ -63,6 +63,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._file_list: list[Any] = []
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
+        self._was_connected = False
+        self._pending_state_push = False
+        self._pending_state_push_attempts = 0
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def async_update_data_optimistic(self, key: str, value: Any) -> None:
@@ -192,6 +195,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
         await super().async_request_refresh()
 
     async def _async_update_data(self) -> Any:
+        # Logic to ensure we push state to device on first connection or on reconnect after a disconnect
+        if not self._was_connected and self.adapter.client.is_connected:
+            self._pending_state_push = True
+            self._pending_state_push_attempts = 0
+
+        self._was_connected = self.adapter.client.is_connected
+
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
             self._logger.debug("Coordinator updates paused - skipping poll")
@@ -485,6 +495,26 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         self.async_request_refresh(force_immediate=True)
                     )
 
+                if (
+                    not optimistic_update_occurred
+                    and self._pending_state_push
+                    and self.adapter.client.is_connected
+                ):
+                    try:
+                        await self._async_push_state_to_device(result_data)
+                        self._pending_state_push = False
+                        self._pending_state_push_attempts = 0
+                        self._logger.debug(
+                            "Finished pushing coordinator state to device after connection"
+                        )
+                    except Exception:
+                        self._pending_state_push_attempts += 1
+                        self._logger.exception(
+                            "Failed to push coordinator state to device (attempt %d)",
+                            self._pending_state_push_attempts,
+                        )
+                        # Keep pending flag true to retry on the next successful update
+
                 return result_data
 
             except Exception:
@@ -492,3 +522,91 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed("Failed to update Skelly data") from None
             else:
                 return data
+
+    async def _async_push_state_to_device(self, state: dict[str, Any]) -> None:
+        """Push selected coordinator state back to the device after connection."""
+
+        # Skip if we don't have a connection to write to
+        if not self.adapter.client.is_connected:
+            self._logger.debug("Skipping state push - client not connected")
+            return
+
+        volume = state.get("volume")
+        if volume is not None:
+            try:
+                await self.adapter.client.set_volume(int(volume))
+            except Exception:
+                self._logger.debug("Failed to push volume to device", exc_info=True)
+
+        eye_icon = state.get("eye_icon")
+        if eye_icon is not None:
+            try:
+                await self.adapter.client.set_eye_icon(int(eye_icon))
+            except Exception:
+                self._logger.debug("Failed to push eye icon to device", exc_info=True)
+
+        action = state.get("action")
+        if action is not None:
+            try:
+                await self.adapter.client.set_action(int(action))
+            except Exception:
+                self._logger.debug(
+                    "Failed to push action bitfield to device", exc_info=True
+                )
+
+        lights = state.get("lights") or []
+        for index, light_state in enumerate(lights):
+            if not isinstance(light_state, dict):
+                continue
+
+            rgb = light_state.get("rgb")
+            color_cycle = light_state.get("color_cycle")
+            if rgb is not None:
+                try:
+                    r, g, b = (int(rgb[0]), int(rgb[1]), int(rgb[2]))
+                    await self.adapter.client.set_light_rgb(
+                        index,
+                        r,
+                        g,
+                        b,
+                        int(color_cycle) if color_cycle is not None else 0,
+                    )
+                except Exception:
+                    self._logger.debug(
+                        "Failed to push RGB for light channel %d", index, exc_info=True
+                    )
+
+            brightness = light_state.get("brightness")
+            if brightness is not None:
+                try:
+                    await self.adapter.client.set_light_brightness(
+                        index, int(brightness)
+                    )
+                except Exception:
+                    self._logger.debug(
+                        "Failed to push brightness for light channel %d",
+                        index,
+                        exc_info=True,
+                    )
+
+            effect_type = light_state.get("effect_type")
+            if effect_type is not None:
+                try:
+                    await self.adapter.client.set_light_mode(index, int(effect_type))
+                except Exception:
+                    self._logger.debug(
+                        "Failed to push effect mode for light channel %d",
+                        index,
+                        exc_info=True,
+                    )
+
+            effect_speed = light_state.get("effect_speed")
+            if effect_speed is not None:
+                try:
+                    await self.adapter.client.set_light_speed(index, int(effect_speed))
+                except Exception:
+                    self._logger.debug(
+                        "Failed to push effect speed for light channel %d",
+                        index,
+                        exc_info=True,
+                    )
