@@ -706,10 +706,7 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
             return
 
         # Update coordinator cache
-        new_data = dict(self.coordinator.data or {})
-        new_data["volume"] = volume_percent
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("volume", volume_percent)
 
         self.async_write_ha_state()
 

@@ -154,17 +154,14 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 pass
             else:
                 # push optimistic rgb into coordinator cache
-                new_data = dict(self.coordinator.data or {})
-                lights = list(new_data.get("lights") or [{}, {}])
+                data = self.coordinator.data or {}
+                lights = list(data.get("lights") or [{}, {}])
                 # ensure list has at least channels 0 and 1
                 while len(lights) <= self._channel:
                     lights.append({})
+                lights[self._channel] = dict(lights[self._channel])
                 lights[self._channel]["rgb"] = (r, g, b)
-                with contextlib.suppress(Exception):
-                    # update cache and avoid immediate refresh here
-                    self.coordinator.async_set_updated_data(
-                        {**new_data, "lights": lights}
-                    )
+                self.coordinator.async_update_data_optimistic("lights", lights)
 
         # Determine brightness to set. If explicit brightness provided,
         # use that. Otherwise, use last-known brightness from the
@@ -196,15 +193,13 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 pass
             else:
                 # push optimistic brightness into coordinator cache
-                new_data = dict(self.coordinator.data or {})
-                lights = list(new_data.get("lights") or [{}, {}])
+                data = self.coordinator.data or {}
+                lights = list(data.get("lights") or [{}, {}])
                 while len(lights) <= self._channel:
                     lights.append({})
+                lights[self._channel] = dict(lights[self._channel])
                 lights[self._channel]["brightness"] = int(desired_brightness)
-                with contextlib.suppress(Exception):
-                    self.coordinator.async_set_updated_data(
-                        {**new_data, "lights": lights}
-                    )
+                self.coordinator.async_update_data_optimistic("lights", lights)
 
         if brightness is not None and client:
             try:
@@ -214,16 +209,13 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 pass
             else:
                 # push optimistic brightness into coordinator cache
-                new_data = dict(self.coordinator.data or {})
-                lights = list(new_data.get("lights") or [{}, {}])
+                data = self.coordinator.data or {}
+                lights = list(data.get("lights") or [{}, {}])
                 while len(lights) <= self._channel:
                     lights.append({})
+                lights[self._channel] = dict(lights[self._channel])
                 lights[self._channel]["brightness"] = int(brightness)
-                with contextlib.suppress(Exception):
-                    # update cache and avoid immediate refresh here
-                    self.coordinator.async_set_updated_data(
-                        {**new_data, "lights": lights}
-                    )
+                self.coordinator.async_update_data_optimistic("lights", lights)
 
         # If no brightness provided but turning on, set on=True
         # No local state is kept; coordinator cache update will drive
@@ -245,12 +237,12 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
 
         self.async_write_ha_state()
         # reflect optimistic off state in coordinator cache
-        new_data = dict(self.coordinator.data or {})
-        lights = list(new_data.get("lights") or [{}, {}])
+        data = self.coordinator.data or {}
+        lights = list(data.get("lights") or [{}, {}])
         while len(lights) <= self._channel:
             lights.append({})
+        lights[self._channel] = dict(lights[self._channel])
         lights[self._channel]["brightness"] = 0
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data({**new_data, "lights": lights})
+        self.coordinator.async_update_data_optimistic("lights", lights)
         with contextlib.suppress(Exception):
             await self.coordinator.async_request_refresh()

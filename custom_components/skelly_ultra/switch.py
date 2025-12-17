@@ -353,15 +353,13 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
             )
 
             # Push optimistic value into coordinator cache
-            new_data = dict(self.coordinator.data or {})
-            lights = list(new_data.get("lights", [{}, {}]))
+            data = self.coordinator.data or {}
+            lights = list(data.get("lights", [{}, {}]))
             if self.channel < len(lights):
                 light_data = dict(lights[self.channel])
                 light_data["color_cycle"] = color_cycle_value
                 lights[self.channel] = light_data
-                new_data["lights"] = lights
-                with contextlib.suppress(Exception):
-                    self.coordinator.async_set_updated_data(new_data)
+                self.coordinator.async_update_data_optimistic("lights", lights)
 
             self.async_write_ha_state()
 
@@ -500,10 +498,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
                 await self.coordinator.adapter.client.set_action(new_action)
 
                 # Push optimistic value into coordinator cache
-                new_data = dict(self.coordinator.data or {})
-                new_data["action"] = new_action
-                with contextlib.suppress(Exception):
-                    self.coordinator.async_set_updated_data(new_data)
+                self.coordinator.async_update_data_optimistic("action", new_action)
 
                 self.async_write_ha_state()
 
@@ -554,19 +549,13 @@ class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Enable chunk size override."""
         _LOGGER.debug("Enabling chunk size override")
-        new_data = dict(self.coordinator.data or {})
-        new_data["override_chunk_size"] = True
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("override_chunk_size", True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable chunk size override."""
         _LOGGER.debug("Disabling chunk size override")
-        new_data = dict(self.coordinator.data or {})
-        new_data["override_chunk_size"] = False
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("override_chunk_size", False)
         self.async_write_ha_state()
 
 
@@ -601,17 +590,11 @@ class SkellyOverrideBitrateSwitch(CoordinatorEntity, SwitchEntity):
     async def async_turn_on(self, **kwargs) -> None:
         """Enable bitrate override."""
         _LOGGER.debug("Enabling bitrate override")
-        new_data = dict(self.coordinator.data or {})
-        new_data["override_bitrate"] = True
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("override_bitrate", True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disable bitrate override."""
         _LOGGER.debug("Disabling bitrate override")
-        new_data = dict(self.coordinator.data or {})
-        new_data["override_bitrate"] = False
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("override_bitrate", False)
         self.async_write_ha_state()

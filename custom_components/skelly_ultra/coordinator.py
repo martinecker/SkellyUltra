@@ -62,7 +62,21 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._updates_paused = False
         self._file_list: list[Any] = []
         self._initial_update_done = False
+        self._data_counters: dict[str, int] = {}
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    def async_update_data_optimistic(self, key: str, value: Any) -> None:
+        """Update coordinator data optimistically and increment version counter.
+
+        This should be called by entities when they send a command to the device
+        and want to update the state immediately without waiting for the next poll.
+        """
+        self._data_counters[key] = self._data_counters.get(key, 0) + 1
+
+        new_data = dict(self.data or {})
+        new_data[key] = value
+
+        self.async_set_updated_data(new_data)
 
     def notify_done_initializing(self) -> None:
         """Notifies the coordinator that device initialization started in async_setup_entry is done."""
@@ -199,6 +213,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
+            # Capture counters before starting the update to detect optimistic updates
+            # that happen while we are querying the device.
+            start_counters = self._data_counters.copy()
+
             self._logger.debug("Coordinator polling Skelly device for updates")
 
             try:
@@ -433,6 +451,42 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     self._initial_update_done = True
                     # Schedule file list refresh as background task to not block coordinator update
                     self.hass.async_create_task(self.async_refresh_file_list())
+
+                # Merge fetched data with existing data, respecting optimistic updates
+                result_data = dict(self.data or {})
+                optimistic_update_occurred = False
+
+                for key, value in data.items():
+                    current_counter = self._data_counters.get(key, 0)
+                    start_counter = start_counters.get(key, 0)
+
+                    if current_counter == start_counter:
+                        # No optimistic update occurred for this key, use fetched value
+                        result_data[key] = value
+                        # Increment counter to mark this as a new version
+                        self._data_counters[key] = current_counter + 1
+                    else:
+                        # Optimistic update occurred, discard fetched value and keep existing
+                        optimistic_update_occurred = True
+                        self._logger.debug(
+                            "Optimistic update detected for key %s (counter %d != %d), discarding fetched value",
+                            key,
+                            current_counter,
+                            start_counter,
+                        )
+
+                if optimistic_update_occurred:
+                    self._logger.debug(
+                        "Optimistic updates occurred during poll, scheduling immediate refresh"
+                    )
+                    # Schedule another refresh to get the authoritative state
+                    # We use a task to avoid blocking the current update completion
+                    self.hass.async_create_task(
+                        self.async_request_refresh(force_immediate=True)
+                    )
+
+                return result_data
+
             except Exception:
                 self._logger.exception("Coordinator update failed")
                 raise UpdateFailed("Failed to update Skelly data") from None

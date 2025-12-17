@@ -96,11 +96,7 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
 
         # Push optimistic value into coordinator cache so all entities
         # driven by the coordinator update instantly reflect the change.
-        new_data = dict(self.coordinator.data or {})
-        new_data["volume"] = int(value)
-        # Update coordinator cache and notify listeners
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("volume", int(value))
 
         # UI will be updated via coordinator cache update above; write state
         # locally as well to ensure immediate HA entity update
@@ -203,15 +199,13 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
             return
 
         # Push optimistic value into coordinator cache (store device value)
-        new_data = dict(self.coordinator.data or {})
-        lights = list(new_data.get("lights", [{}, {}]))
+        data = self.coordinator.data or {}
+        lights = list(data.get("lights", [{}, {}]))
         if self.channel < len(lights):
             light_data = dict(lights[self.channel])
             light_data["effect_speed"] = device_speed
             lights[self.channel] = light_data
-            new_data["lights"] = lights
-            with contextlib.suppress(Exception):
-                self.coordinator.async_set_updated_data(new_data)
+            self.coordinator.async_update_data_optimistic("lights", lights)
 
         self.async_write_ha_state()
 
@@ -300,9 +294,6 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
             return
 
         # Store the override value
-        new_data = dict(data)
-        new_data["chunk_size_override"] = int(value)
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("chunk_size_override", int(value))
 
         self.async_write_ha_state()

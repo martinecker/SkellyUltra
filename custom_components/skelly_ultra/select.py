@@ -136,12 +136,7 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         # Push optimistic value into the coordinator cache so other
         # CoordinatorEntity consumers see the update immediately, then
         # request a refresh to get authoritative state from the device.
-        new_data = dict(self.coordinator.data or {})
-        new_data["eye_icon"] = icon_index
-        with contextlib.suppress(Exception):
-            # update cache and notify listeners; do not immediately refresh
-            # the coordinator to avoid overwriting the optimistic value.
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("eye_icon", icon_index)
 
         self.async_write_ha_state()
 
@@ -235,15 +230,13 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
             return
 
         # Push optimistic value into the coordinator cache
-        new_data = dict(self.coordinator.data or {})
-        lights = list(new_data.get("lights", [{}, {}]))
+        data = self.coordinator.data or {}
+        lights = list(data.get("lights", [{}, {}]))
         if self.channel < len(lights):
             light_data = dict(lights[self.channel])
             light_data["effect_type"] = effect_type
             lights[self.channel] = light_data
-            new_data["lights"] = lights
-            with contextlib.suppress(Exception):
-                self.coordinator.async_set_updated_data(new_data)
+            self.coordinator.async_update_data_optimistic("lights", lights)
 
         self.async_write_ha_state()
 
@@ -322,9 +315,6 @@ class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
             return
 
         # Store the override value
-        new_data = dict(data)
-        new_data["bitrate_override"] = option
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
+        self.coordinator.async_update_data_optimistic("bitrate_override", option)
 
         self.async_write_ha_state()
