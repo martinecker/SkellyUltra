@@ -99,7 +99,7 @@ async def resolve_bluez_output_node(
 
     for attempt in range(1, attempts + 1):
         node = await _query_pipewire_for_node(
-            node_candidates, fragments, compact_fragments
+            node_candidates, fragments, compact_fragments, attempt
         )
         if node:
             return node
@@ -112,10 +112,11 @@ async def _query_pipewire_for_node(
     node_candidates: tuple[str, ...],
     fragments: tuple[str, ...],
     compact_fragments: tuple[str, ...],
+    attempt: int,
 ) -> str | None:
     """Run pw-dump and search for a matching bluez_output node."""
 
-    dump = await _run_pw_dump()
+    dump, payload = await _run_pw_dump()
     if not dump:
         return None
 
@@ -134,17 +135,133 @@ async def _query_pipewire_for_node(
         node_name = props.get("node.name")
         if not isinstance(node_name, str):
             continue
+
         if node_candidates and node_name in node_candidates:
-            return node_name
+            if _has_playback_port(dump, node_name, payload) or _is_playback_sink(props):
+                return node_name
+            _LOGGER.debug(
+                "pw resolve: candidate match %s has no playback ports (attempt %s)",
+                node_name,
+                attempt,
+            )
+            continue
+
         if not node_name.startswith("bluez_output"):
             continue
+
         if _matches(node_name, fragments, compact_fragments):
-            return node_name
-        description = props.get("device.description")
-        if isinstance(description, str):
-            if _matches(description, (), compact_fragments):
+            if _has_playback_port(dump, node_name, payload) or _is_playback_sink(props):
                 return node_name
+            _LOGGER.debug(
+                "pw resolve: matched fragments for %s but no playback ports (attempt %s)",
+                node_name,
+                attempt,
+            )
+
+        description = props.get("device.description")
+        if isinstance(description, str) and _matches(
+            description, (), compact_fragments
+        ):
+            if _has_playback_port(dump, node_name, payload) or _is_playback_sink(props):
+                return node_name
+            _LOGGER.debug(
+                "pw resolve: matched description for %s but no playback ports (attempt %s)",
+                node_name,
+                attempt,
+            )
+
     return None
+
+
+def _has_playback_port(
+    entries: list[dict[str, object]], node_name: str, payload: str | None
+) -> bool:
+    """Return True if any port entry provides playback for the node."""
+
+    seen_ports: list[str] = []
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        entry_type = entry.get("type")
+        if not isinstance(entry_type, str) or "Port" not in entry_type:
+            continue
+        info = entry.get("info")
+        if not isinstance(info, dict):
+            continue
+        props = info.get("props") or info.get("properties")
+        if not isinstance(props, dict):
+            continue
+        port_node = props.get("node.name")
+        object_path = props.get("object.path")
+        direction = props.get("port.direction")
+        port_name = props.get("port.name")
+
+        if isinstance(port_node, str) and port_node != node_name:
+            continue
+
+        if isinstance(object_path, str) and object_path.startswith(node_name):
+            # Keep a short record for debug if we miss playback below
+            if isinstance(port_name, str) or isinstance(direction, str):
+                seen_ports.append(
+                    f"{object_path} direction={direction!s} name={port_name!s}"
+                )
+
+            if ":playback" in object_path:
+                return True
+
+    if seen_ports:
+        _LOGGER.debug(
+            "pw resolve: ports for %s but none playback: %s", node_name, seen_ports
+        )
+    else:
+        _LOGGER.debug("pw resolve: no ports found for %s", node_name)
+
+    if payload and _has_playback_port_from_payload(payload, node_name):
+        return True
+    return False
+
+
+def _has_playback_port_from_payload(payload: str, node_name: str) -> bool:
+    """Scan raw pw-dump payload for playback ports belonging to node."""
+
+    matches: list[str] = []
+    for match in re.finditer(r'"object\.path"\s*:\s*"([^"]+)"', payload):
+        path = match.group(1)
+        if not path.startswith(node_name):
+            continue
+        matches.append(path)
+        if ":playback" in path:
+            return True
+
+    if matches:
+        _LOGGER.debug(
+            "pw resolve: raw payload paths for %s but none playback: %s",
+            node_name,
+            matches,
+        )
+    else:
+        _LOGGER.debug("pw resolve: raw payload has no paths for %s", node_name)
+
+    return False
+
+
+def _is_playback_sink(props: dict[str, object]) -> bool:
+    """Return True if the node props look like an A2DP sink."""
+
+    media_class = props.get("media.class")
+    if isinstance(media_class, str) and media_class.lower() == "audio/sink":
+        return True
+
+    profile = props.get("api.bluez5.profile")
+    if isinstance(profile, str) and profile.lower() == "a2dp-sink":
+        return True
+
+    factory_name = props.get("factory.name")
+    if isinstance(factory_name, str) and "a2dp" in factory_name.lower():
+        return True
+
+    return False
 
 
 def _matches(
@@ -167,8 +284,8 @@ def _matches(
     return False
 
 
-async def _run_pw_dump() -> list[dict[str, object]]:
-    """Execute pw-dump and return decoded JSON output."""
+async def _run_pw_dump() -> tuple[list[dict[str, object]], str]:
+    """Execute pw-dump and return decoded JSON output with raw payload."""
 
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -192,7 +309,7 @@ async def _run_pw_dump() -> list[dict[str, object]]:
 
     payload = stdout.decode(errors="replace").strip()
     if not payload:
-        return []
+        return [], payload
 
     payload = _remove_lonely_bracket_lines(payload)
 
@@ -221,7 +338,7 @@ async def _run_pw_dump() -> list[dict[str, object]]:
         _log_parse_failure(payload)
 
     assert data is not None
-    return _extend_with_text_nodes(data, payload)
+    return _extend_with_text_nodes(data, payload), payload
 
 
 def _try_parse(content: str) -> list[dict[str, object]] | None:

@@ -879,9 +879,11 @@ class BluetoothManager:
 
         while self._scanner_running:
             try:
+                # Validate connected devices first to catch stale connections quickly
+                await self._async_validate_connected_devices()
+
                 # Scan and update cache
                 await self._scan_and_update_cache(scan_duration=15.0, stop_scan=True)
-                await self._async_validate_connected_devices()
 
                 # Wait before next scan cycle
                 await asyncio.sleep(5)
@@ -913,7 +915,11 @@ class BluetoothManager:
 
             node_ok = False
             try:
-                node_ok = bool(await resolve_bluez_output_node(normalized_mac))
+                # Use attempts=1 to fail fast for existing connections; if the node
+                # is missing, the device is likely already disconnected or in a bad state.
+                node_ok = bool(
+                    await resolve_bluez_output_node(normalized_mac, attempts=1)
+                )
             except RuntimeError as exc:
                 _LOGGER.debug(
                     "PipeWire node lookup failed for %s (%s): %s",
