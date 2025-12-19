@@ -77,7 +77,12 @@ class SkellyClientAdapter:
         """Remember the desired live-mode state so it can be restored later."""
         self._live_mode_should_connect = should_connect
 
-    async def _restore_live_mode_if_needed(self) -> None:
+    @property
+    def live_mode_should_connect(self) -> bool:
+        """Return True if live mode should be restored when possible."""
+        return self._live_mode_should_connect
+
+    async def restore_live_mode_if_needed(self) -> None:
         """Reconnect live mode if it was previously on."""
         if not self._live_mode_should_connect:
             return
@@ -273,7 +278,7 @@ class SkellyClientAdapter:
         except Exception:
             self._logger.exception("Failed to enable classic Bluetooth")
 
-        await self._restore_live_mode_if_needed()
+        await self.restore_live_mode_if_needed()
 
         return True
 

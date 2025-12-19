@@ -336,6 +336,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
                             )
                             # Disconnect on our side to sync state
                             await self.adapter.disconnect_live_mode()
+
+                            # If user prefers live mode on, attempt to restore it
+                            if self.adapter.live_mode_should_connect:
+                                await self.adapter.restore_live_mode_if_needed()
                         else:
                             self._logger.debug(
                                 "Live mode device %s is still connected to REST server",
