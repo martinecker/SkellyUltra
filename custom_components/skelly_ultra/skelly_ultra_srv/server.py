@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -9,7 +10,7 @@ import tempfile
 
 from aiohttp import web
 
-from .audio_player import AudioPlayer
+from .audio_player import AudioPlayer, PlayResult
 from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager, DeviceInfo
 
@@ -90,6 +91,20 @@ class SkellyUltraServer:
             "adapter_path": device.adapter_path if device else None,
             "pipewire_node": device.pipewire_node if device else None,
         }
+
+    async def _disconnect_targets(self, macs: list[str]) -> None:
+        """Best-effort disconnect for targets after playback failure."""
+
+        for mac in macs:
+            try:
+                await self.bt_manager.disconnect(mac)
+            except (OSError, RuntimeError, asyncio.CancelledError) as exc:
+                _LOGGER.debug(
+                    "Failed to disconnect target %s after playback failure: %s",
+                    mac,
+                    exc,
+                    exc_info=True,
+                )
 
     def _validate_connected_targets(self, targets: list[str] | None) -> str | None:
         """Return an error message if any requested targets are disconnected."""
@@ -667,9 +682,24 @@ class SkellyUltraServer:
                 return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received play request for uploaded file: %s", filename)
-            success = await self.audio_player.play(
+            play_result = await self.audio_player.play(
                 str(file_path), targets=final_targets
             )
+
+            success = play_result.result is PlayResult.SUCCESS
+            error: str | None = None
+
+            if play_result.result is PlayResult.TARGET_UNREACHABLE:
+                await self._disconnect_targets(play_result.unreachable_targets)
+                unreachable_sorted = sorted(set(play_result.unreachable_targets))
+                unreachable_list = ", ".join(unreachable_sorted)
+                error = (
+                    "The following devices are not reachable: " + unreachable_list
+                    if unreachable_sorted
+                    else "Playback target is not reachable"
+                )
+            elif play_result.result is PlayResult.ERROR:
+                error = "Playback failed to start"
 
             response_data = {
                 "success": success,
@@ -677,6 +707,8 @@ class SkellyUltraServer:
                 "is_playing": self.audio_player.is_playing(),
                 "sessions": self.audio_player.get_all_sessions(),
             }
+            if error:
+                response_data["error"] = error
             self._log_response("play", response_data)
             return web.json_response(response_data)
 
@@ -756,7 +788,22 @@ class SkellyUltraServer:
                 return web.json_response(response_data, status=400)
 
             _LOGGER.info("Received play_filename request for: %s", file_path)
-            success = await self.audio_player.play(file_path, targets=final_targets)
+            play_result = await self.audio_player.play(file_path, targets=final_targets)
+
+            success = play_result.result is PlayResult.SUCCESS
+            error: str | None = None
+
+            if play_result.result is PlayResult.TARGET_UNREACHABLE:
+                await self._disconnect_targets(play_result.unreachable_targets)
+                unreachable_sorted = sorted(set(play_result.unreachable_targets))
+                unreachable_list = ", ".join(unreachable_sorted)
+                error = (
+                    "The following devices are not reachable: " + unreachable_list
+                    if unreachable_sorted
+                    else "Playback target is not reachable"
+                )
+            elif play_result.result is PlayResult.ERROR:
+                error = "Playback failed to start"
 
             response_data = {
                 "success": success,
@@ -764,6 +811,8 @@ class SkellyUltraServer:
                 "is_playing": self.audio_player.is_playing(),
                 "sessions": self.audio_player.get_all_sessions(),
             }
+            if error:
+                response_data["error"] = error
             self._log_response("play_filename", response_data)
             return web.json_response(response_data)
 
@@ -820,13 +869,16 @@ class SkellyUltraServer:
             # If no target specified, stop all (target=None)
 
             _LOGGER.info("Received stop request for target: %s", target or "all")
-            success = await self.audio_player.stop(target)
+            stop_result = await self.audio_player.stop(target)
 
+            success = stop_result is PlayResult.SUCCESS
             response_data = {
                 "success": success,
                 "is_playing": self.audio_player.is_playing(),
                 "sessions": self.audio_player.get_all_sessions(),
             }
+            if not success:
+                response_data["error"] = "Failed to stop playback"
             self._log_response("stop", response_data)
             return web.json_response(response_data)
 

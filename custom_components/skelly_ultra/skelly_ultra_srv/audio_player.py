@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from enum import Enum
 import logging
 from pathlib import Path
 from typing import NamedTuple
@@ -20,6 +21,21 @@ class PlaybackSession(NamedTuple):
     target: str | None
 
 
+class PlayResult(Enum):
+    """Playback result classification."""
+
+    SUCCESS = "success"
+    TARGET_UNREACHABLE = "target_unreachable"
+    ERROR = "error"
+
+
+class PlayResponse(NamedTuple):
+    """Aggregate playback response across requested targets."""
+
+    result: PlayResult
+    unreachable_targets: list[str]
+
+
 class AudioPlayer:
     """Manager for audio playback using pw-play."""
 
@@ -32,7 +48,7 @@ class AudioPlayer:
         self,
         file_path: str,
         targets: list[str] | None = None,
-    ) -> bool:
+    ) -> PlayResponse:
         """Play an audio file using pw-play.
 
         Args:
@@ -40,27 +56,35 @@ class AudioPlayer:
             targets: List of target devices to play on
 
         Returns:
-            True if playback started successfully on at least one target, False otherwise
+            PlayResponse capturing aggregate result and unreachable targets
         """
         target_list = list(targets) if targets else [None]
 
         path = Path(file_path)
         if not path.exists():
             _LOGGER.error("Audio file does not exist: %s", file_path)
-            return False
+            return PlayResponse(PlayResult.ERROR, [])
 
         if not path.is_file():
             _LOGGER.error("Path is not a file: %s", file_path)
-            return False
+            return PlayResponse(PlayResult.ERROR, [])
 
         success_count = 0
+        unreachable: list[str] = []
         for tgt in target_list:
-            if await self._play_on_target(file_path, tgt):
+            result = await self._play_on_target(file_path, tgt)
+            if result is PlayResult.SUCCESS:
                 success_count += 1
+            elif result is PlayResult.TARGET_UNREACHABLE and tgt:
+                unreachable.append(tgt)
 
-        return success_count > 0
+        if success_count > 0:
+            return PlayResponse(PlayResult.SUCCESS, unreachable)
+        if unreachable:
+            return PlayResponse(PlayResult.TARGET_UNREACHABLE, unreachable)
+        return PlayResponse(PlayResult.ERROR, unreachable)
 
-    async def _play_on_target(self, file_path: str, target: str | None) -> bool:
+    async def _play_on_target(self, file_path: str, target: str | None) -> PlayResult:
         """Play audio on a specific target."""
         target_key = target or "default"
         await self.stop(target)
@@ -78,14 +102,14 @@ class AudioPlayer:
                         target,
                         exc,
                     )
-                    return False
+                    return PlayResult.TARGET_UNREACHABLE
 
                 if not pipewire_target:
                     _LOGGER.error(
                         "No PipeWire bluez_output node available for target: %s",
                         target,
                     )
-                    return False
+                    return PlayResult.TARGET_UNREACHABLE
 
                 cmd.extend(["--target", pipewire_target])
             cmd.extend(["--volume", "1.0"])
@@ -103,10 +127,10 @@ class AudioPlayer:
 
         except FileNotFoundError:
             _LOGGER.error("pw-play command not found. Is PipeWire installed?")
-            return False
+            return PlayResult.ERROR
         except Exception:
             _LOGGER.exception("Failed to start playback on target: %s", target_key)
-            return False
+            return PlayResult.ERROR
         else:
             task = asyncio.create_task(self._monitor_playback(target_key))
             self._background_tasks.add(task)
@@ -119,37 +143,32 @@ class AudioPlayer:
                 target_key,
                 cmd_str,
             )
-            return True
+            return PlayResult.SUCCESS
 
-    async def stop(self, target: str | None = None) -> bool:
+    async def stop(self, target: str | None = None) -> PlayResult:
         """Stop playback on specific target or all targets."""
         if target is None:
             if not self._playback_sessions:
                 _LOGGER.debug("No audio currently playing")
-                return True
+                return PlayResult.SUCCESS
 
-            success = True
+            overall_success = True
             for tgt_key in list(self._playback_sessions.keys()):
-                if not await self.stop(tgt_key if tgt_key != "default" else None):
-                    success = False
-            return success
+                result = await self.stop(tgt_key if tgt_key != "default" else None)
+                if result is not PlayResult.SUCCESS:
+                    overall_success = False
+            return PlayResult.SUCCESS if overall_success else PlayResult.ERROR
 
         target_key = target or "default"
-
-        if target_key not in self._playback_sessions:
+        session = self._playback_sessions.get(target_key)
+        if not session:
             _LOGGER.debug("No audio playing on target: %s", target_key)
-            return True
-
-        session = self._playback_sessions[target_key]
-        _LOGGER.info(
-            "Stopping playback of: %s on target: %s", session.file_path, target_key
-        )
+            return PlayResult.SUCCESS
 
         try:
             session.process.terminate()
-
             try:
-                await asyncio.wait_for(session.process.wait(), timeout=2.0)
+                await asyncio.wait_for(session.process.wait(), timeout=5)
             except TimeoutError:
                 _LOGGER.warning("Process didn't terminate gracefully, killing it")
                 session.process.kill()
@@ -157,11 +176,11 @@ class AudioPlayer:
 
         except Exception:
             _LOGGER.exception("Failed to stop playback on target: %s", target_key)
-            return False
+            return PlayResult.ERROR
         else:
             _LOGGER.info("Playback stopped successfully on target: %s", target_key)
             self._playback_sessions.pop(target_key, None)
-            return True
+            return PlayResult.SUCCESS
 
     async def _monitor_playback(self, target_key: str) -> None:
         """Monitor the playback process and clean up when it finishes."""
