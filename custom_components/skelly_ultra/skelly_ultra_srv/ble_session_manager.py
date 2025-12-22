@@ -179,6 +179,10 @@ class BLESessionManager:
                 # Clean up old devices from cache every 30 seconds
                 await asyncio.sleep(30)
 
+                _LOGGER.debug(
+                    "Background BLE scanner checking for and cleaning up stale devices"
+                )
+
                 now = datetime.now(UTC)
                 expired_devices = []
                 for address, cached in self._device_cache.items():

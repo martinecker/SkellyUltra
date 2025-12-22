@@ -180,6 +180,7 @@ class BluetoothManager:
         self._device_adapter_map: dict[str, list[str]] = {}
         self._adapter_rr_index = 0
         self._active_pairing_agent: PairingAgent | None = None
+        self._background_tasks: set[asyncio.Task] = set()
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:
@@ -449,9 +450,13 @@ class BluetoothManager:
         if not self._allow_scanner:
             _LOGGER.debug("Background scanner disabled for this instance")
             return
-        if self._scanner_task is None:
-            self._scanner_task = asyncio.create_task(self._background_scanner())
-            _LOGGER.info("Started background Bluetooth scanner")
+        self._scanner_running = True
+        if self._scanner_task and not self._scanner_task.done():
+            return
+
+        self._scanner_task = asyncio.create_task(self._background_scanner())
+        self._scanner_task.add_done_callback(self._on_scanner_task_done)
+        _LOGGER.info("Started background Bluetooth scanner")
 
     async def stop_background_scanner(self) -> None:
         """Stop background Bluetooth scanning."""
@@ -462,6 +467,25 @@ class BluetoothManager:
                 await self._scanner_task
             self._scanner_task = None
             _LOGGER.info("Stopped background Bluetooth scanner")
+
+    def _on_scanner_task_done(self, task: asyncio.Task) -> None:
+        """Restart scanner if it unexpectedly stops while allowed to run."""
+
+        if not self._allow_scanner or not self._scanner_running:
+            return
+
+        if task.cancelled():
+            _LOGGER.debug("Background scanner task cancelled")
+            return
+
+        exc = task.exception()
+        if exc:
+            _LOGGER.warning("Background scanner stopped due to error: %s", exc)
+
+        # Best effort restart
+        restart_task = asyncio.create_task(self.start_background_scanner())
+        restart_task.add_done_callback(self._background_tasks.discard)
+        self._background_tasks.add(restart_task)
 
     async def _async_get_bus(self) -> MessageBus:
         """Return a cached D-Bus system bus connection."""
@@ -877,32 +901,39 @@ class BluetoothManager:
         _LOGGER.info("Background Bluetooth scanner started")
         self._scanner_running = True
 
-        while self._scanner_running:
+        try:
+            while self._scanner_running:
+                try:
+                    # Validate connected devices first to catch stale connections quickly
+                    await self._async_validate_connected_devices()
+
+                    # Scan and update cache
+                    await self._scan_and_update_cache(
+                        scan_duration=15.0, stop_scan=True
+                    )
+
+                    # Wait before next scan cycle
+                    await asyncio.sleep(5)
+
+                except asyncio.CancelledError:
+                    _LOGGER.info("Background scanner cancelled")
+                    raise
+                except Exception:
+                    _LOGGER.exception("Error in background scanner, will retry")
+                    await asyncio.sleep(10)
+        finally:
+            # Cleanup: stop scanning
             try:
-                # Validate connected devices first to catch stale connections quickly
-                await self._async_validate_connected_devices()
+                adapter_paths = await self._async_get_adapter_paths()
+            except Exception:  # noqa: BLE001 - best-effort cleanup
+                adapter_paths = []
 
-                # Scan and update cache
-                await self._scan_and_update_cache(scan_duration=15.0, stop_scan=True)
+            for adapter_path in adapter_paths:
+                with contextlib.suppress(DBusError):
+                    adapter, _ = await self._async_get_adapter(adapter_path)
+                    await adapter.call_stop_discovery()
 
-                # Wait before next scan cycle
-                await asyncio.sleep(5)
-
-            except asyncio.CancelledError:
-                _LOGGER.info("Background scanner cancelled")
-                break
-            except (DBusError, RuntimeError):
-                _LOGGER.exception("Error in background scanner, will retry")
-                await asyncio.sleep(10)
-
-        # Cleanup: stop scanning
-        adapter_paths = await self._async_get_adapter_paths()
-        for adapter_path in adapter_paths:
-            with contextlib.suppress(DBusError):
-                adapter, _ = await self._async_get_adapter(adapter_path)
-                await adapter.call_stop_discovery()
-
-        _LOGGER.info("Background Bluetooth scanner stopped")
+            _LOGGER.info("Background Bluetooth scanner stopped")
 
     async def _async_validate_connected_devices(self) -> None:
         """Ensure tracked connections remain active at both PipeWire and DBus levels."""
