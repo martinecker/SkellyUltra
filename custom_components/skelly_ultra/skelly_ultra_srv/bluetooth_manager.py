@@ -868,10 +868,9 @@ class BluetoothManager:
                 try:
                     await adapter.call_start_discovery()
                 except DBusError as exc:
-                    if (
-                        exc.name == "org.bluez.Error.InProgress"
-                        or "in progress" in str(exc).lower()
-                    ):
+                    error_name = getattr(exc, "_dbus_error_name", "") or ""
+                    message = str(exc).lower()
+                    if "in progress" in message or "inprogress" in error_name.lower():
                         _LOGGER.debug(
                             "Adapter %s (%s) reported discovery already running: %s",
                             adapter_label,
