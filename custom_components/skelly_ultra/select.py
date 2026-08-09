@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,8 +40,6 @@ EYE_ICONS = [
     "18 Confetti",
 ]
 
-EFFECT_MODES = ["Static", "Strobe", "Pulse"]
-
 # Bitrate options for MP3 encoding
 BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
 
@@ -53,15 +51,28 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
     device_info = get_device_info(hass, entry)
+    profile = get_device_profile(entry)
 
-    async_add_entities(
-        [
-            SkellyEyeIconSelect(coordinator, entry.entry_id, device_info),
-            SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=0),
-            SkellyEffectModeSelect(coordinator, entry.entry_id, device_info, channel=1),
-            SkellyBitrateSelect(coordinator, entry.entry_id, device_info),
-        ]
-    )
+    entities: list = []
+
+    if profile["has_eye_image"]:
+        entities.append(SkellyEyeIconSelect(coordinator, entry.entry_id, device_info))
+
+    for light_cfg in profile["lights"]:
+        entities.append(
+            SkellyEffectModeSelect(
+                coordinator,
+                entry.entry_id,
+                device_info,
+                channel=light_cfg["channel"],
+                label=light_cfg["label"],
+                options=profile["light_modes"],
+            )
+        )
+
+    entities.append(SkellyBitrateSelect(coordinator, entry.entry_id, device_info))
+
+    async_add_entities(entities)
 
 
 class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
@@ -171,6 +182,8 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         entry_id: str,
         device_info: DeviceInfo | None,
         channel: int,
+        label: str,
+        options: list[str],
     ) -> None:
         """Initialize the effect mode select entity.
 
@@ -183,14 +196,18 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         device_info: DeviceInfo | None
             Device registry info for grouping entities
         channel: int
-            Light channel number (0 = Torso, 1 = Head)
+            Light channel number
+        label: str
+            Human-readable light name (e.g., "Torso Light", "Lantern")
+        options: list[str]
+            Device-specific mode names in order (index + 1 = mode value sent to device)
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.channel = channel
-        self._attr_name = "Torso Effect Mode" if channel == 0 else "Head Effect Mode"
+        self._attr_name = f"{label} Effect Mode"
         self._attr_unique_id = f"{entry_id}_effect_mode_{channel}"
-        self._options = EFFECT_MODES
+        self._options = options
         self._attr_device_info = device_info
 
     @property
@@ -208,14 +225,12 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
             if self.channel < len(lights):
                 light_data = lights[self.channel]
                 effect_type = light_data.get("effect_type")
-                # effect_type: 1 = Static, 2 = Strobe, 3 = Pulse
-                if effect_type in (1, 2, 3):
+                if effect_type and 1 <= effect_type <= len(self._options):
                     return self._options[effect_type - 1]
         return None
 
     async def async_select_option(self, option: str) -> None:
         """Handle when an option is selected in the UI."""
-        # Convert option name to effect_type number (1 = Static, 2 = Strobe, 3 = Pulse)
         try:
             effect_type = self._options.index(option) + 1
         except ValueError:

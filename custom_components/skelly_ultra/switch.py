@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +25,29 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
     device_info = get_device_info(hass, entry)
+    profile = get_device_profile(entry)
+
+    movement_switches = [
+        SkellyMovementSwitch(
+            coordinator,
+            entry.entry_id,
+            device_info,
+            part=m["part"],
+            bit_value=m["bit"],
+        )
+        for m in profile["movements"]
+    ]
+
+    color_cycle_switches = [
+        SkellyColorCycleSwitch(
+            coordinator,
+            entry.entry_id,
+            device_info,
+            channel=light_cfg["channel"],
+            label=light_cfg["label"],
+        )
+        for light_cfg in profile["lights"]
+    ]
 
     async_add_entities(
         [
@@ -38,14 +61,8 @@ async def async_setup_entry(
                 entry,
                 device_info,
             ),
-            SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=0),
-            SkellyColorCycleSwitch(coordinator, entry.entry_id, device_info, channel=1),
-            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="head"),
-            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="arm"),
-            SkellyMovementSwitch(
-                coordinator, entry.entry_id, device_info, part="torso"
-            ),
-            SkellyMovementSwitch(coordinator, entry.entry_id, device_info, part="all"),
+            *color_cycle_switches,
+            *movement_switches,
             SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, device_info),
             SkellyOverrideBitrateSwitch(coordinator, entry.entry_id, device_info),
         ]
@@ -284,6 +301,7 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
         entry_id: str,
         device_info: DeviceInfo | None,
         channel: int,
+        label: str,
     ) -> None:
         """Initialize the color cycle switch for a specific channel.
 
@@ -296,12 +314,14 @@ class SkellyColorCycleSwitch(CoordinatorEntity, SwitchEntity):
         device_info: DeviceInfo | None
             Device registry info for grouping entities
         channel: int
-            Light channel number (0 = Torso, 1 = Head)
+            Light channel number
+        label: str
+            Human-readable light name (e.g., "Torso Light", "Lantern")
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.channel = channel
-        self._attr_name = "Torso Color Cycle" if channel == 0 else "Head Color Cycle"
+        self._attr_name = f"{label} Color Cycle"
         self._attr_unique_id = f"{entry_id}_color_cycle_{channel}"
         self._attr_device_info = device_info
 
@@ -392,6 +412,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         entry_id: str,
         device_info: DeviceInfo | None,
         part: str,
+        bit_value: int,
     ) -> None:
         """Initialize the movement switch for a specific body part.
 
@@ -404,11 +425,14 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         device_info: DeviceInfo | None
             Device registry info for grouping entities
         part: str
-            Body part: "head", "arm", "torso", or "all"
+            Body part identifier (e.g., "head", "arm", "torso", "wrist", "all")
+        bit_value: int
+            Raw bitmask for this part (255 means "all")
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.part = part
+        self._bit_value = bit_value
         part_display = part.capitalize()
         self._attr_name = f"Movement {part_display}"
         self._attr_unique_id = f"{entry_id}_movement_{part}"
@@ -421,11 +445,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool:
-        """Return True if this body part's movement is enabled.
-
-        For individual parts (head/arm/torso), check if the corresponding bit is set.
-        For "all", return True only if action == 255.
-        """
+        """Return True if this body part's movement is enabled."""
         data = getattr(self.coordinator, "data", None)
         if not data:
             return False
@@ -434,18 +454,12 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         if action is None:
             return False
 
-        if self.part == "all":
+        if self._bit_value == 255:
             # "All" is on only if action is exactly 255
             return action == 255
 
         # Individual part: check corresponding bit
-        # bit 0 = head, bit 1 = arm, bit 2 = torso
-        bit_map = {"head": 0, "arm": 1, "torso": 2}
-        bit = bit_map.get(self.part)
-        if bit is None:
-            return False
-
-        return bool(action & (1 << bit))
+        return bool(action & self._bit_value)
 
     async def async_added_to_hass(self) -> None:
         """When entity is added, subscribe to coordinator updates."""
@@ -463,43 +477,18 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         try:
             # Use lock to prevent race conditions when multiple switches are toggled quickly
             async with self.coordinator.action_lock:
-                # Get current action from coordinator
                 data = getattr(self.coordinator, "data", None)
                 current_action = data.get("action", 0) if data else 0
 
-                if self.part == "all":
-                    # "All" is 255 when enabling, 0 when disabling
+                if self._bit_value == 255:
                     new_action = 255 if enable else 0
+                elif enable:
+                    new_action = current_action | self._bit_value
                 else:
-                    # Get the bit for this part
-                    bit_map = {"head": 0, "arm": 1, "torso": 2}
-                    bit = bit_map.get(self.part)
-                    if bit is None:
-                        return
+                    new_action = current_action & ~self._bit_value
 
-                    if enable:
-                        # Set the bit for this part
-                        new_action = current_action | (1 << bit)
-
-                        # Check if all three individual parts are now on
-                        # If so, send 255 instead
-                        if (new_action & 0b111) == 0b111:  # all three bits set
-                            new_action = 255
-                    else:
-                        # Clear the bit for this part
-                        new_action = current_action & ~(1 << bit)
-
-                        # If current action was 255 (all enabled), turning off one part
-                        # means we need to clear that specific bit from 0b111
-                        if current_action == 255:
-                            new_action = 0b111 & ~(1 << bit)
-
-                # Send the command
                 await self.coordinator.adapter.client.set_action(new_action)
-
-                # Push optimistic value into coordinator cache
                 self.coordinator.async_update_data_optimistic("action", new_action)
-
                 self.async_write_ha_state()
 
             # Request coordinator refresh (outside lock to avoid blocking)

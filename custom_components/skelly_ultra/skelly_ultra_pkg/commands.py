@@ -120,10 +120,10 @@ def set_music_mode(mode: int) -> bytes:
     return build_cmd(const.CMD_SET_MUSIC_MODE, int_to_hex(mode, 1))
 
 
-# Light Controls. If channel == -1 all lights are affected. Otherwise channel is 0-5, but Skelly Ultra only uses 0 and 1.
+# Light Controls. If channel == -1 all lights are affected. Otherwise channel is 0-5, but the Ultra Skelly only uses 0 and 1 and Lethal Lily only 0.
 
 
-# Sets the light mode aka Lighting Type: 1 == static, 2 == strobe, 3 == pulsing
+# Sets the light mode: Skelly=(1=static, 2=strobe, 3=pulsing), Lily=(1=flickering, 2=pulsing, 3=chasing)
 def set_light_mode(
     channel: int, mode: int, cluster: int = 0, filename: str = ""
 ) -> bytes:
@@ -131,7 +131,7 @@ def set_light_mode(
         raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
     if not 1 <= mode <= 3:
         raise ValueError(
-            f"Light mode must be 1 (static), 2 (strobe), or 3 (pulsing), got {mode}",
+            f"Light mode must be 1, 2, or 3, got {mode}",
         )
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")

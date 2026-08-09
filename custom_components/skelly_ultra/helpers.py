@@ -10,7 +10,14 @@ from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DOMAIN
+from .const import (
+    CONF_DEVICE_TYPE,
+    CONF_SERVER_URL,
+    CONF_USE_BLE_PROXY,
+    DEVICE_PROFILES,
+    DEVICE_TYPE_SKELLY,
+    DOMAIN,
+)
 
 
 class DeviceLoggerAdapter(logging.LoggerAdapter):
@@ -22,6 +29,21 @@ class DeviceLoggerAdapter(logging.LoggerAdapter):
         extra = cast(dict[str, Any], self.extra or {})
         device_name = extra.get("device_name") or "Unknown Skelly"
         return f"[{device_name}] {msg}", kwargs
+
+
+def get_device_profile(entry: ConfigEntry) -> dict:
+    """Return the DEVICE_PROFILES entry for a config entry, defaulting to Skelly."""
+    device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY)
+    return DEVICE_PROFILES.get(device_type, DEVICE_PROFILES[DEVICE_TYPE_SKELLY])
+
+
+def device_type_from_ble_name(name: str) -> str | None:
+    """Return the device type key whose ble_names substring matches name, or None."""
+    name_lower = name.lower()
+    for device_type, profile in DEVICE_PROFILES.items():
+        if any(f in name_lower for f in profile["ble_names"]):
+            return device_type
+    return None
 
 
 def build_device_identifier(
@@ -88,11 +110,14 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
     # Always use entry.title for device name, with fallback to identifier-based name
     device_name = entry.title or f"Skelly Ultra {identifier}"
 
+    profile = get_device_profile(entry)
+    model_name = profile["display_name"]
+
     return DeviceInfo(
         name=device_name,
         identifiers={(DOMAIN, identifier)},
         manufacturer="Seasonal Visions International/Home Depot",
-        model="Ultra Skelly",
+        model=model_name,
     )
 
 

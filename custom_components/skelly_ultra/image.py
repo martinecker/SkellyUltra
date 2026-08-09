@@ -20,7 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,8 +32,10 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
     device_info = get_device_info(hass, entry)
+    profile = get_device_profile(entry)
 
-    async_add_entities([SkellyEyeImage(coordinator, entry.entry_id, device_info)])
+    if profile["has_eye_image"]:
+        async_add_entities([SkellyEyeImage(coordinator, entry.entry_id, device_info)])
 
 
 class SkellyEyeImage(CoordinatorEntity, ImageEntity):

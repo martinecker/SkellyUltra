@@ -12,25 +12,28 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile
 
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ):
-    """Set up Torso and Head lights for the Skelly Ultra."""
+    """Set up lights for the configured device type."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
     device_info = get_device_info(hass, entry)
+    profile = get_device_profile(entry)
 
     async_add_entities(
         [
             SkellyChannelLight(
-                coordinator, entry.entry_id, device_info, 0, "Torso Light"
-            ),
-            SkellyChannelLight(
-                coordinator, entry.entry_id, device_info, 1, "Head Light"
-            ),
+                coordinator,
+                entry.entry_id,
+                device_info,
+                light_cfg["channel"],
+                light_cfg["label"],
+            )
+            for light_cfg in profile["lights"]
         ]
     )
 
@@ -73,7 +76,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         try:
             brightness = lights[self._channel].get("brightness")
             return (int(brightness) or 0) > 0
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             return False
 
     @property
@@ -88,7 +91,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         try:
             val = lights[self._channel].get("brightness")
             return int(val) if val is not None else None
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             return None
 
     @property
@@ -103,7 +106,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         try:
             rgb = lights[self._channel].get("rgb")
             return tuple(int(x) for x in rgb) if rgb else None
-        except (ValueError, TypeError, AttributeError):
+        except ValueError, TypeError, AttributeError:
             return None
 
     async def async_added_to_hass(self) -> None:
@@ -150,7 +153,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
 
                 # Call set_light_rgb with current loop state to preserve color cycle setting
                 await client.set_light_rgb(self._channel, r, g, b, loop)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
             else:
                 # push optimistic rgb into coordinator cache
@@ -171,7 +174,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
         if brightness is not None:
             try:
                 desired_brightness = int(brightness)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 desired_brightness = None
         else:
             # try last-known
@@ -181,7 +184,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                     desired_brightness = int(last)
                 else:
                     desired_brightness = 255
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 desired_brightness = 255
 
         if desired_brightness is not None and client:
@@ -189,7 +192,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 await client.set_light_brightness(
                     self._channel, int(desired_brightness)
                 )
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
             else:
                 # push optimistic brightness into coordinator cache
@@ -205,7 +208,7 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
             try:
                 # brightness already 0-255 range
                 await client.set_light_brightness(self._channel, int(brightness))
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 pass
             else:
                 # push optimistic brightness into coordinator cache

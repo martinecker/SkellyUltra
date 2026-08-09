@@ -1,16 +1,17 @@
 {
   "config": {
     "error": {
-      "bluetooth_integration_required": "Bluetooth integration is required to configure Skelly Ultra",
+      "bluetooth_integration_required": "Bluetooth integration is required to configure this device",
       "no_devices_found": "No devices found",
       "rest_server_unreachable": "Cannot connect to Skelly Ultra REST server. Please ensure the server is running at the specified URL.",
       "rest_server_error": "REST server returned an error. Please check the server is running correctly.",
       "address_required": "Device address is required in manual mode"
     },
     "step": {
-      "user": {
-        "title": "Configure Skelly Ultra",
+      "connection": {
+        "title": "Configure Device Connection",
         "data": {
+          "device_type": "Device type",
           "use_ble_proxy": "Use BLE proxy mode",
           "mode": "Configuration mode",
           "address": "Bluetooth address",
@@ -18,9 +19,10 @@
           "server_url": "REST server URL"
         },
         "data_description": {
+          "device_type": "Choose the type of Halloween prop you are adding. When scanning, the type is detected automatically from the device name.",
           "use_ble_proxy": "Enable this to connect via REST server instead of direct BLE (useful for remote access or systems without BLE hardware)",
           "mode": "Choose 'scan' to discover nearby devices, or 'manual' to enter the address directly",
-          "address": "MAC address of the Skelly device (required in manual mode, optional when scanning)",
+          "address": "MAC address of the device (required in manual mode, optional when scanning)",
           "server_url": "URL of the Skelly Ultra REST server. Required for proxy mode and live mode features (default: http://localhost:8765)"
         }
       },
@@ -48,7 +50,7 @@
   "services": {
     "enable_classic_bt": {
       "name": "Enable classic Bluetooth",
-      "description": "Make the Skelly Ultra expose a classic Bluetooth speaker to connect to for live mode."
+      "description": "Make the device expose a classic Bluetooth speaker to connect to for live mode."
     },
     "play_file": {
       "name": "Play file",
@@ -90,11 +92,11 @@
     },
     "delete_file": {
       "name": "Delete file",
-      "description": "Delete a file from the Skelly device's internal storage. The file can be specified either by file_index and cluster (both required), or by filename. The service will refresh the file list before and after the delete operation.",
+      "description": "Delete a file from the device's internal storage. The file can be specified either by file_index and cluster (both required), or by filename. The service will refresh the file list before and after the delete operation.",
       "fields": {
         "device_id": {
           "name": "Device ID",
-          "description": "The device registry ID of the Skelly device to target."
+          "description": "The device registry ID of the device to target."
         },
         "entity_id": {
           "name": "Entity ID",

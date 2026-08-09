@@ -1,6 +1,6 @@
 # 🖥️ Skelly Ultra REST Server
 
-A Python REST API server using aiohttp for managing Bluetooth Classic device connections and audio playback for the Home Depot Ultra Skelly Halloween animatronic.
+A Python REST API server using aiohttp for managing Bluetooth Classic device connections and audio playback for the Home Depot Ultra Skelly and Lethal Lily Halloween animatronics. The server can also optionally act as BLE proxy.
 
 ## 📑 Table of Contents
 
@@ -21,14 +21,14 @@ A Python REST API server using aiohttp for managing Bluetooth Classic device con
 
 This server is designed to work around limitations of managing Bluetooth Classic audio devices from within Home Assistant containers. It provides a REST API interface to:
 
-- 📡 Connect and pair with Bluetooth Classic devices (the speaker inside the Skelly animatronic)
+- 📡 Connect and pair with Bluetooth Classic devices (the speaker inside the animatronic)
 - 🎵 Play audio files through connected devices
-- 🔗 **Manage multiple device connections simultaneously** - connect to and control multiple Skelly devices at once
+- 🔗 **Manage multiple device connections simultaneously** - connect to and control multiple devices at once
 
-The server can also act as a BLE proxy to control the BLE device in one or more Skelly devices. It can:
+The server can also act as a BLE proxy to control the BLE device in one or more devices. It can:
 
-- Forward raw BLE command bytes sent from clients to the Skelly.
-- Receive and buffer raw notification bytes from the Skelly that can be polled by clients.
+- Forward raw BLE command bytes sent from clients to the device.
+- Receive and buffer raw notification bytes from the device that can be polled by clients.
 
 For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 
@@ -797,7 +797,7 @@ Get comprehensive status information including all connected devices and their p
 
 ## 🔷 BLE Proxy Endpoints
 
-These endpoints enable remote BLE communication, allowing clients without BLE hardware to control Skelly Ultra devices through this server. The server acts as a BLE proxy, forwarding raw command bytes and buffering raw notification bytes.
+These endpoints enable remote BLE communication, allowing clients without BLE hardware to control the Halloween prop BLE devices through this server. The server acts as a BLE proxy, forwarding raw command bytes and buffering raw notification bytes.
 
 **Use Case:** Run this server on a machine with BLE hardware (e.g., Raspberry Pi), and control devices from Home Assistant running in a container or on a different machine.
 
@@ -876,17 +876,17 @@ curl -s "http://localhost:8765/ble/scan_devices?name_filter=Skelly" | jq
 
 **Use Cases:**
 
-- Find your Skelly's MAC address if unknown
-- Verify Skelly is advertising and visible to the server
+- Find your Halloween prop's MAC address if unknown
+- Verify the device is advertising and visible to the server
 - Debug BLE connectivity issues
-- Discover multiple Skelly devices in range
+- Discover multiple devices in range
 - Monitor BLE device availability
 
 ### 🔗 POST /ble/connect
 
 **Connect to a BLE device and create a proxy session.**
 
-This endpoint discovers and connects to a Skelly Ultra BLE device, then creates a session for sending commands and receiving notifications.
+This endpoint discovers and connects to a Halloween prop BLE device, then creates a session for sending commands and receiving notifications.
 
 **Request Body:**
 
@@ -1442,19 +1442,18 @@ curl http://localhost:8765/classic/status
 - **Scan timeout**: 5 seconds
 - **Connection timeout**: 30 seconds
 
-These can be modified in the `SkellyUltraServer` class initialization.
-
 ## 🏗️ Architecture
 
-The server consists of three main components:
+The server consists of these main components:
 
 1. **server.py**: Main REST API server using aiohttp
-2. **bluetooth_manager.py**: Manages Bluetooth connections using bluetoothctl
+2. **bluetooth_manager.py**: Manages Bluetooth connections using D-Bus
 3. **audio_player.py**: Manages audio playback using pw-play (PipeWire)
+4. **ble_session_manager.py**: Manages sessions for BLE proxy connections
 
 ## 📝 Notes
 
-- The server uses bluetoothctl in interactive mode to handle pairing and connections
+- The server uses D-Bus with sudo to elevate privileges to handle pairing (sudo not required after pairing)
 - Audio playback uses PipeWire's pw-play command for streaming
 - The server is designed to run outside of the Home Assistant container to have direct access to the host's Bluetooth stack
 - Multiple devices can be connected and controlled simultaneously

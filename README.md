@@ -1,6 +1,6 @@
 # 💀 Skelly Ultra Integration
 
-Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic BLE device.
+Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic and 7 ft Lethal Lily animatronic witch BLE devices.
 
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
 
@@ -28,15 +28,16 @@ There is a companion project that provides a fully web browser-based controller 
 
 ## ✨ Features
 
+Both devices share these features:
+
 - 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
-- 💡 **Light entities**: RGB lighting control for Torso and Head channels
+- 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly) or Lantern (Lethal Lily)
 - 🔌 **Switch entities**:
   - Live Mode (enables classic Bluetooth speaker)
-  - Color Cycle (rainbow effect for Torso and Head lights)
-  - Movement controls (Head, Arm, Torso, and All body parts)
-- 🎚️ **Number entities**: Volume control, effect speed (for Torso and Head)
-- 🎨 **Select entities**: Eye icon selection, effect mode (Static/Strobe/Pulse for Torso and Head)
-- 🖼️ **Image entities**: Eye icon preview
+  - Color Cycle (rainbow effect per light channel)
+  - Movement controls — Head/Arm/Torso/All (Ultra Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
+- 🎚️ **Number entities**: Volume control, effect speed per light channel
+- 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
 - 🎵 **Media Player entities**:
   - **Live Mode Speaker**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
     - Supports TTS (Text-to-Speech) services
@@ -47,6 +48,11 @@ There is a companion project that provides a fully web browser-based controller 
     - File metadata available as entity attributes
     - Select files by name
 - ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
+
+Ultra Skelly only:
+
+- 🎨 **Select entities**: Eye icon selection (18 options)
+- 🖼️ **Image entities**: Eye icon preview
 
 ## 📋 Prerequisites
 
@@ -94,11 +100,16 @@ If you prefer not to run the REST server allowing it elevated root privileges fo
 
 1. **First, add the integration in Home Assistant** (see Installation section below)
 2. **Turn on the "Live Mode" switch** in Home Assistant
-   - This tells the Skelly device to enable its Bluetooth speaker
+   - This tells the device to enable its Bluetooth speaker
    - The switch will likely turn off again because pairing hasn't been completed yet - **this is expected**
    - Alternatively, you can call the `skelly_ultra.enable_classic_bt` service
 
-The Skelly device will now be discoverable via Bluetooth as `<Device Name>(Live)`. For example, if your device is named "Animated Skelly" (the default), it will appear as **"Animated Skelly(Live)"**.
+The device will now be discoverable via Bluetooth as `<Device Name>(Live)`. The exact name depends on the BLE device name, unless you manually changed it, and defaults to:
+
+| Device | BLE name (old firmware) | BLE name (current firmware) | Classic BT live name |
+|---|---|---|---|
+| Ultra Skelly | Animated Skelly | Ultra Skelly v2 | Animated Skelly(Live) or Ultra Skelly v2(Live) |
+| Lethal Lily | — | Lethal Lily | Lethal Lily(Live) |
 
 **Step 2: Pair Using bluetoothctl**
 
@@ -107,7 +118,7 @@ On the Linux host running the REST server, use `bluetoothctl` to pair with the d
 ```bash
 bluetoothctl
 > scan on
-# Wait for your device to appear as "Animated Skelly(Live)" or "<Your Device Name>(Live)"
+# Wait for your device to appear as "<Your Device Name>(Live)"
 > pair <MAC_ADDRESS>
 # Enter PIN when prompted (default: 1234)
 > trust <MAC_ADDRESS>
@@ -117,7 +128,7 @@ bluetoothctl
 **Important notes**:
 - Pairing only needs to be done **once per device**. The pairing will persist.
 - You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
-- Look for the device name with **(Live)** suffix - this is the Classic Bluetooth speaker
+- Look for the device name with **(Live)** suffix — this is the Classic Bluetooth speaker
 
 ## 🔄 BLE Proxy Mode (Alternative Connection Method)
 
@@ -156,7 +167,7 @@ When adding the integration in Home Assistant:
 #### Device Identification
 - In direct BLE mode, devices are identified by MAC address only
 - In BLE proxy mode, devices are identified by **both MAC address and REST server URL**
-- Example device title in proxy mode: `Animated Skelly (AA:BB:CC:DD:EE:FF via http://192.168.1.100:8765)`
+- Example device title in proxy mode: `Ultra Skelly v2 (AA:BB:CC:DD:EE:FF via http://192.168.1.100:8765)`
 
 #### Scanning Behavior
 - In direct BLE mode, scanning uses Home Assistant's Bluetooth integration
@@ -208,22 +219,26 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - Go to **Settings** → **Devices & Services**
    - Click **"+ Add Integration"**
    - Search for **"Skelly Ultra"**
+
+3. **Select your device type** (Step 1 of the config flow):
+   - **Ultra Skelly** — the 6.5 ft skeleton (BLE names: "Animated Skelly" on older firmware, "Ultra Skelly v2" on current firmware)
+   - **Lethal Lily** — the 7 ft animatronic witch (BLE name: "Lethal Lily")
+
+4. **Configure connection settings** (Step 2 of the config flow):
    - Choose connection mode:
      - **Use BLE Proxy**: Check this to use the REST server as a BLE proxy (see [BLE Proxy Mode](#-ble-proxy-mode-alternative-connection-method) section)
      - Leave unchecked for direct BLE connection from Home Assistant host
    - Choose configuration mode:
-     - **Manual**: Enter the Bluetooth MAC address
-     - **Scan**: Discover nearby Skelly devices automatically
-
-3. **Configure connection settings**:
+     - **Scan**: Discover nearby devices automatically (filters for all supported BLE names)
+     - **Manual**: Enter the Bluetooth MAC address directly
    - **REST server URL**: URL of the Skelly Ultra REST server (default: `http://localhost:8765`)
      - If the server is on a different host, use `http://<server-ip>:8765`
      - Required for Live Mode audio
-     - Required for BLE proxy mode where the host running the REST server establishes the connection to the BLE device (and is also used for Live Mode audio)
+     - Required for BLE proxy mode
 
-4. **Verify setup**:
+5. **Verify setup**:
    - The integration should show as "Connected"
-   - Entities will be created for sensors, lights, switches, etc.
+   - Entities will be created based on your selected device type
 
 ### Step 4: Enable Live Mode for Audio Playback
 
@@ -246,32 +261,48 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
 
 ### 📦 Available Entities
 
-The integration creates the following entities:
+The integration creates different entities depending on which device type you configured.
 
-- **Media Player - Live Mode Speaker** (`media_player.skelly_ultra_live_mode_speaker`):
-  - Control audio playback when Live Mode is enabled
+#### Ultra Skelly
+
+- **Lights**: Torso Light (channel 0), Head Light (channel 1) — RGB with brightness
+- **Movement switches**: Head, Arm, Torso, All
+- **Effect mode selects**: Torso Effect Mode, Head Effect Mode — Static / Strobe / Pulse
+- **Effect speed numbers**: Torso Effect Speed, Head Effect Speed
+- **Color cycle switches**: Torso Color Cycle, Head Color Cycle
+- **Eye icon select**: 18 eye icon options
+- **Eye icon image**: Preview of the currently active eye icon
+
+#### Lethal Lily
+
+- **Lights**: Lantern (channel 0) — RGB with brightness
+- **Movement switches**: Wrist, Elbow, Head, Eyes, All
+- **Effect mode select**: Lantern Effect Mode — Flickering / Pulsing / Chasing
+- **Effect speed number**: Lantern Effect Speed
+- **Color cycle switch**: Lantern Color Cycle
+
+#### All devices
+
+- **Media Player - Live Mode Speaker**: Control audio playback when Live Mode is enabled
   - Supports volume control, play/pause, stop
   - Works with TTS (Text-to-Speech) services
   - Supports multiple audio formats (MP3, WAV, FLAC, OGG, M4A, etc.)
-
-- **Media Player - Internal Files** (`media_player.skelly_ultra_internal_files`):
-  - Play audio files stored on the device's internal storage
+- **Media Player - Internal Files**: Play audio files stored on the device's internal storage
   - Browse files via media browser UI
   - Next/previous track navigation
   - Select files by name
   - File metadata exposed as entity attributes (file_index, file_name, file_length, file_action, file_eye_icon)
   - Shared volume control with device
+- **Sensors**: Volume, live name, storage capacity, file count, file order, BT MAC, pin code, file transfer progress
+- **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Bitrate
+- **Numbers**: Volume, Chunk Size
 
-- **Sensors**: Monitor device status (mode, volume, battery, connection)
-- **Switches**: Toggle Live Mode and other features
-- **Lights**: Control LED patterns (if supported)
+**Note about entity IDs**: Entity IDs are generated based on:
+1. The BLE device name discovered during config (e.g., "Ultra Skelly v2", "Animated Skelly", or "Lethal Lily")
+2. The device's Bluetooth MAC address (to support multiple devices)
 
-**Note about entity IDs**: The actual entity IDs in your Home Assistant instance will differ from the examples shown in this README. Entity IDs are generated based on:
-1. The device name set in the Skelly Ultra mobile app (defaults to "Animated Skelly")
-2. The device's Bluetooth MAC address (to support multiple Skelly devices)
-
-For example, if your device is named "Animated Skelly" with MAC address `AA:BB:CC:DD:EE:FF`, the media player entity might be:
-- `media_player.animated_skelly_aa_bb_cc_dd_ee_ff_live_mode_speaker`
+For example, if your Lethal Lily's BLE name is "Lethal Lily" with MAC address `AA:BB:CC:DD:EE:FF`, the live mode media player might be:
+- `media_player.lethal_lily_aa_bb_cc_dd_ee_ff_live_mode_speaker`
 
 You can find your actual entity IDs in **Settings** → **Devices & Services** → **Skelly Ultra** → click on your device.
 
@@ -458,7 +489,7 @@ The media player exposes the following attributes when a file is selected/playin
 - `file_index`: The 1-based index of the file
 - `file_name`: The filename
 - `file_length`: Duration in milliseconds
-- `file_action`: Associated action/movement setting, which is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso
+- `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Value 255 means all parts.
 - `file_eye_icon`: Associated eye icon
 - `file_cluster`: File cluster information
 - `total_files`: Total number of files on device
@@ -699,7 +730,7 @@ If scanning doesn't find your device:
 
 If the BLE connection is unstable:
 - Check for Bluetooth interference (Wi-Fi, other devices)
-- Move the REST server closer to the Skelly device
+- Move the REST server closer to the device
 - Check REST server logs for BLE errors
 - Consider using a dedicated USB Bluetooth adapter
 
@@ -712,5 +743,5 @@ If the BLE connection is unstable:
 
 ## 📄 License
 
-This integration is provided as-is for use with Ultra Skelly devices. Use it at your own risk. It might brick your Skelly.
+This integration is provided as-is for use with Ultra Skelly and Lethal Lily devices. Use it at your own risk. It might brick your Skelly.
 

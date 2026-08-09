@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile
 from .skelly_ultra_pkg.file_transfer import FileTransferManager
 
 
@@ -24,21 +24,30 @@ async def async_setup_entry(
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: SkellyCoordinator = data["coordinator"]
     device_info = get_device_info(hass, entry)
+    profile = get_device_profile(entry)
 
-    async_add_entities(
-        [
-            SkellyVolumeNumber(coordinator, entry.entry_id, device_info),
+    entities: list = [
+        SkellyVolumeNumber(coordinator, entry.entry_id, device_info),
+    ]
+
+    for light_cfg in profile["lights"]:
+        entities.append(
             SkellyEffectSpeedNumber(
-                coordinator, entry.entry_id, device_info, channel=0
-            ),
-            SkellyEffectSpeedNumber(
-                coordinator, entry.entry_id, device_info, channel=1
-            ),
-            SkellyChunkSizeNumber(
-                coordinator, data.get("adapter"), entry.entry_id, device_info
-            ),
-        ]
+                coordinator,
+                entry.entry_id,
+                device_info,
+                channel=light_cfg["channel"],
+                label=light_cfg["label"],
+            )
+        )
+
+    entities.append(
+        SkellyChunkSizeNumber(
+            coordinator, data.get("adapter"), entry.entry_id, device_info
+        )
     )
+
+    async_add_entities(entities)
 
 
 class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
@@ -73,7 +82,7 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
         if data and (vol := data.get("volume")) is not None:
             try:
                 return int(vol)
-            except (ValueError, TypeError):
+            except ValueError, TypeError:
                 return None
 
         return None
@@ -123,6 +132,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         entry_id: str,
         device_info: DeviceInfo | None,
         channel: int,
+        label: str,
     ) -> None:
         """Initialize the effect speed number entity.
 
@@ -135,12 +145,14 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         device_info: DeviceInfo | None
             Device registry info for grouping entities
         channel: int
-            Light channel number (0 = Torso, 1 = Head)
+            Light channel number
+        label: str
+            Human-readable light name (e.g., "Torso Light", "Lantern")
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.channel = channel
-        self._attr_name = "Torso Effect Speed" if channel == 0 else "Head Effect Speed"
+        self._attr_name = f"{label} Effect Speed"
         self._attr_unique_id = f"{entry_id}_effect_speed_{channel}"
         self._attr_native_min_value = 0
         self._attr_native_max_value = 254
@@ -171,7 +183,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
                         # Invert: device 0 (fast) -> UI 254 (fast)
                         #         device 254 (slow) -> UI 0 (slow)
                         return 254 - speed_int
-                    except (ValueError, TypeError):
+                    except ValueError, TypeError:
                         return None
         return None
 

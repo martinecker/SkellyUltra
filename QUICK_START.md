@@ -1,17 +1,17 @@
 # 🚀 Quick Start Guide
 
-Get your Ultra Skelly connected to Home Assistant in minutes!
+Get your Ultra Skelly or Lethal Lily connected to Home Assistant in minutes!
 
 ## 📋 What You'll Need
 
 - ✅ [Home Assistant](https://www.home-assistant.io/) installed and running
 - ✅ [HACS](https://hacs.xyz/) (Home Assistant Community Store) installed
-- ✅ Your Skelly powered on
+- ✅ Your device powered on
 - ✅ Bluetooth enabled on your Home Assistant device
 
 ## 🎯 Basic Setup (5 Minutes)
 
-This gets you basic control: lights, switches, sensors, and playing files stored on your Skelly.
+This gets you basic control: lights, switches, sensors, and playing files stored on your device.
 
 ### Step 1: Install via HACS
 
@@ -30,19 +30,21 @@ This gets you basic control: lights, switches, sensors, and playing files stored
 1. Go to **Settings** → **Devices & Services**
 2. Click **+ Add Integration**
 3. Search for **"Skelly Ultra"**
-4. Choose **Scan** to automatically find your Skelly
+4. **Select your device type**:
+   - **Ultra Skelly** — the 6.5 ft skeleton animatronic
+   - **Lethal Lily** — the 7 ft animatronic witch
+5. Click **Submit**, then choose **Scan** to automatically find your device
    - *Or choose **Manual** if you know the Bluetooth MAC address*
-5. Click **Submit**
 
 ### Step 3: Start Using It!
 
 You now have control over:
-- 💡 **Lights**: Change head and torso colors
+- 💡 **Lights**: Ultra Skelly — Torso and Head colors; Lethal Lily — Lantern color
 - 🔌 **Switches**: Toggle movements and color cycling
-- 🎵 **Media Player**: Play audio files stored on your Skelly
+- 🎵 **Media Player**: Play audio files stored on your device
 - 📊 **Sensors**: Monitor volume, storage, and more
 
-**That's it!** You can now control your Skelly from Home Assistant dashboards and automations.
+**That's it!** You can now control your device from Home Assistant dashboards and automations.
 
 ## 🎤 Advanced Setup: Live Mode Audio (Optional)
 
@@ -80,16 +82,25 @@ Live Mode lets you:
 
 ## 💡 Quick Examples
 
+> **Note on entity IDs**: Entity IDs are generated from the BLE device name and MAC address. Ultra Skelly examples below use `animated_skelly` (old firmware) or `ultra_skelly_v2` (new firmware). Lethal Lily entities use `lethal_lily`. Find your exact IDs under **Settings** → **Devices & Services** → **Skelly Ultra** → your device.
+
 ### Control Lights from Dashboard
 
-Add to your dashboard:
+Ultra Skelly torso:
 ```yaml
 type: light
-entity: light.animated_skelly_torso
+entity: light.animated_skelly_torso_light
 ```
 
-### Make Skelly Move on Motion
+Lethal Lily lantern:
+```yaml
+type: light
+entity: light.lethal_lily_lantern
+```
 
+### Make Your Device Move on Motion
+
+Ultra Skelly:
 ```yaml
 automation:
   - alias: "Skelly Moves When Someone Approaches"
@@ -101,6 +112,20 @@ automation:
       - service: switch.turn_on
         target:
           entity_id: switch.animated_skelly_movement_all
+```
+
+Lethal Lily:
+```yaml
+automation:
+  - alias: "Lily Moves When Someone Approaches"
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.front_door_motion
+        to: "on"
+    action:
+      - service: switch.turn_on
+        target:
+          entity_id: switch.lethal_lily_movement_all
 ```
 
 ### Play Internal Files
@@ -141,11 +166,12 @@ automation:
 - Make sure you **restarted Home Assistant** after installing via HACS
 - Check that the files are in `config/custom_components/skelly_ultra/`
 
-### Integration won't discover my Skelly?
+### Integration won't discover my device?
 
-- Make sure Skelly is **powered on**
+- Make sure the device is **powered on**
 - Check that **Bluetooth is enabled** on your Home Assistant device
-- Try using **Manual** mode and enter the MAC address if you know it (via `bluetoothctrl` for example)
+- The scan filter accepts: "Animated Skelly" (Ultra Skelly old firmware), "Ultra Skelly v2" (Ultra Skelly new firmware), and "Lethal Lily". If your device shows up as something different, use **Manual** mode with the MAC address.
+- Try using **Manual** mode and enter the MAC address if you know it (visible via `bluetoothctl scan on`)
 
 ### Live Mode not working?
 
@@ -157,10 +183,13 @@ automation:
 
 Go to **Settings** → **Devices & Services** → **Skelly Ultra** → Click on your device name
 
-Entity IDs are based on your device name. If your Skelly is named "Animated Skelly", look for entities like:
-- `light.animated_skelly_torso`
-- `switch.animated_skelly_live_mode`
-- `media_player.animated_skelly_internal_files`
+Entity IDs are based on your BLE device name. Examples:
+
+| Device | BLE Name | Example entity |
+|---|---|---|
+| Ultra Skelly (old firmware) | Animated Skelly | `light.animated_skelly_torso_light` |
+| Ultra Skelly (new firmware) | Ultra Skelly v2 | `light.ultra_skelly_v2_torso_light` |
+| Lethal Lily | Lethal Lily | `light.lethal_lily_lantern` |
 
 ## 📚 Learn More
 
@@ -172,9 +201,10 @@ Entity IDs are based on your device name. If your Skelly is named "Animated Skel
 
 - **Basic features** (lights, switches, internal file playback) work immediately after installation
 - **Live Mode** (TTS, streaming audio) requires the optional REST server setup
+- **Device type is set once** during config and determines which entities are created (they differ between Ultra Skelly and Lethal Lily — see the [full README](README.md) for details)
 - This is an **unofficial community project** - use at your own risk!
-- Your Skelly's entities will have unique IDs based on your device name and MAC address
+- Your device's entities will have unique IDs based on the BLE device name and MAC address
 
 ---
 
-**Ready to get started?** Follow Step 1 above and you'll be controlling your Skelly in just a few minutes! 🎃
+**Ready to get started?** Follow Step 1 above and you'll be controlling your prop in just a few minutes! 🎃

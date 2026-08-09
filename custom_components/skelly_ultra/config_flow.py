@@ -1,9 +1,4 @@
-"""Config flow for Skelly Ultra integration.
-
-This simple flow allows the user to manually enter a BLE address (and optional name)
-or pick from a scan of discovered "Animated Skelly" BLE devices when configuring the
-integration via Home Assistant's UI.
-"""
+"""Config flow for Skelly Ultra integration."""
 
 from __future__ import annotations
 
@@ -19,12 +14,16 @@ from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 
 from .const import (
+    ALL_BLE_NAME_FILTERS,
+    CONF_DEVICE_TYPE,
     CONF_SERVER_URL,
     CONF_USE_BLE_PROXY,
     DEFAULT_SERVER_URL,
+    DEVICE_PROFILES,
+    DEVICE_TYPE_SKELLY,
     DOMAIN,
 )
-from .helpers import build_device_identifier
+from .helpers import build_device_identifier, device_type_from_ble_name
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +41,8 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self._server_url: str = DEFAULT_SERVER_URL
         self._use_ble_proxy: bool = False
         self._user_input: dict[str, Any] | None = None
+        self._device_type: str = DEVICE_TYPE_SKELLY
+        self._default_name: str = DEVICE_PROFILES[DEVICE_TYPE_SKELLY]["default_name"]
 
     async def _validate_rest_server(self, server_url: str) -> dict[str, str] | None:
         """Validate the REST server is accessible.
@@ -55,7 +56,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 session.get(f"{server_url}/health") as resp,
             ):
                 if resp.status == 200:
-                    # Server is accessible
                     return None
                 _LOGGER.warning("REST server returned status %d", resp.status)
                 return {"base": "rest_server_error"}
@@ -67,25 +67,31 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             return {"base": "rest_server_error"}
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
-        """Initial step offering manual entry or discovery.
+        """Entry point — go straight to the connection form."""
+        return await self.async_step_connection()
 
-        The form accepts:
-        - use_ble_proxy: whether to use BLE proxy mode
-        - mode: 'manual' or 'scan'
-        - CONF_ADDRESS: device address (required in manual mode)
-        - CONF_NAME: optional friendly name
-        - CONF_SERVER_URL: REST server URL (required in proxy mode)
-        """
-        # Build form schema - both modes now support scan or manual
+    async def async_step_connection(self, user_input: dict[str, Any] | None = None):
+        """BLE connection details: device type, proxy mode, address/scan, server URL."""
         use_proxy = user_input.get(CONF_USE_BLE_PROXY, False) if user_input else False
+        device_type_options = {
+            key: profile["display_name"] for key, profile in DEVICE_PROFILES.items()
+        }
+        current_type = (
+            user_input.get(CONF_DEVICE_TYPE, self._device_type)
+            if user_input
+            else self._device_type
+        )
+        default_name = DEVICE_PROFILES[current_type]["default_name"]
 
-        # Both modes: show mode selector
         schema = vol.Schema(
             {
+                vol.Required(CONF_DEVICE_TYPE, default=current_type): vol.In(
+                    device_type_options
+                ),
                 vol.Required(CONF_USE_BLE_PROXY, default=use_proxy): bool,
                 vol.Required("mode", default="scan"): vol.In(["manual", "scan"]),
                 vol.Optional(CONF_ADDRESS, default=""): str,
-                vol.Optional(CONF_NAME, default="Animated Skelly"): str,
+                vol.Optional(CONF_NAME, default=default_name): str,
                 vol.Required(CONF_SERVER_URL, default=DEFAULT_SERVER_URL): str,
             }
         )
@@ -94,56 +100,50 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if not use_proxy:
             bt_entries = self.hass.config_entries.async_entries("bluetooth")
             if not bt_entries:
-                # Show the same form but with an error explaining bluetooth is
-                # required so the user can take action in the UI.
                 return self.async_show_form(
-                    step_id="user",
+                    step_id="connection",
                     data_schema=schema,
                     errors={"base": "bluetooth_integration_required"},
                 )
 
         if user_input is None:
-            return self.async_show_form(step_id="user", data_schema=schema)
+            return self.async_show_form(step_id="connection", data_schema=schema)
 
         # Validate the REST server is accessible (required for proxy mode, optional for direct mode)
+        self._device_type = user_input.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY)
+        self._default_name = DEVICE_PROFILES[self._device_type]["default_name"]
         use_ble_proxy = user_input.get(CONF_USE_BLE_PROXY, False)
         server_url = user_input.get(CONF_SERVER_URL, DEFAULT_SERVER_URL).rstrip("/")
         server_errors = await self._validate_rest_server(server_url)
 
-        # Store user input for later use
         self._user_input = user_input
         self._server_url = server_url
         self._use_ble_proxy = use_ble_proxy
 
-        # In proxy mode, server is required - show error if unreachable
-        # In direct mode, server is optional - show warning if unreachable
         if server_errors:
             if use_ble_proxy:
                 # Proxy mode requires server - show error and don't proceed
                 return self.async_show_form(
-                    step_id="user",
+                    step_id="connection",
                     data_schema=schema,
                     errors=server_errors,
                 )
             # Direct mode - show warning modal
             return await self.async_step_server_warning()
 
-        # Check mode selector (both direct and proxy modes support scan now)
         mode = user_input.get("mode", "manual")
         if mode == "scan":
             return await self.async_step_scan()
 
-        # Manual mode: create entry directly
         address = user_input.get(CONF_ADDRESS, "")
         if not address:
             return self.async_show_form(
-                step_id="user",
+                step_id="connection",
                 data_schema=schema,
                 errors={"base": "address_required"},
             )
 
-        device_name = user_input.get(CONF_NAME) or "Skelly Ultra"
-        # Build consistent title using helper
+        device_name = user_input.get(CONF_NAME) or default_name
         title = build_device_identifier(
             device_name, address, server_url if use_ble_proxy else None
         )
@@ -154,6 +154,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_NAME: device_name,
                 CONF_SERVER_URL: server_url,
                 CONF_USE_BLE_PROXY: use_ble_proxy,
+                CONF_DEVICE_TYPE: self._device_type,
             },
         )
 
@@ -164,7 +165,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         integration can still function without it for basic device control.
         """
         if user_input is not None:
-            # User acknowledged the warning, proceed with setup
             if self._user_input is None:
                 return self.async_abort(reason="unknown")
 
@@ -172,10 +172,8 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             if mode == "scan":
                 return await self.async_step_scan()
 
-            # Manual mode: create entry directly
             address = self._user_input.get(CONF_ADDRESS, "")
-            device_name = self._user_input.get(CONF_NAME) or "Skelly Ultra"
-            # Build consistent title using helper
+            device_name = self._user_input.get(CONF_NAME) or self._default_name
             title = build_device_identifier(
                 device_name, address, self._server_url if self._use_ble_proxy else None
             )
@@ -186,6 +184,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     CONF_NAME: device_name,
                     CONF_SERVER_URL: self._server_url,
                     CONF_USE_BLE_PROXY: self._use_ble_proxy,
+                    CONF_DEVICE_TYPE: self._device_type,
                 },
             )
 
@@ -245,11 +244,10 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             bt_entries = self.hass.config_entries.async_entries("bluetooth")
             if not bt_entries:
                 return self.async_abort(reason="bluetooth_integration_required")
-        # If the user submitted an action from the fallback form, handle it
+
         if user_input is not None and "action" in user_input:
             action = user_input.get("action")
             if action == "retry":
-                # retry the filtered scan
                 return await self.async_step_scan()
             if action == "show_all":
                 # Perform an unfiltered scan and present all devices
@@ -278,7 +276,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     try:
                         scanner = bluetooth.async_get_scanner(self.hass)
                         devices = await scanner.discover(timeout=5.0)
-                    except (TimeoutError, OSError):
+                    except TimeoutError, OSError:
                         devices = []
                     _LOGGER.debug(
                         "HA scanner returned %d devices (show_all)", len(devices)
@@ -293,7 +291,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                                 "HA scanner returned no devices; falling back to BleakScanner.discover()"
                             )
                             devices = await BleakScanner.discover(timeout=5.0)
-                        except (TimeoutError, OSError):
+                        except TimeoutError, OSError:
                             devices = []
 
                     for d in devices:
@@ -301,8 +299,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         if not addr:
                             continue
                         name = getattr(d, "name", None)
-                        # Use friendly label when name present, otherwise show
-                        # only the address so the UI doesn't display 'Unknown'.
                         display = f"{name} ({addr})" if name else addr
                         choices[addr] = display
 
@@ -326,25 +322,26 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
             if action == "manual":
                 # jump back to the manual entry form
-                return await self.async_step_user()
+                return await self.async_step_connection()
 
         if user_input is None:
             # Perform BLE scan - either via REST server (proxy mode) or locally (direct mode)
             choices: dict[str, str] = {}
 
             if self._use_ble_proxy:
-                # Scan via REST server with name filter
+                # Fetch all devices from REST server and filter client-side,
+                # since a single name_filter can't cover multiple device types.
                 _LOGGER.debug("Scanning via REST server (proxy mode)")
-                rest_devices = await self._scan_via_rest_server(
-                    name_filter="Animated Skelly"
-                )
+                rest_devices = await self._scan_via_rest_server(name_filter=None)
                 _LOGGER.debug(
                     "REST server returned %d devices (filtered)", len(rest_devices)
                 )
-
                 for d in rest_devices:
                     addr = d.get("address")
-                    name = d.get("name", "Unknown")
+                    name = d.get("name", "") or ""
+                    name_lower = name.lower()
+                    if not any(f in name_lower for f in ALL_BLE_NAME_FILTERS):
+                        continue
                     if addr:
                         display = f"{name} ({addr})"
                         choices[addr] = display
@@ -354,7 +351,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 try:
                     scanner = bluetooth.async_get_scanner(self.hass)
                     devices = await scanner.discover(timeout=5.0)
-                except (TimeoutError, OSError):
+                except TimeoutError, OSError:
                     devices = []
 
                 _LOGGER.debug("Scanner discovered %d devices (initial)", len(devices))
@@ -366,7 +363,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                             "HA scanner returned no devices during filtered scan; falling back to BleakScanner.discover()"
                         )
                         devices = await BleakScanner.discover(timeout=5.0)
-                    except (TimeoutError, OSError):
+                    except TimeoutError, OSError:
                         devices = []
 
                 for d in devices:
@@ -390,7 +387,8 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         )
                         continue
                     try:
-                        if "animated skelly" not in d.name.lower():
+                        name_lower = d.name.lower()
+                        if not any(f in name_lower for f in ALL_BLE_NAME_FILTERS):
                             _LOGGER.debug(
                                 "filtered out device (name mismatch): address=%s name=%s",
                                 getattr(d, "address", None),
@@ -413,8 +411,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             # results aren't what the user expects. Selecting this will
             # route the flow to the unfiltered show_all branch.
             choices[SHOW_ALL_TOKEN] = "Show all devices"
-
-            # Save discovered mapping for the next step
             self._discovered = choices
             _LOGGER.debug("filtered choices populated: %s", choices)
 
@@ -450,13 +446,16 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Extract device name from discovered display string (format: "Name (Address)")
         discovered_display = self._discovered.get(address) or address
-        # Try to extract name from "Name (Address)" format
         if " (" in discovered_display and discovered_display.endswith(")"):
             device_name = discovered_display.split(" (")[0]
         else:
-            device_name = "Skelly Ultra"
+            device_name = DEVICE_PROFILES[self._device_type]["default_name"]
 
-        # Build consistent title using helper
+        # Infer device type from the BLE advertisement name; overrides the connection-form selection.
+        inferred = device_type_from_ble_name(device_name)
+        if inferred:
+            self._device_type = inferred
+
         title = build_device_identifier(
             device_name, address, self._server_url if self._use_ble_proxy else None
         )
@@ -467,5 +466,6 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_NAME: device_name,
                 CONF_SERVER_URL: self._server_url,
                 CONF_USE_BLE_PROXY: self._use_ble_proxy,
+                CONF_DEVICE_TYPE: self._device_type,
             },
         )

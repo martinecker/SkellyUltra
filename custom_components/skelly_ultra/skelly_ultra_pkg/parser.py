@@ -40,7 +40,7 @@ class LiveNameEvent:
 class DeviceParamsEvent:
     channels: list[
         int
-    ]  # list of active channels, will have 6 entries, for Skelly Ultra channel 0 and 1 are used and so will be 1 in the array, all otehrs 0
+    ]  # list of active channels, will have 6 entries, for Ultra Skelly channel 0 and 1 are used and so will be 1 in the array, all others 0
     pin_code: str
     wifi_password: str
     show_mode: int  # 1 == show/demo mode is active, 0 == regular mode

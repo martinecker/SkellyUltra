@@ -136,7 +136,7 @@ class FileTransferManager:
                     mtu,
                 )
                 return chunk_size
-        except (AttributeError, TypeError):
+        except AttributeError, TypeError:
             # MTU not available or not valid, fall through to default
             pass
 
@@ -481,7 +481,7 @@ class FileTransferManager:
 
             # Get chunk from cache (pre-cached before sending started)
             chunk_data = self._chunk_cache.get(idx)
-            if not chunk_data:
+            if chunk_data is None:
                 # Fallback: calculate from file data if not in cache
                 offset = idx * chunk_size
                 chunk_data = file_data[offset : offset + chunk_size]
@@ -525,7 +525,7 @@ class FileTransferManager:
             FileTransferCancelled: If cancelled while waiting
         """
         logger.debug("Waiting for %s (timeout=%.1fs)", event_name, timeout)
-        start_time = asyncio.get_event_loop().time()
+        start_time = asyncio.get_running_loop().time()
 
         while True:
             if self._state.cancelled:
@@ -534,7 +534,7 @@ class FileTransferManager:
                 )
 
             # Check if we've exceeded timeout
-            elapsed = asyncio.get_event_loop().time() - start_time
+            elapsed = asyncio.get_running_loop().time() - start_time
             if elapsed > timeout:
                 raise FileTransferTimeout(
                     f"Timeout waiting for {event_name} after {timeout}s",
