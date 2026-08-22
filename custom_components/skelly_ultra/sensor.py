@@ -228,7 +228,8 @@ class SkellyLiveBTMacSensor(SensorEntity):
     @property
     def native_value(self):
         """Return the Live Mode BT MAC address or '<not connected>'."""
-        mac = self.adapter.client.live_mode_client_address
+        client = getattr(self.adapter, "client", None)
+        mac = getattr(client, "live_mode_client_address", None) if client else None
         return mac if mac else "<not connected>"
 
 
