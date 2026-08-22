@@ -136,7 +136,7 @@ class FileTransferManager:
                     mtu,
                 )
                 return chunk_size
-        except AttributeError, TypeError:
+        except (AttributeError, TypeError):
             # MTU not available or not valid, fall through to default
             pass
 

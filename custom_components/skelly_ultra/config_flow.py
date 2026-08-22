@@ -276,7 +276,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     try:
                         scanner = bluetooth.async_get_scanner(self.hass)
                         devices = await scanner.discover(timeout=5.0)
-                    except TimeoutError, OSError:
+                    except (TimeoutError, OSError):
                         devices = []
                     _LOGGER.debug(
                         "HA scanner returned %d devices (show_all)", len(devices)
@@ -291,7 +291,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                                 "HA scanner returned no devices; falling back to BleakScanner.discover()"
                             )
                             devices = await BleakScanner.discover(timeout=5.0)
-                        except TimeoutError, OSError:
+                        except (TimeoutError, OSError):
                             devices = []
 
                     for d in devices:
@@ -351,7 +351,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 try:
                     scanner = bluetooth.async_get_scanner(self.hass)
                     devices = await scanner.discover(timeout=5.0)
-                except TimeoutError, OSError:
+                except (TimeoutError, OSError):
                     devices = []
 
                 _LOGGER.debug("Scanner discovered %d devices (initial)", len(devices))
@@ -363,7 +363,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                             "HA scanner returned no devices during filtered scan; falling back to BleakScanner.discover()"
                         )
                         devices = await BleakScanner.discover(timeout=5.0)
-                    except TimeoutError, OSError:
+                    except (TimeoutError, OSError):
                         devices = []
 
                 for d in devices:

@@ -82,7 +82,7 @@ class SkellyVolumeNumber(CoordinatorEntity, NumberEntity):
         if data and (vol := data.get("volume")) is not None:
             try:
                 return int(vol)
-            except ValueError, TypeError:
+            except (ValueError, TypeError):
                 return None
 
         return None
@@ -183,7 +183,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
                         # Invert: device 0 (fast) -> UI 254 (fast)
                         #         device 254 (slow) -> UI 0 (slow)
                         return 254 - speed_int
-                    except ValueError, TypeError:
+                    except (ValueError, TypeError):
                         return None
         return None
 
