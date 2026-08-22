@@ -19,6 +19,8 @@ from homeassistant.helpers import (
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
+from .helpers import get_device_profile
+from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .skelly_ultra_pkg.file_transfer import (
@@ -257,6 +259,39 @@ async def async_cancel_file_transfer_service(
     _LOGGER.info("File transfer cancellation requested for entry %s", entry_id)
 
 
+async def _restore_file_settings(
+    client: any,
+    profile: dict,
+    cluster: int,
+    filename: str,
+    existing_file: parser.FileInfoEvent,
+) -> None:
+    """Re-send a file's movement/eye/light settings after an overwrite.
+
+    The device resets a file's settings to default on every upload,
+    including an overwrite of an existing file, so callers must capture the
+    file's previous FileInfoEvent before uploading and pass it here right
+    after the transfer completes, using the pre-upload cluster.
+    """
+    await client.set_movement_action(existing_file.action, cluster, filename)
+
+    if profile.get("has_eye_image"):
+        await client.set_eye_icon(existing_file.eye_icon, cluster, filename)
+
+    for light_def in profile.get("lights", []):
+        channel = light_def["channel"]
+        if channel >= len(existing_file.lights):
+            continue
+        light = existing_file.lights[channel]
+
+        await client.set_light_brightness(channel, light.brightness, cluster, filename)
+        await client.set_light_mode(channel, light.effect_type, cluster, filename)
+        if light.effect_type != 1:
+            await client.set_light_speed(channel, light.effect_speed, cluster, filename)
+        r, g, b = light.rgb
+        await client.set_light_rgb(channel, r, g, b, light.color_cycle, cluster, filename)
+
+
 async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Send audio file to device.
 
@@ -349,6 +384,15 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
         if not coordinator:
             raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
 
+        # If this upload overwrites an existing file, the device resets that
+        # file's movement/eye/light settings to default. Capture them now so
+        # they can be restored right after the new upload lands.
+        existing_file = next(
+            (f for f in coordinator.file_list if f.name == target_filename), None
+        )
+        config_entry = hass.config_entries.async_get_entry(entry_id)
+        profile = get_device_profile(config_entry) if config_entry else None
+
         # Check if bitrate override is enabled
         bitrate = None
         if coordinator.data:
@@ -396,6 +440,29 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
                 progress_callback,
                 override_chunk_size,
             )
+
+            # If this was an overwrite, restore the previous movement/eye/light
+            # settings right away, using the pre-upload cluster - the device
+            # resets them to default on upload, and delaying this (e.g. until
+            # after a file-list refresh) risks the writes getting dropped.
+            if existing_file and profile:
+                try:
+                    await _restore_file_settings(
+                        adapter.client,
+                        profile,
+                        existing_file.cluster,
+                        target_filename,
+                        existing_file,
+                    )
+                    _LOGGER.info(
+                        "Restored previous settings for overwritten file %s",
+                        target_filename,
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "Failed to restore settings after overwriting %s",
+                        target_filename,
+                    )
 
             _LOGGER.info(
                 "Successfully sent file %s to entry %s",
