@@ -234,7 +234,7 @@ def parse_notification(
         )
 
     if hexstr.startswith(const.RESP_ENABLE_CLASSIC_BT):
-        status = int(hexstr[4:6])
+        status = int(hexstr[4:6], 16)
         return EnableClassicBTEvent(status=status)
 
     if hexstr.startswith(const.RESP_START_TRANSFER):

@@ -524,8 +524,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
             except Exception:
                 self._logger.exception("Coordinator update failed")
                 raise UpdateFailed("Failed to update Skelly data") from None
-            else:
-                return data
 
     async def _async_push_state_to_device(self, state: dict[str, Any]) -> None:
         """Push selected coordinator state back to the device after connection."""
