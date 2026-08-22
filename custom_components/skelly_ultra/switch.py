@@ -18,6 +18,15 @@ from .helpers import get_device_info, get_device_profile
 _LOGGER = logging.getLogger(__name__)
 
 
+def _persist_entry_option(
+    hass: HomeAssistant, entry: ConfigEntry, key: str, value: object
+) -> None:
+    """Merge one key into a config entry's options and persist it."""
+    hass.config_entries.async_update_entry(
+        entry, options={**entry.options, key: value}
+    )
+
+
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
 ):
@@ -63,8 +72,20 @@ async def async_setup_entry(
             ),
             *color_cycle_switches,
             *movement_switches,
-            SkellyOverrideChunkSizeSwitch(coordinator, entry.entry_id, device_info),
-            SkellyOverrideBitrateSwitch(coordinator, entry.entry_id, device_info),
+            SkellyOverrideSwitch(
+                coordinator,
+                entry.entry_id,
+                device_info,
+                "override_chunk_size",
+                "Override Chunk Size",
+            ),
+            SkellyOverrideSwitch(
+                coordinator,
+                entry.entry_id,
+                device_info,
+                "override_bitrate",
+                "Override Bitrate",
+            ),
         ]
     )
 
@@ -131,9 +152,7 @@ class SkellyConnectedSwitch(SwitchEntity):
 
             # Update and persist state
             self._is_on = True
-            self.hass.config_entries.async_update_entry(
-                self._entry, options={**self._entry.options, "connected": True}
-            )
+            _persist_entry_option(self.hass, self._entry, "connected", True)
             self.async_write_ha_state()
 
             _LOGGER.debug(
@@ -161,9 +180,7 @@ class SkellyConnectedSwitch(SwitchEntity):
 
             # Update and persist state
             self._is_on = False
-            self.hass.config_entries.async_update_entry(
-                self._entry, options={**self._entry.options, "connected": False}
-            )
+            _persist_entry_option(self.hass, self._entry, "connected", False)
             self.async_write_ha_state()
 
             _LOGGER.debug(
@@ -275,11 +292,9 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
 
     def _persist_desired_state(self) -> None:
         """Persist the last requested live-mode state in the config entry."""
-        options = {
-            **self._entry.options,
-            "live_mode_connected": self._desired_live_mode_on,
-        }
-        self.hass.config_entries.async_update_entry(self._entry, options=options)
+        _persist_entry_option(
+            self.hass, self._entry, "live_mode_connected", self._desired_live_mode_on
+        )
 
     @callback
     def _handle_live_mode_change(self) -> None:
@@ -507,83 +522,49 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
         await self._set_movement(enable=False)
 
 
-class SkellyOverrideChunkSizeSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable manual chunk size override for file transfers."""
+class SkellyOverrideSwitch(CoordinatorEntity, SwitchEntity):
+    """Switch to enable/disable a manual override for file transfers.
+
+    Shared by the chunk-size and bitrate override switches, which only
+    differ in which coordinator data key and display name they use.
+    """
 
     _attr_has_entity_name = True
+    _attr_icon = "mdi:cog"
 
     def __init__(
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
         device_info: DeviceInfo | None,
+        data_key: str,
+        name: str,
     ) -> None:
-        """Initialize the override chunk size switch."""
+        """Initialize the override switch."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Override Chunk Size"
-        self._attr_unique_id = f"{entry_id}_override_chunk_size"
-        self._attr_icon = "mdi:cog"
+        self._data_key = data_key
+        self._attr_name = name
+        self._attr_unique_id = f"{entry_id}_{data_key}"
         self._attr_device_info = device_info
 
     @property
     def is_on(self) -> bool:
         """Return True if override is enabled."""
         return (
-            self.coordinator.data.get("override_chunk_size", False)
+            self.coordinator.data.get(self._data_key, False)
             if self.coordinator.data
             else False
         )
 
     async def async_turn_on(self, **kwargs) -> None:
-        """Enable chunk size override."""
-        _LOGGER.debug("Enabling chunk size override")
-        self.coordinator.async_update_data_optimistic("override_chunk_size", True)
+        """Enable the override."""
+        _LOGGER.debug("Enabling %s", self._data_key)
+        self.coordinator.async_update_data_optimistic(self._data_key, True)
         self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
-        """Disable chunk size override."""
-        _LOGGER.debug("Disabling chunk size override")
-        self.coordinator.async_update_data_optimistic("override_chunk_size", False)
-        self.async_write_ha_state()
-
-
-class SkellyOverrideBitrateSwitch(CoordinatorEntity, SwitchEntity):
-    """Switch to enable/disable manual bitrate override for file transfers."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the override bitrate switch."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Override Bitrate"
-        self._attr_unique_id = f"{entry_id}_override_bitrate"
-        self._attr_icon = "mdi:cog"
-        self._attr_device_info = device_info
-
-    @property
-    def is_on(self) -> bool:
-        """Return True if override is enabled."""
-        return (
-            self.coordinator.data.get("override_bitrate", False)
-            if self.coordinator.data
-            else False
-        )
-
-    async def async_turn_on(self, **kwargs) -> None:
-        """Enable bitrate override."""
-        _LOGGER.debug("Enabling bitrate override")
-        self.coordinator.async_update_data_optimistic("override_bitrate", True)
-        self.async_write_ha_state()
-
-    async def async_turn_off(self, **kwargs) -> None:
-        """Disable bitrate override."""
-        _LOGGER.debug("Disabling bitrate override")
-        self.coordinator.async_update_data_optimistic("override_bitrate", False)
+        """Disable the override."""
+        _LOGGER.debug("Disabling %s", self._data_key)
+        self.coordinator.async_update_data_optimistic(self._data_key, False)
         self.async_write_ha_state()

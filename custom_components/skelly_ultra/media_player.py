@@ -61,7 +61,77 @@ async def async_setup_entry(
     )
 
 
-class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
+class _SkellyVolumeControlMixin:
+    """Shared 0-100 <-> 0.0-1.0 volume control against the coordinator's cached volume.
+
+    Used by both media player entities. Requires `self.coordinator`
+    (a SkellyCoordinator) on the including class.
+    """
+
+    @property
+    def volume_level(self) -> float | None:
+        """Return the volume level (0.0 to 1.0).
+
+        Returns:
+            float | None: Volume level as a fraction (0.0-1.0), or None if unknown.
+        """
+        data = getattr(self.coordinator, "data", None)
+        if data and (vol := data.get("volume")) is not None:
+            try:
+                # Convert from 0-100 percentage to 0.0-1.0 fraction
+                return int(vol) / 100.0
+            except (ValueError, TypeError):
+                return None
+        return None
+
+    async def async_set_volume_level(self, volume: float) -> None:
+        """Set volume level (0.0 to 1.0).
+
+        Args:
+            volume: Volume level as a fraction (0.0-1.0)
+        """
+        # Convert from 0.0-1.0 fraction to 0-100 percentage
+        volume_percent = int(volume * 100)
+
+        try:
+            await self.coordinator.adapter.client.set_volume(volume_percent)
+        except (OSError, RuntimeError, ValueError):
+            # Setting failed; do not change state
+            return
+
+        # Update coordinator cache for immediate UI update. Goes through
+        # async_update_data_optimistic (not async_set_updated_data directly)
+        # so the coordinator's optimistic-update counter is incremented -
+        # otherwise a poll running concurrently with this call could
+        # overwrite it with stale fetched data.
+        self.coordinator.async_update_data_optimistic("volume", volume_percent)
+
+        self.async_write_ha_state()
+
+        # Request refresh to get authoritative state
+        with contextlib.suppress(Exception):
+            await self.coordinator.async_request_refresh()
+
+    async def async_volume_up(self) -> None:
+        """Turn volume up by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = min(1.0, current + 0.05)
+        await self.async_set_volume_level(new_volume)
+
+    async def async_volume_down(self) -> None:
+        """Turn volume down by 5%."""
+        current = self.volume_level
+        if current is None:
+            return
+        new_volume = max(0.0, current - 0.05)
+        await self.async_set_volume_level(new_volume)
+
+
+class SkellyLiveMediaPlayer(
+    _SkellyVolumeControlMixin, CoordinatorEntity, MediaPlayerEntity
+):
     """Media player for playing audio to Skelly's classic BT speaker in live mode."""
 
     _attr_has_entity_name = True
@@ -150,65 +220,6 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         # Return the same entity_picture that the image entity uses
         # This includes the proper access token
         return image_state.attributes.get("entity_picture")
-
-    @property
-    def volume_level(self) -> float | None:
-        """Return the volume level (0.0 to 1.0).
-
-        Returns:
-            float | None: Volume level as a fraction (0.0-1.0), or None if unknown.
-        """
-        data = getattr(self.coordinator, "data", None)
-        if data and (vol := data.get("volume")) is not None:
-            try:
-                # Convert from 0-100 percentage to 0.0-1.0 fraction
-                return int(vol) / 100.0
-            except (ValueError, TypeError):
-                return None
-        return None
-
-    async def async_set_volume_level(self, volume: float) -> None:
-        """Set volume level (0.0 to 1.0).
-
-        Args:
-            volume: Volume level as a fraction (0.0-1.0)
-        """
-        # Convert from 0.0-1.0 fraction to 0-100 percentage
-        volume_percent = int(volume * 100)
-
-        try:
-            await self.coordinator.adapter.client.set_volume(volume_percent)
-        except (OSError, RuntimeError, ValueError):
-            # Setting failed; do not change state
-            return
-
-        # Update coordinator cache for immediate UI update
-        new_data = dict(self.coordinator.data or {})
-        new_data["volume"] = volume_percent
-        with contextlib.suppress(Exception):
-            self.coordinator.async_set_updated_data(new_data)
-
-        self.async_write_ha_state()
-
-        # Request refresh to get authoritative state
-        with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
-
-    async def async_volume_up(self) -> None:
-        """Turn volume up by 5%."""
-        current = self.volume_level
-        if current is None:
-            return
-        new_volume = min(1.0, current + 0.05)
-        await self.async_set_volume_level(new_volume)
-
-    async def async_volume_down(self) -> None:
-        """Turn volume down by 5%."""
-        current = self.volume_level
-        if current is None:
-            return
-        new_volume = max(0.0, current - 0.05)
-        await self.async_set_volume_level(new_volume)
 
     async def async_play_media(
         self, media_type: str, media_id: str, **kwargs: Any
@@ -435,7 +446,9 @@ class SkellyLiveMediaPlayer(CoordinatorEntity, MediaPlayerEntity):
         self.async_write_ha_state()
 
 
-class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
+class SkellyInternalFilesPlayer(
+    _SkellyVolumeControlMixin, CoordinatorEntity, MediaPlayerEntity
+):
     """Media player for playing files stored on the device's internal storage."""
 
     _attr_has_entity_name = True
@@ -654,17 +667,6 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
         ]
 
     @property
-    def volume_level(self) -> float | None:
-        """Return the volume level (0.0 to 1.0) from coordinator data."""
-        data = getattr(self.coordinator, "data", None)
-        if data and (vol := data.get("volume")) is not None:
-            try:
-                return int(vol) / 100.0
-            except (ValueError, TypeError):
-                return None
-        return None
-
-    @property
     def extra_state_attributes(self) -> dict[str, Any]:
         """Return entity specific state attributes.
 
@@ -695,39 +697,6 @@ class SkellyInternalFilesPlayer(CoordinatorEntity, MediaPlayerEntity):
             attrs["file_order"] = []
 
         return attrs
-
-    async def async_set_volume_level(self, volume: float) -> None:
-        """Set volume level (0.0 to 1.0)."""
-        volume_percent = int(volume * 100)
-
-        try:
-            await self.coordinator.adapter.client.set_volume(volume_percent)
-        except (OSError, RuntimeError, ValueError):
-            return
-
-        # Update coordinator cache
-        self.coordinator.async_update_data_optimistic("volume", volume_percent)
-
-        self.async_write_ha_state()
-
-        with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
-
-    async def async_volume_up(self) -> None:
-        """Turn volume up by 5%."""
-        current = self.volume_level
-        if current is None:
-            return
-        new_volume = min(1.0, current + 0.05)
-        await self.async_set_volume_level(new_volume)
-
-    async def async_volume_down(self) -> None:
-        """Turn volume down by 5%."""
-        current = self.volume_level
-        if current is None:
-            return
-        new_volume = max(0.0, current - 0.05)
-        await self.async_set_volume_level(new_volume)
 
     async def async_media_play(self) -> None:
         """Play the current file or first file if none selected."""

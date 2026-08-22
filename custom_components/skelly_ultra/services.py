@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import voluptuous as vol
 
@@ -652,81 +654,32 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
         raise HomeAssistantError(f"Failed to delete file: {exc}") from exc
 
 
+# (service name, handler, schema) - drives both register_services and
+# unregister_services so the two can't drift out of sync with each other.
+_SERVICES: tuple[tuple[str, Any, vol.Schema], ...] = (
+    ("enable_classic_bt", async_enable_classic_bt_service, SERVICE_ENABLE_CLASSIC_BT),
+    ("play_file", async_play_file_service, SERVICE_FILE_CONTROL),
+    ("stop_file", async_stop_file_service, SERVICE_FILE_CONTROL),
+    (
+        "cancel_file_transfer",
+        async_cancel_file_transfer_service,
+        SERVICE_CANCEL_FILE_TRANSFER,
+    ),
+    ("send_file", async_send_file_service, SERVICE_SEND_FILE),
+    ("delete_file", async_delete_file_service, SERVICE_DELETE_FILE),
+)
+
+
 def register_services(hass: HomeAssistant) -> None:
     """Register all Skelly Ultra services."""
-
-    async def enable_classic_bt_wrapper(call):
-        await async_enable_classic_bt_service(hass, call)
-
-    async def play_file_wrapper(call):
-        await async_play_file_service(hass, call)
-
-    async def stop_file_wrapper(call):
-        await async_stop_file_service(hass, call)
-
-    async def cancel_file_transfer_wrapper(call):
-        await async_cancel_file_transfer_service(hass, call)
-
-    async def send_file_wrapper(call):
-        await async_send_file_service(hass, call)
-
-    async def delete_file_wrapper(call):
-        await async_delete_file_service(hass, call)
-
-    hass.services.async_register(
-        DOMAIN,
-        "enable_classic_bt",
-        enable_classic_bt_wrapper,
-        schema=SERVICE_ENABLE_CLASSIC_BT,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        "play_file",
-        play_file_wrapper,
-        schema=SERVICE_FILE_CONTROL,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        "stop_file",
-        stop_file_wrapper,
-        schema=SERVICE_FILE_CONTROL,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        "cancel_file_transfer",
-        cancel_file_transfer_wrapper,
-        schema=SERVICE_CANCEL_FILE_TRANSFER,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        "send_file",
-        send_file_wrapper,
-        schema=SERVICE_SEND_FILE,
-    )
-
-    hass.services.async_register(
-        DOMAIN,
-        "delete_file",
-        delete_file_wrapper,
-        schema=SERVICE_DELETE_FILE,
-    )
+    for name, handler, schema in _SERVICES:
+        hass.services.async_register(
+            DOMAIN, name, functools.partial(handler, hass), schema=schema
+        )
 
 
 def unregister_services(hass: HomeAssistant) -> None:
     """Unregister all Skelly Ultra services."""
-    if hass.services.has_service(DOMAIN, "enable_classic_bt"):
-        hass.services.async_remove(DOMAIN, "enable_classic_bt")
-    if hass.services.has_service(DOMAIN, "play_file"):
-        hass.services.async_remove(DOMAIN, "play_file")
-    if hass.services.has_service(DOMAIN, "stop_file"):
-        hass.services.async_remove(DOMAIN, "stop_file")
-    if hass.services.has_service(DOMAIN, "cancel_file_transfer"):
-        hass.services.async_remove(DOMAIN, "cancel_file_transfer")
-    if hass.services.has_service(DOMAIN, "send_file"):
-        hass.services.async_remove(DOMAIN, "send_file")
-    if hass.services.has_service(DOMAIN, "delete_file"):
-        hass.services.async_remove(DOMAIN, "delete_file")
+    for name, _handler, _schema in _SERVICES:
+        if hass.services.has_service(DOMAIN, name):
+            hass.services.async_remove(DOMAIN, name)
