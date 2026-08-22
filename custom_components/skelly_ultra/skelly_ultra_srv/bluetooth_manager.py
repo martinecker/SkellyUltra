@@ -397,48 +397,6 @@ class BluetoothManager:
         self._remember_device_adapter(normalized_mac, adapter_path)
         return adapter_path
 
-    async def _async_select_adapter_for_pairing(self, mac: str | None = None) -> str:
-        """Select adapter to use for pairing a device."""
-
-        await self._async_get_adapter_paths()
-        normalized_mac = self._normalize_mac(mac) if mac else None
-
-        if normalized_mac:
-            adapter_path = await self._async_get_device_adapter_path(normalized_mac)
-            if adapter_path:
-                return adapter_path
-
-        available_adapters = [
-            path
-            for path in self._adapter_paths
-            if self._adapter_is_available(path, normalized_mac)
-        ]
-        if not available_adapters:
-            raise RuntimeError(
-                "All Bluetooth adapters are currently connected to other devices. "
-                "Disconnect one before pairing another speaker."
-            )
-
-        assignments: dict[str, int] = dict.fromkeys(available_adapters, 0)
-
-        for mapped_adapters in self._device_adapter_map.values():
-            for mapped_adapter in mapped_adapters:
-                if mapped_adapter in assignments:
-                    assignments[mapped_adapter] += 1
-
-        min_count = min(assignments.values())
-        candidates = [path for path, count in assignments.items() if count == min_count]
-        candidates.sort()
-        if not candidates:
-            raise RuntimeError("No Bluetooth adapters available for pairing")
-
-        index = self._adapter_rr_index % len(candidates)
-        adapter_path = candidates[index]
-        self._adapter_rr_index = (self._adapter_rr_index + 1) % len(self._adapter_paths)
-        if normalized_mac:
-            self._remember_device_adapter(normalized_mac, adapter_path)
-        return adapter_path
-
     @staticmethod
     def _device_path_for_adapter(adapter_path: str, mac: str) -> str:
         """Return deterministic device path for adapter and MAC."""
@@ -2105,28 +2063,6 @@ if __name__ == "__main__":
         for device in self._connected_devices.values():
             if device.name and name.lower() in device.name.lower():
                 return device
-        return None
-
-    def get_connected_device_name(self) -> str | None:
-        """Get the name of a connected device (for backwards compatibility).
-
-        Returns:
-            Device name or None if no devices connected
-        """
-        if self._connected_devices:
-            # Return first device name
-            return next(iter(self._connected_devices.values())).name
-        return None
-
-    def get_connected_device_mac(self) -> str | None:
-        """Get the MAC address of a connected device (for backwards compatibility).
-
-        Returns:
-            Device MAC or None if no devices connected
-        """
-        if self._connected_devices:
-            # Return first device MAC
-            return next(iter(self._connected_devices.values())).mac
         return None
 
     def get_device_adapter_path(self, mac: str | None) -> str | None:
