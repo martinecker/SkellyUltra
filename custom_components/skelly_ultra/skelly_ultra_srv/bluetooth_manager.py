@@ -661,6 +661,43 @@ class BluetoothManager:
         )
         return device_name
 
+    async def _try_record_active_connection(
+        self,
+        normalized_mac: str,
+        mac: str,
+        adapter_path: str,
+        device_props: Any,
+    ) -> bool:
+        """If the device has a ready PipeWire output node, record the connection.
+
+        Assumes the caller has already confirmed BlueZ reports the device as
+        Connected. Returns True (after recording the connection and logging
+        success) if resolve_bluez_output_node finds a ready node, False if
+        the node isn't ready yet. Raises RuntimeError if node resolution
+        itself fails - callers handle that differently, so it isn't caught
+        here.
+        """
+        adapter_display = self._format_adapter(adapter_path)
+        node_name = await resolve_bluez_output_node(normalized_mac)
+        if not node_name:
+            return False
+
+        device_name = await self._async_record_connection(
+            normalized_mac,
+            mac,
+            adapter_path,
+            device_props,
+            pipewire_node=node_name,
+        )
+        _LOGGER.info(
+            "Device %s (%s) already connected via %s as PipeWire node %s",
+            device_name or "Unknown",
+            mac,
+            adapter_display,
+            node_name,
+        )
+        return True
+
     async def _async_confirm_existing_connection(
         self,
         normalized_mac: str,
@@ -709,7 +746,10 @@ class BluetoothManager:
             return False
 
         try:
-            node_name = await resolve_bluez_output_node(normalized_mac)
+            if await self._try_record_active_connection(
+                normalized_mac, mac, existing_connection, device_props
+            ):
+                return True
         except RuntimeError as exc:
             _LOGGER.debug(
                 "Failed to verify PipeWire node for %s via %s: %s",
@@ -719,30 +759,13 @@ class BluetoothManager:
             )
             return False
 
-        if not node_name:
-            _LOGGER.debug(
-                "Device %s (%s) connected via %s but PipeWire node not ready yet",
-                mac,
-                normalized_mac,
-                adapter_display,
-            )
-            return False
-
-        device_name = await self._async_record_connection(
+        _LOGGER.debug(
+            "Device %s (%s) connected via %s but PipeWire node not ready yet",
+            mac,
             normalized_mac,
-            mac,
-            existing_connection,
-            device_props,
-            pipewire_node=node_name,
-        )
-        _LOGGER.info(
-            "Device %s (%s) already connected via %s as PipeWire node %s",
-            device_name or "Unknown",
-            mac,
             adapter_display,
-            node_name,
         )
-        return True
+        return False
 
     async def _async_get_paired_adapter_interfaces(
         self, normalized_mac: str
@@ -1434,9 +1457,7 @@ if __name__ == "__main__":
             _LOGGER.debug("Could not check paired status: %s", exc)
             return False
 
-        paired = (
-            paired_variant.value if hasattr(paired_variant, "value") else paired_variant
-        )
+        paired = self._variant_value(paired_variant)
         if not paired:
             return False
 
@@ -1447,11 +1468,7 @@ if __name__ == "__main__":
             adapter_path,
         )
         trusted_variant = await device_props.call_get("org.bluez.Device1", "Trusted")
-        trusted = (
-            trusted_variant.value
-            if hasattr(trusted_variant, "value")
-            else trusted_variant
-        )
+        trusted = self._variant_value(trusted_variant)
         if not trusted:
             await device_props.call_set(
                 "org.bluez.Device1", "Trusted", Variant("b", True)
@@ -1861,31 +1878,16 @@ if __name__ == "__main__":
 
         if already_connected:
             try:
-                node_name = await resolve_bluez_output_node(normalized_mac)
+                if await self._try_record_active_connection(
+                    normalized_mac, mac, adapter_path, device_props
+                ):
+                    return True
             except RuntimeError as exc:
                 _LOGGER.debug(
                     "PipeWire verification failed for existing connection %s: %s",
                     mac,
                     exc,
                 )
-                node_name = None
-
-            if node_name:
-                device_name = await self._async_record_connection(
-                    normalized_mac,
-                    mac,
-                    adapter_path,
-                    device_props,
-                    pipewire_node=node_name,
-                )
-                _LOGGER.info(
-                    "Device %s (%s) already connected via %s as PipeWire node %s",
-                    device_name or "Unknown",
-                    mac,
-                    adapter_display,
-                    node_name,
-                )
-                return True
 
             _LOGGER.info(
                 "Device %s appears connected via %s but PipeWire node missing; "
