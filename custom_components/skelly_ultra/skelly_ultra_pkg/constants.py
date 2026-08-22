@@ -11,6 +11,12 @@ Skelly Ultra BLE protocol, similar to constants.js in the JavaScript codebase.
 # Marker used before filename/name strings in command payloads
 PROTOCOL_MARKER_FILENAME = "5C55"
 
+# Device silently drops an upload whose target filename exceeds this length:
+# the transfer/confirm commands still ack with failed=0, but the file never
+# appears in the file list afterward. Confirmed empirically: 33 chars works,
+# 34 chars fails.
+MAX_FILENAME_LENGTH = 33
+
 # ============================================================================
 # COMMAND TAGS (sent TO device)
 # ============================================================================

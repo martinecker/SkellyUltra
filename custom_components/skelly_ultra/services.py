@@ -20,6 +20,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
+from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .skelly_ultra_pkg.file_transfer import (
     FileTransferCancelled,
     FileTransferError,
@@ -274,6 +275,16 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
 
     file_path = call.data["file_path"]
     target_filename = call.data["target_filename"]
+
+    # The device accepts an upload with a filename longer than this, acking
+    # transfer/confirm with failed=0, but then silently never lists the file
+    # afterward. Reject up front instead of failing silently.
+    if len(target_filename) > MAX_FILENAME_LENGTH:
+        raise HomeAssistantError(
+            f'Target filename "{target_filename}" is {len(target_filename)} '
+            f"characters, which exceeds the device's {MAX_FILENAME_LENGTH}-character "
+            "limit. Shorten it and try again."
+        )
 
     # Get the transfer progress sensor for this entry
     transfer_sensor = None
