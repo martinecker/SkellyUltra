@@ -14,6 +14,17 @@ from . import commands, parser
 logger = logging.getLogger(__name__)
 
 
+def _is_bluez_backend(client: BleakClient) -> bool:
+    """Check whether a connected BleakClient is using the BlueZ backend.
+
+    BlueZ requires an explicit MTU acquisition workaround (see get_mtu_size
+    and connect) that other backends don't need.
+    """
+    return hasattr(client, "_backend") and "bluez" in type(
+        client._backend  # noqa: SLF001
+    ).__module__.lower()
+
+
 class SkellyClient:
     def __init__(
         self,
@@ -122,8 +133,7 @@ class SkellyClient:
             # Initialize MTU to prevent warning on first access
             # For BlueZ backend, set a temporary value that will be replaced by _acquire_mtu()
             if (
-                hasattr(self._client, "_backend")
-                and "bluez" in type(self._client._backend).__module__.lower()  # noqa: SLF001
+                _is_bluez_backend(self._client)
                 and hasattr(self._client._backend, "_mtu_size")  # noqa: SLF001
                 and self._client._backend._mtu_size is None  # noqa: SLF001
             ):
@@ -250,14 +260,7 @@ class SkellyClient:
         try:
             if self._client and hasattr(self._client, "mtu_size"):
                 # Workaround for BlueZ backend: acquire MTU to get actual value
-                # Check if backend is BlueZ by inspecting the backend class name
-                if (
-                    hasattr(self._client, "_backend")
-                    and "bluez"
-                    in type(
-                        self._client._backend  # noqa: SLF001
-                    ).__module__.lower()
-                ):
+                if _is_bluez_backend(self._client):
                     # Workaround for BlueZ: _acquire_mtu() must be called to get actual MTU
                     # instead of the default value (23). Only call it once.
                     backend = self._client._backend  # noqa: SLF001
@@ -430,6 +433,19 @@ class SkellyClient:
         """Return the MAC address of the connected classic BT device."""
         return self._live_mode_client_address
 
+    async def _post_send_command(self, cmd_bytes: bytes) -> dict[str, Any]:
+        """POST a command to the REST server's BLE proxy send_command endpoint."""
+        session = self._get_rest_session()
+        async with session.post(
+            f"{self.server_url}/ble/send_command",
+            json={
+                "session_id": self._ble_session_id,
+                "command": cmd_bytes.hex(),
+            },
+            timeout=aiohttp.ClientTimeout(total=5.0),
+        ) as resp:
+            return await resp.json()
+
     async def send_command(self, cmd_bytes: bytes) -> None:
         if not self.is_connected:
             raise RuntimeError("Not connected")
@@ -447,52 +463,34 @@ class SkellyClient:
                 raise RuntimeError("BLE proxy session not established")
 
             try:
-                session = self._get_rest_session()
-                async with session.post(
-                    f"{self.server_url}/ble/send_command",
-                    json={
-                        "session_id": self._ble_session_id,
-                        "command": cmd_bytes.hex(),
-                    },
-                    timeout=aiohttp.ClientTimeout(total=5.0),
-                ) as resp:
-                    data = await resp.json()
-                    if not data.get("success"):
-                        error = data.get("error", "unknown")
-                        # Check if device disconnected - attempt reconnection once
-                        if "disconnected" in error.lower():
-                            logger.warning(
-                                "BLE device disconnected, attempting automatic reconnection",
+                data = await self._post_send_command(cmd_bytes)
+                if not data.get("success"):
+                    error = data.get("error", "unknown")
+                    # Check if device disconnected - attempt reconnection once
+                    if "disconnected" in error.lower():
+                        logger.warning(
+                            "BLE device disconnected, attempting automatic reconnection",
+                        )
+                        # Clear old session
+                        self._ble_session_id = None
+                        if self._polling_task and not self._polling_task.done():
+                            self._polling_task.cancel()
+
+                        # Try to reconnect
+                        if await self._connect_via_proxy(timeout=10.0):
+                            logger.info(
+                                "Reconnected successfully, retrying command",
                             )
-                            # Clear old session
-                            self._ble_session_id = None
-                            if self._polling_task and not self._polling_task.done():
-                                self._polling_task.cancel()
-
-                            # Try to reconnect
-                            if await self._connect_via_proxy(timeout=10.0):
-                                logger.info(
-                                    "Reconnected successfully, retrying command",
+                            # Retry the command once after reconnection
+                            retry_data = await self._post_send_command(cmd_bytes)
+                            if not retry_data.get("success"):
+                                raise RuntimeError(
+                                    f"BLE proxy send failed after reconnect: {retry_data.get('error', 'unknown')}",
                                 )
-                                # Retry the command once after reconnection
-                                session = self._get_rest_session()
-                                async with session.post(
-                                    f"{self.server_url}/ble/send_command",
-                                    json={
-                                        "session_id": self._ble_session_id,
-                                        "command": cmd_bytes.hex(),
-                                    },
-                                    timeout=aiohttp.ClientTimeout(total=5.0),
-                                ) as retry_resp:
-                                    retry_data = await retry_resp.json()
-                                    if not retry_data.get("success"):
-                                        raise RuntimeError(
-                                            f"BLE proxy send failed after reconnect: {retry_data.get('error', 'unknown')}",
-                                        )
-                                return  # Command succeeded after reconnection
-                            logger.error("Failed to reconnect to BLE device")
+                            return  # Command succeeded after reconnection
+                        logger.error("Failed to reconnect to BLE device")
 
-                        raise RuntimeError(f"BLE proxy send failed: {error}")
+                    raise RuntimeError(f"BLE proxy send failed: {error}")
             except aiohttp.ClientError as err:
                 logger.exception("BLE proxy communication error during send_command")
                 raise RuntimeError(f"BLE proxy communication error: {err}") from err

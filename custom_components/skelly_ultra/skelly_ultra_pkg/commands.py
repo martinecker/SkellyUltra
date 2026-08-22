@@ -62,6 +62,20 @@ def _build_filename_payload(name: str, with_length: bool = True) -> str:
     return name_len + marker
 
 
+def _validate_channel(channel: int) -> None:
+    if channel != -1 and not 0 <= channel <= 5:
+        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+
+
+def _validate_cluster(cluster: int) -> None:
+    if not 0 <= cluster <= MAX_CLUSTER:
+        raise ValueError(f"Cluster must be between 0 and {MAX_CLUSTER}, got {cluster}")
+
+
+def _channel_hex(channel: int) -> str:
+    return "FF" if channel == -1 else int_to_hex(channel, 1)
+
+
 def build_cmd(tag: str, payload: str = "00") -> bytes:
     base_str = tag + payload
     if len(payload) < 16:
@@ -136,17 +150,14 @@ def set_music_mode(mode: int) -> bytes:
 def set_light_mode(
     channel: int, mode: int, cluster: int = 0, filename: str = ""
 ) -> bytes:
-    if channel != -1 and not 0 <= channel <= 5:
-        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    _validate_channel(channel)
     if not 1 <= mode <= 3:
         raise ValueError(
             f"Light mode must be 1, 2, or 3, got {mode}",
         )
-    if not 0 <= cluster <= 0xFFFFFFFF:
-        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    ch = "FF" if channel == -1 else int_to_hex(channel, 1)
+    _validate_cluster(cluster)
     payload = (
-        ch
+        _channel_hex(channel)
         + int_to_hex(mode, 1)
         + int_to_hex(cluster, 4)
         + _build_filename_payload(filename)
@@ -160,15 +171,12 @@ def set_light_brightness(
     cluster: int = 0,
     filename: str = "",
 ) -> bytes:
-    if channel != -1 and not 0 <= channel <= 5:
-        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    _validate_channel(channel)
     if not 0 <= brightness <= 255:
         raise ValueError(f"Brightness must be between 0 and 255, got {brightness}")
-    if not 0 <= cluster <= 0xFFFFFFFF:
-        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    ch = "FF" if channel == -1 else int_to_hex(channel, 1)
+    _validate_cluster(cluster)
     payload = (
-        ch
+        _channel_hex(channel)
         + int_to_hex(brightness, 1)
         + int_to_hex(cluster, 4)
         + _build_filename_payload(filename)
@@ -185,8 +193,7 @@ def set_light_rgb(
     cluster: int = 0,
     filename: str = "",
 ) -> bytes:
-    if channel != -1 and not 0 <= channel <= 5:
-        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    _validate_channel(channel)
     if not 0 <= r <= 255:
         raise ValueError(f"Red value must be between 0 and 255, got {r}")
     if not 0 <= g <= 255:
@@ -195,11 +202,9 @@ def set_light_rgb(
         raise ValueError(f"Blue value must be between 0 and 255, got {b}")
     if not 0 <= color_cycle <= 1:
         raise ValueError(f"color cycle value must be 0 or 1, got {color_cycle}")
-    if not 0 <= cluster <= 0xFFFFFFFF:
-        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    ch = "FF" if channel == -1 else int_to_hex(channel, 1)
+    _validate_cluster(cluster)
     payload = (
-        ch
+        _channel_hex(channel)
         + int_to_hex(r, 1)
         + int_to_hex(g, 1)
         + int_to_hex(b, 1)
@@ -216,15 +221,12 @@ def set_light_speed(
     cluster: int = 0,
     filename: str = "",
 ) -> bytes:
-    if channel != -1 and not 0 <= channel <= 5:
-        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
+    _validate_channel(channel)
     if not 0 <= speed <= 255:
         raise ValueError(f"Speed must be between 0 and 255, got {speed}")
-    if not 0 <= cluster <= 0xFFFFFFFF:
-        raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
-    ch = "FF" if channel == -1 else int_to_hex(channel, 1)
+    _validate_cluster(cluster)
     payload = (
-        ch
+        _channel_hex(channel)
         + int_to_hex(speed, 1)
         + int_to_hex(cluster, 4)
         + _build_filename_payload(filename)
@@ -233,12 +235,8 @@ def set_light_speed(
 
 
 def select_rgb_channel(channel: int) -> bytes:
-    if channel != -1 and not 0 <= channel <= 5:
-        raise ValueError(f"Channel must be -1 (all) or 0-5, got {channel}")
-    return build_cmd(
-        const.CMD_SELECT_RGB_CHANNEL,
-        "FF" if channel == -1 else int_to_hex(channel, 1),
-    )
+    _validate_channel(channel)
+    return build_cmd(const.CMD_SELECT_RGB_CHANNEL, _channel_hex(channel))
 
 
 def set_eye_icon(icon: int, cluster: int, filename: str) -> bytes:

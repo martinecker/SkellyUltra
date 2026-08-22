@@ -146,6 +146,25 @@ def get_ascii(hexpart: str) -> str:
         return ""
 
 
+def _parse_lights(hexstr: str, offset: int, count: int = 6) -> list[LightInfo]:
+    """Parse `count` consecutive 14-hex-char light chunks starting at `offset`."""
+    lights: list[LightInfo] = []
+    for i in range(count):
+        chunk = hexstr[offset + i * 14 : offset + (i + 1) * 14]
+        if len(chunk) < 14:
+            continue
+        lights.append(
+            LightInfo(
+                effect_type=int(chunk[0:2], 16),
+                brightness=int(chunk[2:4], 16),
+                rgb=(int(chunk[4:6], 16), int(chunk[6:8], 16), int(chunk[8:10], 16)),
+                color_cycle=int(chunk[10:12], 16),
+                effect_speed=int(chunk[12:14], 16),
+            ),
+        )
+    return lights
+
+
 def parse_notification(
     sender: Any,
     data: bytes,
@@ -179,28 +198,7 @@ def parse_notification(
 
     if hexstr.startswith(const.RESP_LIVE_MODE):
         action = int(hexstr[4:6], 16)
-        lights: list[LightInfo] = []
-        light_data = hexstr[6:90]
-        for i in range(6):
-            chunk = light_data[i * 14 : (i + 1) * 14]
-            if len(chunk) < 14:
-                continue
-            effect_type = int(chunk[0:2], 16)
-            brightness = int(chunk[2:4], 16)
-            r = int(chunk[4:6], 16)
-            g = int(chunk[6:8], 16)
-            b = int(chunk[8:10], 16)
-            color_cycle = int(chunk[10:12], 16)
-            effect_speed = int(chunk[12:14], 16)
-            lights.append(
-                LightInfo(
-                    effect_type=effect_type,
-                    brightness=brightness,
-                    rgb=(r, g, b),
-                    color_cycle=color_cycle,
-                    effect_speed=effect_speed,
-                ),
-            )
+        lights = _parse_lights(hexstr, offset=6)
         eye_icon = int(hexstr[90:92], 16)
         return LiveModeEvent(
             action=action,
@@ -310,27 +308,7 @@ def parse_notification(
         total_files = int(hexstr[16:20], 16)
         length = int(hexstr[20:24], 16)
         action = int(hexstr[24:26], 16)
-        light_data = hexstr[26:110]
-        lights: list[LightInfo] = []
-        for i in range(6):
-            chunk = light_data[i * 14 : (i + 1) * 14]
-            if len(chunk) == 14:
-                effect_type = int(chunk[0:2], 16)
-                brightness = int(chunk[2:4], 16)
-                r = int(chunk[4:6], 16)
-                g = int(chunk[6:8], 16)
-                b = int(chunk[8:10], 16)
-                color_cycle = int(chunk[10:12], 16)
-                effect_speed = int(chunk[12:14], 16)
-                lights.append(
-                    LightInfo(
-                        effect_type=effect_type,
-                        brightness=brightness,
-                        rgb=(r, g, b),
-                        color_cycle=color_cycle,
-                        effect_speed=effect_speed,
-                    ),
-                )
+        lights = _parse_lights(hexstr, offset=26)
         eye_icon = int(hexstr[110:112], 16)
         db_pos = int(hexstr[112:114], 16)
         try:

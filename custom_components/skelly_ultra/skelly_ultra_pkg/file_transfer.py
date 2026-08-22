@@ -126,19 +126,15 @@ class FileTransferManager:
             )
 
         # Try to use MTU-based chunk size if available
-        try:
-            mtu = await client.get_mtu_size()
-            if mtu and mtu > 0:
-                chunk_size = self.calculate_chunk_size_from_mtu(mtu)
-                logger.debug(
-                    "Using MTU-based chunk size: %d bytes (MTU: %d)",
-                    chunk_size,
-                    mtu,
-                )
-                return chunk_size
-        except (AttributeError, TypeError):
-            # MTU not available or not valid, fall through to default
-            pass
+        mtu = await client.get_mtu_size()
+        if mtu and mtu > 0:
+            chunk_size = self.calculate_chunk_size_from_mtu(mtu)
+            logger.debug(
+                "Using MTU-based chunk size: %d bytes (MTU: %d)",
+                chunk_size,
+                mtu,
+            )
+            return chunk_size
 
         logger.debug("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
