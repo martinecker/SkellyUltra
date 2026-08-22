@@ -599,6 +599,22 @@ data:
 - Partial uploads are discarded
 - After cancellation, you can start a new upload
 
+#### Delete File Service
+
+Delete a file from the device's internal storage:
+
+```yaml
+service: skelly_ultra.delete_file
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  filename: "announcement.mp3"
+```
+
+**Notes**:
+- `filename` must match a file currently on the device — check the **File Order** sensor or the internal files media player to see what's stored
+- The service refreshes the device's file list before deleting (to resolve the file) and again afterward to confirm the change
+- Deletion is confirmed with the device before the service call returns; an error is raised if the device doesn't confirm within the timeout
+
 #### Automation Example: Play Different Files Based on Time
 
 ```yaml
