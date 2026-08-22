@@ -311,6 +311,13 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     file_path = call.data["file_path"]
     target_filename = call.data["target_filename"]
 
+    # AudioProcessor always converts the uploaded audio to MP3 (the device
+    # only plays MP3), so normalize the target filename to match regardless
+    # of what extension, if any, the user provided. Doing this before the
+    # length check below ensures that check validates the filename that will
+    # actually be sent to the device.
+    target_filename = f"{Path(target_filename).stem}.mp3"
+
     # The device accepts an upload with a filename longer than this, acking
     # transfer/confirm with failed=0, but then silently never lists the file
     # afterward. Reject up front instead of failing silently.
