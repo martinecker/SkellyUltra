@@ -313,9 +313,18 @@ async def _run_pw_dump() -> tuple[list[dict[str, object]], str]:
 
     payload = _remove_lonely_bracket_lines(payload)
 
+    # pw-dump's output isn't always one clean JSON document - depending on
+    # pipewire version, timing, and what else is writing to stdout, it can
+    # come back malformed in several different ways. Each fallback below
+    # handles progressively messier input; only reached if the stricter
+    # attempts before it fail.
+    #
+    # 1. The happy path: the whole payload is one valid JSON array/object.
     data = _try_parse(payload)
     if data is None:
-        # Some versions emit logs before the JSON blob; attempt to locate the first array/dict
+        # 2. Some versions/setups prepend log lines before the JSON blob;
+        # retry starting from the first "[" or "{" found anywhere in the
+        # payload, in case that's where the real document begins.
         start_index = -1
         for candidate in ("[", "{"):
             idx = payload.find(candidate)
@@ -326,12 +335,23 @@ async def _run_pw_dump() -> tuple[list[dict[str, object]], str]:
             data = _try_parse(payload[start_index:])
 
     if data is None:
+        # 3. The payload is several complete top-level JSON values
+        # concatenated back to back (with or without separators/newlines
+        # between them) rather than one array - e.g. multiple pw-dump
+        # snapshots stitched together.
         data = _parse_streamed_json(payload)
 
     if data is None:
+        # 4. Newline-delimited JSON: each non-empty line is its own
+        # self-contained JSON value. Stricter than #3 (every line must
+        # parse on its own), so it catches cases where raw_decode's more
+        # permissive scanning still didn't line up correctly.
         data = _parse_ndjson(payload)
 
     if data is None:
+        # 5. Last resort: track brace depth (respecting quoted strings) to
+        # pull out individual {...} objects directly, ignoring anything
+        # between/around them that isn't valid JSON at all.
         data = _parse_object_segments(payload)
 
     if data is None:
@@ -356,7 +376,13 @@ def _try_parse(content: str) -> list[dict[str, object]] | None:
 
 
 def _remove_lonely_bracket_lines(payload: str) -> str:
-    """Return payload without lines that only contain stray brackets."""
+    """Return payload without lines that only contain stray brackets.
+
+    Some pw-dump output has been observed with array brackets on their own
+    line, separate from the object entries (e.g. a lone "[" line, then each
+    object, then a lone "]" line) - this strips those so the remaining text
+    is more likely to parse as a single JSON document or object segments.
+    """
 
     cleaned_lines: list[str] = []
     junk_lines = {"[", "]", "[]", "[ ]"}
