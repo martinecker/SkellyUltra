@@ -326,6 +326,10 @@ def cancel_send() -> bytes:
     return build_cmd(const.CMD_CANCEL_SEND)
 
 
+def format_device() -> bytes:
+    return build_cmd(const.CMD_FORMAT_DEVICE)
+
+
 def play_file(file_index: int) -> bytes:
     if not 0 <= file_index <= 0xFFFF:
         raise ValueError(f"File index must be between 0 and {0xFFFF}, got {file_index}")

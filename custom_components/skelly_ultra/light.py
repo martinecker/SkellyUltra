@@ -204,22 +204,6 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
                 lights[self._channel]["brightness"] = int(desired_brightness)
                 self.coordinator.async_update_data_optimistic("lights", lights)
 
-        if brightness is not None and client:
-            try:
-                # brightness already 0-255 range
-                await client.set_light_brightness(self._channel, int(brightness))
-            except (ValueError, TypeError):
-                pass
-            else:
-                # push optimistic brightness into coordinator cache
-                data = self.coordinator.data or {}
-                lights = list(data.get("lights") or [{}, {}])
-                while len(lights) <= self._channel:
-                    lights.append({})
-                lights[self._channel] = dict(lights[self._channel])
-                lights[self._channel]["brightness"] = int(brightness)
-                self.coordinator.async_update_data_optimistic("lights", lights)
-
         # If no brightness provided but turning on, set on=True
         # No local state is kept; coordinator cache update will drive
         # entity state. Ensure HA updates immediately and request a single

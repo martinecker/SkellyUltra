@@ -1229,6 +1229,7 @@ class SkellyUltraServer:
             self._log_request("ble/notifications", params)
 
             session_id = params.get("session_id")
+            since = 0
             since = int(params.get("since", 0))
             timeout = float(params.get("timeout", 30.0))
 

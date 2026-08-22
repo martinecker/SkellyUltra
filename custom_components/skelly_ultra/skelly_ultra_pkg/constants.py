@@ -60,7 +60,7 @@ CMD_CANCEL_SEND = "AAC4"
 CMD_RESUME_SEND = "AAC5"
 CMD_PLAY_STOP_FILE = "AAC6"  # Payload last byte: 01=play, 00=stop
 CMD_DELETE_FILE = "AAC7"
-CMD_FORMAT = "AAC8"  # Not currently implemented in commands.py
+CMD_FORMAT_DEVICE = "AAC8"
 CMD_SET_FILE_ORDER = "AAC9"
 
 # ============================================================================
@@ -132,7 +132,7 @@ COMMAND_TAGS = {
     CMD_RESUME_SEND: "resume_send",
     CMD_PLAY_STOP_FILE: "play_stop_file",
     CMD_DELETE_FILE: "delete_file",
-    CMD_FORMAT: "format",
+    CMD_FORMAT_DEVICE: "format",
     CMD_SET_FILE_ORDER: "set_file_order",
 }
 
