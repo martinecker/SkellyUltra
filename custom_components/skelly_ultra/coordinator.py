@@ -552,7 +552,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         action = state.get("action")
         if action is not None:
             try:
-                await self.adapter.client.set_action(int(action))
+                await self.adapter.client.set_movement_action(int(action))
             except Exception:
                 self._logger.debug(
                     "Failed to push action bitfield to device", exc_info=True

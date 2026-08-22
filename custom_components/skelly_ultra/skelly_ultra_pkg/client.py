@@ -589,14 +589,16 @@ class SkellyClient:
     ) -> None:
         await self.send_command(commands.set_light_speed(channel, speed, cluster, name))
 
-    async def set_action(self, action: int, cluster: int = 0, name: str = "") -> None:
+    async def set_movement_action(
+        self, action: int, cluster: int = 0, name: str = ""
+    ) -> None:
         """Set movement action bitfield.
 
         Action is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
         If a bit is set, movement for that body part is enabled, otherwise disabled.
         Value of 255 enables all (head+arm+torso).
         """
-        await self.send_command(commands.set_action(action, cluster, name))
+        await self.send_command(commands.set_movement_action(action, cluster, name))
 
     async def select_rgb_channel(self, channel: int) -> None:
         await self.send_command(commands.select_rgb_channel(channel))
@@ -725,7 +727,7 @@ class SkellyClient:
                 with contextlib.suppress(Exception):
                     self.events.put_nowait(e)
 
-    async def set_music_order(
+    async def set_file_order(
         self,
         total: int,
         index: int,
@@ -733,16 +735,8 @@ class SkellyClient:
         filename: str,
     ) -> None:
         await self.send_command(
-            commands.set_music_order(total, index, file_serial, filename),
+            commands.set_file_order(total, index, file_serial, filename),
         )
-
-    async def set_music_animation(
-        self,
-        action: int,
-        cluster: int,
-        filename: str,
-    ) -> None:
-        await self.send_command(commands.set_music_animation(action, cluster, filename))
 
     # Awaitable helpers that send a query and wait for a matching parsed event
     async def _wait_for_event(self, predicate, timeout: float = 2.0):

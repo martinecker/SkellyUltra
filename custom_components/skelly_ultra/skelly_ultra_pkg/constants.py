@@ -42,8 +42,8 @@ CMD_SELECT_RGB_CHANNEL = "AAF5"
 CMD_SET_LIGHT_SPEED = "AAF6"
 CMD_SET_EYE_ICON = "AAF9"
 
-# Action Control Commands (C series - CA)
-CMD_SET_ACTION = "AACA"  # Bitfield: bit0=head, bit1=arm, bit2=torso
+# Movement Action Control Commands (C series - CA)
+CMD_SET_MOVEMENT_ACTION = "AACA"  # Bitfield: bit0=head, bit1=arm, bit2=torso
 
 # File Transfer Commands (C series - C0 to C8)
 CMD_START_SEND_DATA = "AAC0"
@@ -116,7 +116,7 @@ COMMAND_TAGS = {
     CMD_SET_LIGHT_SPEED: "set_light_speed",
     CMD_SET_EYE_ICON: "set_eye_icon",
     # Action control commands
-    CMD_SET_ACTION: "set_action",
+    CMD_SET_MOVEMENT_ACTION: "set_movement_action",
     # File transfer commands
     CMD_START_SEND_DATA: "start_send_data",
     CMD_SEND_DATA_CHUNK: "send_data_chunk",

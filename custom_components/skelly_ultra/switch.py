@@ -487,7 +487,7 @@ class SkellyMovementSwitch(CoordinatorEntity, SwitchEntity):
                 else:
                     new_action = current_action & ~self._bit_value
 
-                await self.coordinator.adapter.client.set_action(new_action)
+                await self.coordinator.adapter.client.set_movement_action(new_action)
                 self.coordinator.async_update_data_optimistic("action", new_action)
                 self.async_write_ha_state()
 

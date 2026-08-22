@@ -36,21 +36,30 @@ def int_to_hex(n: int, byte_len: int) -> str:
     return pad_hex(hex(n)[2:], byte_len * 2).upper()
 
 
-def _build_filename_payload(name: str) -> str:
-    """Build filename payload with length prefix and protocol marker.
+def _build_filename_payload(name: str, with_length: bool = True) -> str:
+    """Build filename payload with protocol marker.
+
+    The per-file setting commands (AAF2/F3/F4/F6/F9/AACA/AAC9) require a
+    1-byte length prefix (marker + name bytes) before the marker. The file
+    transfer commands (AAC0 start_send_data, AAC3 confirm_file) take the
+    bare marker instead - the device rejects/ignores a length byte there.
 
     Args:
         name: Filename or name string to encode
+        with_length: Whether to prepend the 1-byte length prefix
 
     Returns:
-        Hex string: length (1 byte) + protocol marker + UTF-16LE encoded name
+        Hex string: [length (1 byte)] + protocol marker + UTF-16LE encoded name
         If name is empty, returns "00"
     """
     if not name:
         return "00"
     name_utf16 = to_utf16le_hex(name)
+    marker = const.PROTOCOL_MARKER_FILENAME + name_utf16
+    if not with_length:
+        return marker
     name_len = int_to_hex((len(name_utf16) // 2) + 2, 1)
-    return name_len + const.PROTOCOL_MARKER_FILENAME + name_utf16
+    return name_len + marker
 
 
 def build_cmd(tag: str, payload: str = "00") -> bytes:
@@ -253,14 +262,14 @@ def set_eye_icon(icon: int, cluster: int, filename: str) -> bytes:
 # Action here is a bitfield where bit 0 = head, bit 1 = arm, bit 2 = torso.
 # If a bit is set movement for that body part is enabled, otherwise disabled.
 # Can send a value of 255 to enable all (head+arm+torso) which in the phone app has a unique icon.
-def set_action(action: int, cluster: int, filename: str) -> bytes:
+def set_movement_action(action: int, cluster: int, filename: str) -> bytes:
     if not 0 <= action <= 255:
         raise ValueError(f"Action must be between 0 and 255, got {action}")
     if not 0 <= cluster <= 0xFFFFFFFF:
         raise ValueError(f"Cluster must be between 0 and {0xFFFFFFFF}, got {cluster}")
     if not filename and cluster > 0:
         raise ValueError(
-            "Filename cannot be empty for set_action when cluster is specified",
+            "Filename cannot be empty for set_movement_action when cluster is specified",
         )
     payload = (
         int_to_hex(action, 1)
@@ -268,7 +277,7 @@ def set_action(action: int, cluster: int, filename: str) -> bytes:
         + int_to_hex(cluster, 4)
         + _build_filename_payload(filename)
     )
-    return build_cmd(const.CMD_SET_ACTION, payload)
+    return build_cmd(const.CMD_SET_MOVEMENT_ACTION, payload)
 
 
 # File transfer and playback
@@ -285,7 +294,7 @@ def start_send_data(size: int, chunk_count: int, filename: str) -> bytes:
         const.CMD_START_SEND_DATA,
         int_to_hex(size, 4)
         + int_to_hex(chunk_count, 2)
-        + _build_filename_payload(filename),
+        + _build_filename_payload(filename, with_length=False),
     )
 
 
@@ -309,7 +318,7 @@ def confirm_file(filename: str) -> bytes:
         raise ValueError("Filename cannot be empty")
     return build_cmd(
         const.CMD_CONFIRM_FILE,
-        _build_filename_payload(filename),
+        _build_filename_payload(filename, with_length=False),
     )
 
 
@@ -339,6 +348,33 @@ def stop_file(file_index: int) -> bytes:
         msg = f"File index must be between 0 and {MAX_FILE_INDEX}, got {file_index}"
         raise ValueError(msg)
     return build_cmd(const.CMD_PLAY_STOP_FILE, int_to_hex(file_index, 2) + "00")
+
+
+def set_file_order(total: int, index: int, file_serial: int, filename: str) -> bytes:
+    """Set a file's position in the play order (AAC9).
+
+    Args:
+        total: Count of enabled files in the play order
+        index: 1-indexed position of this file within the play order
+        file_serial: Device-assigned serial of the file
+        filename: Filename to address (required, length-prefixed like the
+            other per-file setting commands)
+    """
+    if not 0 <= total <= 0xFF:
+        raise ValueError(f"Total must be between 0 and 255, got {total}")
+    if not 0 <= index <= 0xFF:
+        raise ValueError(f"Index must be between 0 and 255, got {index}")
+    if not 0 <= file_serial <= 0xFFFF:
+        raise ValueError(f"File serial must be between 0 and {0xFFFF}, got {file_serial}")
+    if not filename:
+        raise ValueError("Filename cannot be empty")
+    payload = (
+        int_to_hex(total, 1)
+        + int_to_hex(index, 1)
+        + int_to_hex(file_serial, 2)
+        + _build_filename_payload(filename)
+    )
+    return build_cmd(const.CMD_SET_FILE_ORDER, payload)
 
 
 def delete_file(file_index: int, cluster: int) -> bytes:
