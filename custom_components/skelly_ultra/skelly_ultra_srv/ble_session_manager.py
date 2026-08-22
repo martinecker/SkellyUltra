@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
@@ -13,6 +14,22 @@ from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _put_nowait_dropping_oldest(queue: asyncio.Queue, item) -> None:
+    """Put item into an asyncio.Queue, dropping the oldest item if full.
+
+    If the queue is still full after dropping the oldest item (e.g. due to
+    concurrent access), the item is silently skipped.
+    """
+    try:
+        queue.put_nowait(item)
+    except asyncio.QueueFull:
+        try:
+            queue.get_nowait()
+            queue.put_nowait(item)
+        except Exception:
+            pass
 
 # Skelly Ultra BLE UUIDs
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
@@ -82,15 +99,7 @@ class BLESession:
             sender=str(sender),
             data=data,
         )
-        try:
-            self.notification_buffer.put_nowait(notification)
-        except asyncio.QueueFull:
-            # Drop oldest notification if buffer full
-            try:
-                self.notification_buffer.get_nowait()
-                self.notification_buffer.put_nowait(notification)
-            except Exception:
-                pass  # Still can't add, skip this notification
+        _put_nowait_dropping_oldest(self.notification_buffer, notification)
 
 
 class BLESessionManager:
@@ -216,6 +225,35 @@ class BLESessionManager:
                 await self._scanner.stop()
             raise
 
+    async def _poll_for_devices(
+        self,
+        get_matching_devices: Callable[[], list[dict[str, str]]],
+        timeout: float,
+        initial_results: list[dict[str, str]],
+        *,
+        stop_when_found: bool,
+    ) -> tuple[list[dict[str, str]], float]:
+        """Poll get_matching_devices() every 500ms until timeout.
+
+        If stop_when_found is True, returns as soon as get_matching_devices()
+        is non-empty. Otherwise polls for the full timeout regardless of
+        result count (used when waiting for the background scanner to
+        populate a still-sparse device cache). Returns (final results,
+        elapsed seconds).
+        """
+        start_time = asyncio.get_event_loop().time()
+        poll_interval = 0.5  # Poll every 500ms
+        results = initial_results
+
+        while asyncio.get_event_loop().time() - start_time < timeout:
+            await asyncio.sleep(poll_interval)
+            results = get_matching_devices()
+            if stop_when_found and results:
+                break
+
+        elapsed = asyncio.get_event_loop().time() - start_time
+        return results, elapsed
+
     async def scan_devices(
         self, name_filter: str | None = None, timeout: float = 10.0
     ) -> list[dict[str, str]]:
@@ -262,20 +300,17 @@ class BLESessionManager:
                 name_filter,
                 timeout,
             )
-            start_time = asyncio.get_event_loop().time()
-            poll_interval = 0.5  # Poll every 500ms
-
-            while asyncio.get_event_loop().time() - start_time < timeout:
-                await asyncio.sleep(poll_interval)
-                results = get_matching_devices()
-                if results:
-                    _LOGGER.info(
-                        "Found %d device(s) matching '%s' after %.1fs",
-                        len(results),
-                        name_filter,
-                        asyncio.get_event_loop().time() - start_time,
-                    )
-                    return results
+            results, elapsed = await self._poll_for_devices(
+                get_matching_devices, timeout, [], stop_when_found=True
+            )
+            if results:
+                _LOGGER.info(
+                    "Found %d device(s) matching '%s' after %.1fs",
+                    len(results),
+                    name_filter,
+                    elapsed,
+                )
+                return results
 
             _LOGGER.info(
                 "No devices matching '%s' found after timeout",
@@ -290,19 +325,13 @@ class BLESessionManager:
                 len(self._device_cache),
                 timeout,
             )
-            start_time = asyncio.get_event_loop().time()
-            poll_interval = 0.5  # Poll every 500ms
-
-            while asyncio.get_event_loop().time() - start_time < timeout:
-                await asyncio.sleep(poll_interval)
-                results = get_matching_devices()
-                # Keep waiting until timeout regardless of device count
-
-            results = get_matching_devices()
+            results, elapsed = await self._poll_for_devices(
+                get_matching_devices, timeout, initial_results, stop_when_found=False
+            )
             _LOGGER.info(
                 "Found %d BLE device(s) in cache after %.1fs",
                 len(results),
-                asyncio.get_event_loop().time() - start_time,
+                elapsed,
             )
             return results
 
@@ -586,15 +615,7 @@ class BLESessionManager:
 
         # Put ALL notifications back into the queue (keeps buffer for debugging)
         for notif in temp_buffer:
-            try:
-                session.notification_buffer.put_nowait(notif)
-            except asyncio.QueueFull:
-                # If buffer is full, we'll drop oldest notifications
-                try:
-                    session.notification_buffer.get_nowait()
-                    session.notification_buffer.put_nowait(notif)
-                except Exception:
-                    pass
+            _put_nowait_dropping_oldest(session.notification_buffer, notif)
 
         # If we have notifications, return immediately
         if notifications:
