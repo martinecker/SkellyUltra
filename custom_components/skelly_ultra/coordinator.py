@@ -194,6 +194,25 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         await super().async_request_refresh()
 
+    @staticmethod
+    def _light_state_dict(light: Any) -> dict[str, Any]:
+        """Build the coordinator-cache dict for a single light from a LightInfo, or all-None if absent."""
+        if light is None:
+            return {
+                "brightness": None,
+                "rgb": None,
+                "effect_type": None,
+                "color_cycle": None,
+                "effect_speed": None,
+            }
+        return {
+            "brightness": int(getattr(light, "brightness", 0)),
+            "rgb": tuple(getattr(light, "rgb", (0, 0, 0))),
+            "effect_type": int(getattr(light, "effect_type", 1)),
+            "color_cycle": int(getattr(light, "color_cycle", 0)),
+            "effect_speed": int(getattr(light, "effect_speed", 0)),
+        }
+
     async def _async_update_data(self) -> Any:
         # Logic to ensure we push state to device on first connection or on reconnect after a disconnect
         if not self._was_connected and self.adapter.client.is_connected:
@@ -246,34 +265,27 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         # When using asyncio.gather with shared event queue, multiple waiters
                         # compete for the same events causing timeouts. Sequential execution
                         # ensures each query gets its response before the next starts.
-                        live_mode = await self.adapter.client.get_live_mode(
-                            timeout=timeout_seconds
+                        queries = (
+                            self.adapter.client.get_live_mode,
+                            self.adapter.client.get_device_params,
+                            self.adapter.client.get_volume,
+                            self.adapter.client.get_live_name,
+                            self.adapter.client.get_capacity,
+                            self.adapter.client.get_file_order,
                         )
-                        await asyncio.sleep(0.05)  # 50ms delay between queries
-
-                        device_params = await self.adapter.client.get_device_params(
-                            timeout=timeout_seconds
-                        )
-                        await asyncio.sleep(0.05)
-
-                        vol = await self.adapter.client.get_volume(
-                            timeout=timeout_seconds
-                        )
-                        await asyncio.sleep(0.05)
-
-                        live_name = await self.adapter.client.get_live_name(
-                            timeout=timeout_seconds
-                        )
-                        await asyncio.sleep(0.05)
-
-                        cap = await self.adapter.client.get_capacity(
-                            timeout=timeout_seconds
-                        )
-                        await asyncio.sleep(0.05)
-
-                        file_order = await self.adapter.client.get_file_order(
-                            timeout=timeout_seconds
-                        )
+                        results = []
+                        for i, query in enumerate(queries):
+                            results.append(await query(timeout=timeout_seconds))
+                            if i < len(queries) - 1:
+                                await asyncio.sleep(0.05)  # 50ms delay between queries
+                        (
+                            live_mode,
+                            device_params,
+                            vol,
+                            live_name,
+                            cap,
+                            file_order,
+                        ) = results
                 except TimeoutError as ex:
                     self._logger.warning(
                         "Coordinator update timed out after %s seconds", timeout_seconds
@@ -421,40 +433,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     "pin_code": pin_code,
                     # lights is a list of small dicts with brightness, rgb, effect_type, color_cycle, and effect_speed
                     "lights": [
-                        {
-                            "brightness": int(getattr(light0, "brightness", 0))
-                            if light0 is not None
-                            else None,
-                            "rgb": tuple(getattr(light0, "rgb", (0, 0, 0)))
-                            if light0 is not None
-                            else None,
-                            "effect_type": int(getattr(light0, "effect_type", 1))
-                            if light0 is not None
-                            else None,
-                            "color_cycle": int(getattr(light0, "color_cycle", 0))
-                            if light0 is not None
-                            else None,
-                            "effect_speed": int(getattr(light0, "effect_speed", 0))
-                            if light0 is not None
-                            else None,
-                        },
-                        {
-                            "brightness": int(getattr(light1, "brightness", 0))
-                            if light1 is not None
-                            else None,
-                            "rgb": tuple(getattr(light1, "rgb", (0, 0, 0)))
-                            if light1 is not None
-                            else None,
-                            "effect_type": int(getattr(light1, "effect_type", 1))
-                            if light1 is not None
-                            else None,
-                            "color_cycle": int(getattr(light1, "color_cycle", 0))
-                            if light1 is not None
-                            else None,
-                            "effect_speed": int(getattr(light1, "effect_speed", 0))
-                            if light1 is not None
-                            else None,
-                        },
+                        self._light_state_dict(light0),
+                        self._light_state_dict(light1),
                     ],
                 }
                 self._logger.debug("Coordinator fetched data: %s", data)

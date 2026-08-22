@@ -6,6 +6,7 @@ This keeps the HA integration code separate from the library internals.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 import logging
 
 from bleak import BleakClient
@@ -101,6 +102,134 @@ class SkellyClientAdapter:
                 "Automatic live-mode restore did not complete successfully"
             )
 
+    async def _retry_connect(
+        self,
+        attempts: int,
+        backoff: float,
+        attempt_fn: Callable[[int], Awaitable[bool]],
+        *,
+        context: str,
+        failure_log_is_error: bool = False,
+    ) -> bool:
+        """Run attempt_fn up to `attempts` times with exponential backoff between tries.
+
+        attempt_fn(attempt) should return True on success or False on a clean
+        failure; any exception it raises is treated the same as a False
+        return (logged, then retried). Returns True as soon as attempt_fn
+        succeeds, or False once all attempts are exhausted. `context`
+        describes the connection method for log messages (e.g. "via BLE
+        proxy" or "to Skelly device").
+        """
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                if await attempt_fn(attempt):
+                    return True
+            except Exception as exc:  # broad catch so we can retry
+                last_exc = exc
+                self._logger.warning(
+                    "Attempt %d to connect %s failed: %s", attempt, context, exc
+                )
+
+            if attempt < attempts:
+                sleep_for = backoff * (2 ** (attempt - 1))
+                self._logger.debug("Retrying in %.1f seconds", sleep_for)
+                await asyncio.sleep(sleep_for)
+
+        log = self._logger.error if failure_log_is_error else self._logger.warning
+        if last_exc:
+            log("All connection attempts %s failed: %s", context, last_exc)
+        else:
+            log("All connection attempts %s failed (no exception available)", context)
+        return False
+
+    async def _try_proxy_connect(self, attempt: int) -> bool:
+        """Single connection attempt via the BLE proxy REST server."""
+        ok = await self._client.connect()
+        if ok:
+            self._logger.info(
+                "Connected to Skelly device via BLE proxy on attempt %d", attempt
+            )
+            return True
+        self._logger.warning(
+            "BLE proxy connection returned False on attempt %d", attempt
+        )
+        return False
+
+    async def _try_direct_connect(self, attempt: int) -> bool:
+        """Single connection attempt via HA's bluetooth helpers, or library discovery."""
+        if self.address:
+            ble_device = None
+            try:
+                # Try to get BLE device from HA's bluetooth integration
+                result = bluetooth.async_ble_device_from_address(
+                    self.hass, self.address
+                )
+                # Handle both sync and async versions of the API
+                if hasattr(result, "__await__"):
+                    ble_device = await result
+                else:
+                    ble_device = result
+            except Exception as exc:
+                self._logger.debug(
+                    "HA bluetooth helper couldn't resolve address %s: %s",
+                    self.address,
+                    exc,
+                )
+                ble_device = None
+
+            if ble_device:
+                # Prefer using bleak-retry-connector to establish a
+                # connection so the connection uses the shared retry
+                # logic and Home Assistant's recommended connector.
+                bleak_client = None
+                try:
+                    bleak_client = await establish_connection(
+                        BleakClient,
+                        ble_device,
+                        ble_device.name or "Animated Skelly",
+                    )
+                except Exception:
+                    self._logger.debug(
+                        "establish_connection failed for %s, falling back to BleakClient",
+                        self.address,
+                        exc_info=True,
+                    )
+
+                if bleak_client is None:
+                    # Last-resort fallback: create a BleakClient instance
+                    # from the resolved device. SkellyClient.connect will
+                    # avoid calling connect() if the client is already
+                    # connected, but using establish_connection above is
+                    # preferred to avoid a HA bleak-retry warning.
+                    bleak_client = BleakClient(ble_device)
+
+                ok = await self._client.connect(client=bleak_client)
+                if ok:
+                    self._logger.info(
+                        "Connected to Skelly device at %s on attempt %d",
+                        self.address,
+                        attempt,
+                    )
+                    return True
+
+                self._logger.warning(
+                    "SkellyClient.connect returned False for %s on attempt %d",
+                    self.address,
+                    attempt,
+                )
+
+        # Fallback to library discovery/connect
+        # Defer notification registration to HA
+        ok = await self._client.connect()
+        if ok:
+            self._logger.info(
+                "SkellyClient connected via internal discovery on attempt %d",
+                attempt,
+            )
+            return True
+        return False
+
     async def _connect_internal(self, attempts: int, backoff: float) -> bool:
         """Connect using HA's bluetooth helpers when possible, with retries.
 
@@ -108,49 +237,15 @@ class SkellyClientAdapter:
         transient errors with exponential backoff. Returns True on success,
         False on failure.
         """
-        last_exc: Exception | None = None
-
         # If using BLE proxy, connect directly through the client without BLE device
         if self._client.use_ble_proxy:
-            for attempt in range(1, attempts + 1):
-                try:
-                    ok = await self._client.connect()
-                    if ok:
-                        self._logger.info(
-                            "Connected to Skelly device via BLE proxy on attempt %d",
-                            attempt,
-                        )
-                        return True
-
-                    self._logger.warning(
-                        "BLE proxy connection returned False on attempt %d",
-                        attempt,
-                    )
-
-                except Exception as exc:
-                    last_exc = exc
-                    self._logger.warning(
-                        "Attempt %d to connect via BLE proxy failed: %s",
-                        attempt,
-                        exc,
-                    )
-
-                # Backoff before retrying
-                if attempt < attempts:
-                    sleep_for = backoff * (2 ** (attempt - 1))
-                    self._logger.debug("Retrying in %.1f seconds", sleep_for)
-                    await asyncio.sleep(sleep_for)
-
-            # All attempts exhausted
-            if last_exc:
-                self._logger.error(
-                    "All BLE proxy connection attempts failed: %s", last_exc
-                )
-            else:
-                self._logger.error(
-                    "All BLE proxy connection attempts failed (no exception available)"
-                )
-            return False
+            return await self._retry_connect(
+                attempts,
+                backoff,
+                self._try_proxy_connect,
+                context="via BLE proxy",
+                failure_log_is_error=True,
+            )
 
         # Direct BLE mode - use HA's bluetooth helpers
         # Ensure any stale connections are cleaned up before attempting
@@ -163,101 +258,9 @@ class SkellyClientAdapter:
                     "close_stale_connections_by_address failed", exc_info=True
                 )
 
-        for attempt in range(1, attempts + 1):
-            try:
-                if self.address:
-                    ble_device = None
-                    try:
-                        # Try to get BLE device from HA's bluetooth integration
-                        result = bluetooth.async_ble_device_from_address(
-                            self.hass, self.address
-                        )
-                        # Handle both sync and async versions of the API
-                        if hasattr(result, "__await__"):
-                            ble_device = await result
-                        else:
-                            ble_device = result
-                    except Exception as exc:
-                        self._logger.debug(
-                            "HA bluetooth helper couldn't resolve address %s: %s",
-                            self.address,
-                            exc,
-                        )
-                        ble_device = None
-
-                    if ble_device:
-                        # Prefer using bleak-retry-connector to establish a
-                        # connection so the connection uses the shared retry
-                        # logic and Home Assistant's recommended connector.
-                        bleak_client = None
-                        try:
-                            bleak_client = await establish_connection(
-                                BleakClient,
-                                ble_device,
-                                ble_device.name or "Animated Skelly",
-                            )
-                        except Exception:
-                            self._logger.debug(
-                                "establish_connection failed for %s, falling back to BleakClient",
-                                self.address,
-                                exc_info=True,
-                            )
-
-                        if bleak_client is None:
-                            # Last-resort fallback: create a BleakClient instance
-                            # from the resolved device. SkellyClient.connect will
-                            # avoid calling connect() if the client is already
-                            # connected, but using establish_connection above is
-                            # preferred to avoid a HA bleak-retry warning.
-                            bleak_client = BleakClient(ble_device)
-
-                        ok = await self._client.connect(client=bleak_client)
-                        if ok:
-                            self._logger.info(
-                                "Connected to Skelly device at %s on attempt %d",
-                                self.address,
-                                attempt,
-                            )
-                            return True
-
-                        self._logger.warning(
-                            "SkellyClient.connect returned False for %s on attempt %d",
-                            self.address,
-                            attempt,
-                        )
-
-                # Fallback to library discovery/connect
-                # Defer notification registration to HA
-                ok = await self._client.connect()
-                if ok:
-                    self._logger.info(
-                        "SkellyClient connected via internal discovery on attempt %d",
-                        attempt,
-                    )
-                    return True
-
-            except Exception as exc:  # broad catch so we can retry
-                last_exc = exc
-                self._logger.warning(
-                    "Attempt %d to connect to Skelly device failed: %s",
-                    attempt,
-                    exc,
-                )
-
-            # Backoff before retrying
-            if attempt < attempts:
-                sleep_for = backoff * (2 ** (attempt - 1))
-                self._logger.debug("Retrying in %.1f seconds", sleep_for)
-                await asyncio.sleep(sleep_for)
-
-        # All attempts exhausted
-        if last_exc:
-            self._logger.warning("All connection attempts failed: %s", last_exc)
-        else:
-            self._logger.warning(
-                "All connection attempts failed (no exception available)"
-            )
-        return False
+        return await self._retry_connect(
+            attempts, backoff, self._try_direct_connect, context="to Skelly device"
+        )
 
     async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
         """Connect to the Skelly BLE device.

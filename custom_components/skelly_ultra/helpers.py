@@ -125,10 +125,9 @@ def get_device_name(entry: ConfigEntry, device_info: DeviceInfo | None) -> str:
     """Derive a device-friendly name for logging and display."""
 
     if device_info:
-        # DeviceInfo exposes attributes directly; fall back to mapping access if needed
-        device_name = getattr(device_info, "name", None)
-        if not device_name and hasattr(device_info, "get"):
-            device_name = device_info.get("name")
+        # DeviceInfo is a TypedDict (a plain dict at runtime, no attribute
+        # access), so it must be read via mapping access.
+        device_name = device_info.get("name")
         if device_name:
             return cast(str, device_name)
 
