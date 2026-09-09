@@ -24,6 +24,19 @@ from .helpers import DeviceLoggerAdapter
 
 _LOGGER = logging.getLogger(__name__)
 
+# While the device is playing an internal file, BLE polling is suppressed so the
+# coordinator's query burst (notably the capacity query) doesn't knock the device
+# out of playback. Polling normally resumes when the device reports playback
+# stopped; the safety timer below only covers a missed "stopped" notification.
+#
+# When the device reports the file's duration, the timer is set to that plus a
+# margin (any length - no upper cap, or long files would be cut off). The
+# fallback is used only for the brief window before the device's first
+# PlaybackEvent arrives, after which the timer is re-armed with the real
+# duration.
+PLAYBACK_ACTIVE_MARGIN_SECONDS = 10.0
+PLAYBACK_ACTIVE_FALLBACK_SECONDS = 60.0
+
 
 class SkellyCoordinator(DataUpdateCoordinator):
     """Coordinator for the Skelly animatronic BLE device.
@@ -60,6 +73,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._is_initializing = True
         self._last_refresh_request = 0.0
         self._updates_paused = False
+        # Independent of _updates_paused (the Connected switch): set while the
+        # device plays an internal file, to hold off BLE polling.
+        self._playback_active = False
+        self._playback_active_timer: asyncio.TimerHandle | None = None
         self._file_list: list[Any] = []
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
@@ -102,6 +119,53 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._logger.info("Resuming coordinator updates")
         self._updates_paused = False
 
+    def mark_playback_active(self, duration_seconds: float | None = None) -> None:
+        """Suppress device polling while the device plays an internal file.
+
+        The Skelly aborts internal-file playback if it receives the coordinator's
+        BLE query burst mid-file (notably the capacity query), so polling is held
+        off until playback ends. This is independent of pause_updates() /
+        resume_updates(), which are driven by the Connected switch.
+
+        A safety timer clears the flag after the expected duration (plus a
+        margin) so polling can't get stuck off if the device's "playback
+        stopped" notification is never received. When the duration is known it
+        is used as-is with no upper cap, so long files are not cut short.
+        """
+        if duration_seconds and duration_seconds > 0:
+            timeout = duration_seconds + PLAYBACK_ACTIVE_MARGIN_SECONDS
+        else:
+            timeout = PLAYBACK_ACTIVE_FALLBACK_SECONDS
+
+        self._playback_active = True
+        if self._playback_active_timer is not None:
+            self._playback_active_timer.cancel()
+        self._playback_active_timer = self.hass.loop.call_later(
+            timeout, self._on_playback_active_timeout
+        )
+        self._logger.debug(
+            "Playback active - suppressing device polling for up to %.0fs", timeout
+        )
+
+    def mark_playback_inactive(self) -> None:
+        """Re-enable device polling after internal-file playback ends."""
+        if self._playback_active_timer is not None:
+            self._playback_active_timer.cancel()
+            self._playback_active_timer = None
+        if self._playback_active:
+            self._playback_active = False
+            self._logger.debug("Playback ended - resuming device polling")
+
+    def _on_playback_active_timeout(self) -> None:
+        """Force-resume polling if no 'playback stopped' event arrived in time."""
+        self._playback_active_timer = None
+        if self._playback_active:
+            self._logger.warning(
+                "Playback-active flag timed out without a stop event; "
+                "resuming device polling"
+            )
+            self._playback_active = False
+
     async def async_refresh_file_list(self) -> None:
         """Refresh the list of files from the device.
 
@@ -114,6 +178,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
         # Check if we have a connection before attempting to fetch
         if not self.adapter.client.is_connected:
             self._logger.debug("Skipping file list refresh - device not connected")
+            return
+
+        # Don't query the device mid-playback - the capacity query aborts it.
+        if self._playback_active:
+            self._logger.debug(
+                "Skipping file list refresh - internal file playback in progress"
+            )
             return
 
         async with self.action_lock:
@@ -192,6 +263,14 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
             self._logger.debug("Requesting coordinator refresh after delay")
 
+        # Playback may have started during the debounce sleep; suppressing here
+        # covers both the immediate and delayed paths.
+        if self._playback_active:
+            self._logger.debug(
+                "Skipping coordinator refresh - internal file playback in progress"
+            )
+            return
+
         await super().async_request_refresh()
 
     @staticmethod
@@ -227,6 +306,15 @@ class SkellyCoordinator(DataUpdateCoordinator):
             raise UpdateFailed(
                 "Device updates paused due to turned off Connected switch"
             )
+
+        # Skip polling while the device is playing an internal file: the query
+        # burst (notably the capacity query) knocks the device out of playback.
+        # Return the last known data so entities don't churn to unavailable.
+        if self._playback_active and self.data is not None:
+            self._logger.debug(
+                "Coordinator poll skipped - internal file playback in progress"
+            )
+            return self.data
 
         if not self.adapter.client.is_connected:
             # Try to reconnect unless the device initialization is still running

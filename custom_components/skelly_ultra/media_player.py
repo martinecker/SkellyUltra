@@ -533,6 +533,8 @@ class SkellyInternalFilesPlayer(
             self._monitor_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._monitor_task
+        # Don't leave polling suppressed if we're torn down mid-playback.
+        self.coordinator.mark_playback_inactive()
         await super().async_will_remove_from_hass()
 
     async def _monitor_play_pause_events(self) -> None:
@@ -566,6 +568,15 @@ class SkellyInternalFilesPlayer(
                                 # Update our state to match the device
                                 self._current_file_index = event.file_index
                                 self._is_playing = event.playing
+
+                                # Suppress / resume coordinator BLE polling so
+                                # its query burst doesn't abort device-side playback.
+                                if event.playing:
+                                    self.coordinator.mark_playback_active(
+                                        event.duration
+                                    )
+                                else:
+                                    self.coordinator.mark_playback_inactive()
 
                                 # Update Home Assistant immediately
                                 self.async_write_ha_state()
@@ -708,6 +719,10 @@ class SkellyInternalFilesPlayer(
             try:
                 await self.adapter.client.play_file(self._current_file_index)
                 self._is_playing = True
+                # Hold off coordinator polling right away, before the device's
+                # PlaybackEvent arrives; that event refines the timeout with the
+                # real duration.
+                self.coordinator.mark_playback_active()
                 self.async_write_ha_state()
             except Exception:
                 _LOGGER.exception("Failed to play file %d", self._current_file_index)
@@ -720,6 +735,7 @@ class SkellyInternalFilesPlayer(
             except Exception:
                 _LOGGER.exception("Failed to stop file %d", self._current_file_index)
         self._is_playing = False
+        self.coordinator.mark_playback_inactive()
         self.async_write_ha_state()
 
     async def async_media_next_track(self) -> None:
