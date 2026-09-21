@@ -84,7 +84,7 @@ class ResumeWriteEvent:
 class PlaybackEvent:
     file_index: int
     playing: bool
-    duration: int
+    duration: int  # seconds
 
 
 @dataclass
@@ -114,7 +114,6 @@ class FileInfoEvent:
     file_index: int
     cluster: int
     total_files: int
-    length: int
     action: int
     eye_icon: int
     db_pos: int
@@ -306,7 +305,7 @@ def parse_notification(
         file_index = int(hexstr[4:8], 16)
         cluster = int(hexstr[8:16], 16)
         total_files = int(hexstr[16:20], 16)
-        length = int(hexstr[20:24], 16)
+        # hexstr[20:24] is skipped: observed as always 0 on real devices.
         action = int(hexstr[24:26], 16)
         lights = _parse_lights(hexstr, offset=26)
         eye_icon = int(hexstr[110:112], 16)
@@ -320,7 +319,6 @@ def parse_notification(
             file_index=file_index,
             cluster=cluster,
             total_files=total_files,
-            length=length,
             action=action,
             eye_icon=eye_icon,
             db_pos=db_pos,

@@ -482,6 +482,7 @@ class SkellyInternalFilesPlayer(
 
         # Playlist state
         self._current_file_index: int | None = None
+        self._current_file_duration: int | None = None
         self._is_playing = False
         self._monitor_task: asyncio.Task | None = None
 
@@ -567,6 +568,7 @@ class SkellyInternalFilesPlayer(
 
                                 # Update our state to match the device
                                 self._current_file_index = event.file_index
+                                self._current_file_duration = event.duration
                                 self._is_playing = event.playing
 
                                 # Suppress / resume coordinator BLE polling so
@@ -691,11 +693,15 @@ class SkellyInternalFilesPlayer(
                 if file_info.file_index == self._current_file_index:
                     attrs["file_index"] = file_info.file_index
                     attrs["file_name"] = file_info.name
-                    attrs["file_length"] = file_info.length
                     attrs["file_action"] = file_info.action
                     attrs["file_eye_icon"] = file_info.eye_icon
                     attrs["file_cluster"] = file_info.cluster
                     break
+
+            # Duration is only known once the device has reported it via a
+            # PlaybackEvent (the file listing never carries it - see parser.py).
+            if self._current_file_duration is not None:
+                attrs["file_duration"] = self._current_file_duration
 
         # Include playlist information
         attrs["total_files"] = len(self.coordinator.file_list)

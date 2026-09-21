@@ -291,7 +291,7 @@ The integration creates different entities depending on which device type you co
   - Browse files via media browser UI
   - Next/previous track navigation
   - Select files by name
-  - File metadata exposed as entity attributes (file_index, file_name, file_length, file_action, file_eye_icon)
+  - File metadata exposed as entity attributes (file_index, file_name, file_duration, file_action, file_eye_icon)
   - Shared volume control with device
 - **Sensors**: Volume, live name, storage capacity, file count, file order, BT MAC, pin code, file transfer progress
 - **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Bitrate
@@ -479,7 +479,7 @@ automation:
           message: >
             Playing file {{ state_attr('media_player.skelly_ultra_internal_files', 'file_name') }}
             (index: {{ state_attr('media_player.skelly_ultra_internal_files', 'file_index') }},
-            length: {{ state_attr('media_player.skelly_ultra_internal_files', 'file_length') }}ms)
+            duration: {{ state_attr('media_player.skelly_ultra_internal_files', 'file_duration') }}s)
 ```
 
 #### Available Metadata Attributes
@@ -488,7 +488,7 @@ The media player exposes the following attributes when a file is selected/playin
 
 - `file_index`: The 1-based index of the file
 - `file_name`: The filename
-- `file_length`: Duration in milliseconds
+- `file_duration`: Duration in seconds, reported by the device once playback starts (not available until then)
 - `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Value 255 means all parts.
 - `file_eye_icon`: Associated eye icon
 - `file_cluster`: File cluster information
