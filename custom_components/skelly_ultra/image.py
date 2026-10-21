@@ -2,13 +2,13 @@
 
 This image entity displays the currently-selected eye icon using the
 coordinator data as the authoritative source. Image files are stored in
-the integration's `images/` folder as `eye_icon_1.png`..`eye_icon_18.png`.
+the integration's `images/<eye_icon_folder>/` folder (per device profile) as
+`eye_icon_1.png`..`eye_icon_<n>.png`.
 """
 
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 from typing import Any
 from datetime import datetime, timezone
 
@@ -20,7 +20,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info, get_device_profile
+from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,7 +35,9 @@ async def async_setup_entry(
     profile = get_device_profile(entry)
 
     if profile["has_eye_image"]:
-        async_add_entities([SkellyEyeImage(coordinator, entry.entry_id, device_info)])
+        async_add_entities(
+            [SkellyEyeImage(coordinator, entry.entry_id, device_info, profile)]
+        )
 
 
 class SkellyEyeImage(CoordinatorEntity, ImageEntity):
@@ -49,12 +51,14 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         coordinator: SkellyCoordinator,
         entry_id: str,
         device_info: DeviceInfo | None,
+        profile: dict,
     ) -> None:
         """Initialize the image entity.
 
         coordinator: the update coordinator with `eye_icon` in data
         entry_id: used for unique id
         device_info: device registry info for grouping entities
+        profile: device profile providing the eye icon list and image folder
         """
         # Initialize CoordinatorEntity
         super().__init__(coordinator)
@@ -67,8 +71,7 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         self._attr_unique_id = f"{entry_id}_eye_icon_image"
         self._attr_device_info = device_info
 
-        # compute base images path
-        self._images_path = Path(__file__).parent / "images"
+        self._profile = profile
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added and set initial state."""
@@ -94,8 +97,9 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
     def image(self) -> bytes | None:
         """Return the bytes for the currently selected eye icon image.
 
-        The coordinator stores `eye_icon` as a 1-based integer (1..18). If the
-        coordinator has no data or the value is out of range, return None.
+        The coordinator stores `eye_icon` as a 1-based integer. If the
+        coordinator has no data or the value is out of range for the device
+        profile, return None.
         """
         data: dict[str, Any] | None = getattr(self.coordinator, "data", None)
         if not data:
@@ -103,11 +107,9 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         eye = data.get("eye_icon")
         if not isinstance(eye, int):
             return None
-        if eye < 1 or eye > 18:
+        img_path = get_eye_icon_path(self._profile, eye)
+        if img_path is None:
             return None
-
-        img_name = f"eye_icon_{eye}.png"
-        img_path = self._images_path / img_name
         if not img_path.is_file():
             _LOGGER.debug("Eye icon image not found: %s", img_path)
             return None

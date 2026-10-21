@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any, cast
 
 from homeassistant.config_entries import ConfigEntry
@@ -35,6 +36,20 @@ def get_device_profile(entry: ConfigEntry) -> dict:
     """Return the DEVICE_PROFILES entry for a config entry, defaulting to Skelly."""
     device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY)
     return DEVICE_PROFILES.get(device_type, DEVICE_PROFILES[DEVICE_TYPE_SKELLY])
+
+
+def get_eye_icon_path(profile: dict, eye_icon: int) -> Path | None:
+    """Return the image path for a 1-based eye icon index, or None if out of range."""
+    if not profile.get("eye_icon_folder") or not 1 <= eye_icon <= len(
+        profile.get("eye_icons", [])
+    ):
+        return None
+    return (
+        Path(__file__).parent
+        / "images"
+        / profile["eye_icon_folder"]
+        / f"eye_icon_{eye_icon}.png"
+    )
 
 
 def device_type_from_ble_name(name: str) -> str | None:

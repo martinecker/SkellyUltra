@@ -29,7 +29,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
 
@@ -55,7 +55,11 @@ async def async_setup_entry(
                 coordinator, data.get("adapter"), entry.entry_id, device_info
             ),
             SkellyInternalFilesPlayer(
-                coordinator, data.get("adapter"), entry.entry_id, device_info
+                coordinator,
+                data.get("adapter"),
+                entry.entry_id,
+                device_info,
+                get_device_profile(entry),
             ),
         ]
     )
@@ -470,6 +474,7 @@ class SkellyInternalFilesPlayer(
         adapter,
         entry_id: str,
         device_info: DeviceInfo | None,
+        profile: dict,
     ) -> None:
         """Initialize the internal files media player entity."""
         super().__init__(coordinator)
@@ -487,6 +492,7 @@ class SkellyInternalFilesPlayer(
         self._monitor_task: asyncio.Task | None = None
 
         # Cache for eye icon images (loaded asynchronously on startup)
+        self._profile = profile
         self._eye_icon_cache: dict[int, str] = {}
 
         # Device grouping
@@ -508,13 +514,11 @@ class SkellyInternalFilesPlayer(
         This prevents blocking I/O operations in the entity_picture property
         which is called during state updates.
         """
-        images_path = Path(__file__).parent / "images"
+        # Load all eye icons of this device type (1..n)
+        for icon_num in range(1, len(self._profile["eye_icons"]) + 1):
+            img_path = get_eye_icon_path(self._profile, icon_num)
 
-        # Load all 18 eye icons (1-18)
-        for icon_num in range(1, 19):
-            img_path = images_path / f"eye_icon_{icon_num}.png"
-
-            if not img_path.is_file():
+            if img_path is None or not img_path.is_file():
                 _LOGGER.debug("Eye icon image not found: %s", img_path)
                 continue
 
@@ -639,10 +643,6 @@ class SkellyInternalFilesPlayer(
                 break
 
         if current_eye_icon is None or not isinstance(current_eye_icon, int):
-            return None
-
-        # Validate eye_icon is in valid range (1..18)
-        if current_eye_icon < 1 or current_eye_icon > 18:
             return None
 
         # Return cached base64 data URI (pre-loaded during initialization)

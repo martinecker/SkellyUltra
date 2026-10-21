@@ -19,27 +19,6 @@ from .skelly_ultra_pkg.audio_processor import AudioProcessor
 _LOGGER = logging.getLogger(__name__)
 
 
-EYE_ICONS = [
-    "1 Blue Eyeball",
-    "2 Yellow Eyeball",
-    "3 Green Eyeball",
-    "4 Orange Eyeball",
-    "5 Red Eyeball",
-    "6 Gray Eyeball",
-    "7 Yellow Dragon",
-    "8 Red Dragon",
-    "9 Color Spiral",
-    "10 Fire",
-    "11 Star",
-    "12 Crossbones",
-    "13 Fireworks",
-    "14 USA Flag",
-    "15 Heart",
-    "16 Shamrock",
-    "17 Snowflake",
-    "18 Confetti",
-]
-
 # Bitrate options for MP3 encoding
 BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
 
@@ -56,7 +35,11 @@ async def async_setup_entry(
     entities: list = []
 
     if profile["has_eye_image"]:
-        entities.append(SkellyEyeIconSelect(coordinator, entry.entry_id, device_info))
+        entities.append(
+            SkellyEyeIconSelect(
+                coordinator, entry.entry_id, device_info, profile["eye_icons"]
+            )
+        )
 
     for light_cfg in profile["lights"]:
         entities.append(
@@ -85,6 +68,7 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         coordinator: SkellyCoordinator,
         entry_id: str,
         device_info: DeviceInfo | None,
+        options: list[str],
     ) -> None:
         """Initialize the eye icon select entity.
 
@@ -96,12 +80,14 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
             Config entry id used to form unique id
         device_info: DeviceInfo | None
             Device registry info for grouping entities
+        options: list[str]
+            Eye icon labels for this device type, in device index order
         """
         super().__init__(coordinator)
         self.coordinator = coordinator
         self._attr_name = "Eye Icon"
         self._attr_unique_id = f"{entry_id}_eye_icon"
-        self._options = EYE_ICONS
+        self._options = options
         self._attr_device_info = device_info
 
     @property

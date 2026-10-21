@@ -1,6 +1,6 @@
 # 💀 Skelly Ultra Integration
 
-Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly Halloween animatronic and 7 ft Lethal Lily animatronic witch BLE devices.
+Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly and 12 ft Skelly Halloween animatronics and the 7 ft Lethal Lily animatronic witch BLE devices.
 
 ![Example Skelly Dashboard](ha_skelly_ultra.jpg)
 
@@ -31,13 +31,13 @@ There is a companion project that provides a fully web browser-based controller 
 Both devices share these features:
 
 - 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
-- 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly) or Lantern (Lethal Lily)
+- 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly), Torso (12ft Skelly) or Lantern (Lethal Lily)
 - 🔌 **Switch entities**:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect per light channel)
-  - Movement controls — Head/Arm/Torso/All (Ultra Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
+  - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
 - 🎚️ **Number entities**: Volume control, effect speed per light channel
-- 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
+- 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
 - 🎵 **Media Player entities**:
   - **Live Mode Speaker**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
     - Supports TTS (Text-to-Speech) services
@@ -109,6 +109,7 @@ The device will now be discoverable via Bluetooth as `<Device Name>(Live)`. The 
 | Device | BLE name (old firmware) | BLE name (current firmware) | Classic BT live name |
 |---|---|---|---|
 | Ultra Skelly | Animated Skelly | Ultra Skelly v2 | Animated Skelly(Live) or Ultra Skelly v2(Live) |
+| 12ft Skelly | — | 12ft Skelly | 12ft Skelly(Live) |
 | Lethal Lily | — | Lethal Lily | Lethal Lily(Live) |
 
 **Step 2: Pair Using bluetoothctl**
@@ -222,6 +223,7 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
 
 3. **Select your device type** (Step 1 of the config flow):
    - **Ultra Skelly** — the 6.5 ft skeleton (BLE names: "Animated Skelly" on older firmware, "Ultra Skelly v2" on current firmware)
+   - **12ft Skelly** — the 12 ft skeleton (BLE name: "12ft Skelly")
    - **Lethal Lily** — the 7 ft animatronic witch (BLE name: "Lethal Lily")
 
 4. **Configure connection settings** (Step 2 of the config flow):
@@ -271,6 +273,16 @@ The integration creates different entities depending on which device type you co
 - **Effect speed numbers**: Torso Effect Speed, Head Effect Speed
 - **Color cycle switches**: Torso Color Cycle, Head Color Cycle
 - **Eye icon select**: 18 eye icon options
+- **Eye icon image**: Preview of the currently active eye icon
+
+#### 12ft Skelly
+
+- **Lights**: Torso Light (channel 0) — RGB with brightness
+- **Movement switches**: Head
+- **Effect mode select**: Torso Effect Mode — Static / Strobe / Pulse
+- **Effect speed number**: Torso Effect Speed
+- **Color cycle switch**: Torso Color Cycle
+- **Eye icon select**: 20 eye icon options (different order than the Ultra Skelly)
 - **Eye icon image**: Preview of the currently active eye icon
 
 #### Lethal Lily
@@ -489,7 +501,7 @@ The media player exposes the following attributes when a file is selected/playin
 - `file_index`: The 1-based index of the file
 - `file_name`: The filename
 - `file_duration`: Duration in seconds, reported by the device once playback starts (not available until then)
-- `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Value 255 means all parts.
+- `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. 12ft Skelly: bit 1 = head. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Value 255 means all parts.
 - `file_eye_icon`: Associated eye icon
 - `file_cluster`: File cluster information
 - `total_files`: Total number of files on device
@@ -759,5 +771,5 @@ If the BLE connection is unstable:
 
 ## 📄 License
 
-This integration is provided as-is for use with Ultra Skelly and Lethal Lily devices. Use it at your own risk. It might brick your Skelly.
+This integration is provided as-is for use with Ultra Skelly, 12ft Skelly and Lethal Lily devices. Use it at your own risk. It might brick your Skelly.
 
