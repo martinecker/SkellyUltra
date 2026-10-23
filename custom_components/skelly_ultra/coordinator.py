@@ -20,6 +20,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .client_adapter import SkellyClientAdapter
 from .const import DOMAIN
 from .helpers import DeviceLoggerAdapter
+from .skelly_ultra_pkg.client import ConnectionLostError
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -83,6 +84,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._was_connected = False
         self._pending_state_push = False
         self._pending_state_push_attempts = 0
+        adapter.client.register_disconnected_handler(self._on_device_disconnected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def async_update_data_optimistic(self, key: str, value: Any) -> None:
@@ -97,6 +99,29 @@ class SkellyCoordinator(DataUpdateCoordinator):
         new_data[key] = value
 
         self.async_set_updated_data(new_data)
+
+    def _async_merge_data(self, updates: dict[str, Any]) -> None:
+        """Merge updates into the cached data without marking a successful poll.
+
+        Unlike async_set_updated_data, this leaves last_update_success alone, so
+        it can't make entities available again after the device disconnected.
+        """
+        if self.data:
+            self.data = {**self.data, **updates}
+            self.async_update_listeners()
+
+    def _on_device_disconnected(self) -> None:
+        """Mark entities unavailable as soon as the BLE link drops.
+
+        Without this, entities stay available until the next poll and commands
+        sent in the meantime fail with "Not connected". Reconnecting is still
+        left to the next coordinator poll.
+        """
+        self._was_connected = False
+        # The device can't still be playing for us; don't let the playback
+        # guard keep returning stale data instead of polling.
+        self.mark_playback_inactive()
+        self.async_set_update_error(UpdateFailed("Device disconnected"))
 
     def notify_done_initializing(self) -> None:
         """Notifies the coordinator that device initialization started in async_setup_entry is done."""
@@ -211,16 +236,18 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         "file_count_reported": file_count_reported,
                     }
                     self.async_set_updated_data(updated_data)
+            except ConnectionLostError:
+                self._logger.debug("Device disconnected while loading file list")
+                self._file_list = []
+                self._async_merge_data({"file_count_received": 0})
             except TimeoutError:
                 self._logger.warning("Timeout loading file list from device")
                 self._file_list = []
-                if self.data:
-                    self.async_set_updated_data({**self.data, "file_count_received": 0})
+                self._async_merge_data({"file_count_received": 0})
             except Exception:
                 self._logger.exception("Failed to load file list from device")
                 self._file_list = []
-                if self.data:
-                    self.async_set_updated_data({**self.data, "file_count_received": 0})
+                self._async_merge_data({"file_count_received": 0})
 
     @property
     def file_list(self) -> list[Any]:
@@ -374,6 +401,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                             cap,
                             file_order,
                         ) = results
+                except ConnectionLostError as ex:
+                    raise UpdateFailed("Device disconnected during polling") from ex
                 except TimeoutError as ex:
                     self._logger.warning(
                         "Coordinator update timed out after %s seconds", timeout_seconds
@@ -589,6 +618,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
                 return result_data
 
+            except UpdateFailed:
+                raise
             except Exception:
                 self._logger.exception("Coordinator update failed")
                 raise UpdateFailed("Failed to update Skelly data") from None

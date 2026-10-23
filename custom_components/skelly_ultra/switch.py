@@ -141,8 +141,9 @@ class SkellyConnectedSwitch(SwitchEntity):
         _LOGGER.debug("Turning on Connected switch - connecting to devices")
 
         try:
-            # Connect to BLE device
-            ok = await self.adapter.connect()
+            # Connect to BLE device, unless already connected (e.g. turning on
+            # an already-on switch): reconnecting would drop the live link.
+            ok = self.adapter.client.is_connected or await self.adapter.connect()
             if not ok:
                 _LOGGER.error("Failed to connect to BLE device")
                 return

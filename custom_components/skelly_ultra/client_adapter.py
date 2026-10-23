@@ -188,6 +188,7 @@ class SkellyClientAdapter:
                         BleakClient,
                         ble_device,
                         ble_device.name or "Animated Skelly",
+                        disconnected_callback=self._client.handle_ble_disconnect,
                     )
                 except Exception:
                     self._logger.debug(
@@ -202,7 +203,10 @@ class SkellyClientAdapter:
                     # avoid calling connect() if the client is already
                     # connected, but using establish_connection above is
                     # preferred to avoid a HA bleak-retry warning.
-                    bleak_client = BleakClient(ble_device)
+                    bleak_client = BleakClient(
+                        ble_device,
+                        disconnected_callback=self._client.handle_ble_disconnect,
+                    )
 
                 ok = await self._client.connect(client=bleak_client)
                 if ok:

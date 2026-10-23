@@ -24,6 +24,7 @@ from .const import DOMAIN
 from .helpers import get_device_profile
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
+from .skelly_ultra_pkg.client import ConnectionLostError
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .skelly_ultra_pkg.file_transfer import (
     FileTransferCancelled,
@@ -645,6 +646,10 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
             _LOGGER.info("Refreshing file list after successful delete")
             await coordinator.async_refresh_file_list()
 
+    except ConnectionLostError:
+        raise HomeAssistantError(
+            "Lost connection to device while waiting for delete confirmation"
+        ) from None
     except TimeoutError:
         raise HomeAssistantError(
             "Timeout waiting for delete confirmation from device"

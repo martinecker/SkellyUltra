@@ -14,6 +14,14 @@ from . import commands, parser
 logger = logging.getLogger(__name__)
 
 
+class ConnectionLostError(TimeoutError):
+    """Raised to a caller waiting for a reply when the connection drops.
+
+    Subclasses TimeoutError so existing callers that handle a reply timeout
+    also handle this, just without waiting out the full timeout.
+    """
+
+
 def _is_bluez_backend(client: BleakClient) -> bool:
     """Check whether a connected BleakClient is using the BlueZ backend.
 
@@ -43,7 +51,12 @@ class SkellyClient:
             parser.handle_notification
         )
         self._parsed_handler: Callable[[Any, Any], None] | None = None
+        self._disconnected_handler: Callable[[], None] | None = None
         self.events: asyncio.Queue = asyncio.Queue()
+        # Set when the current connection is lost; replaced once each new
+        # connection is up, so waiters can tell a drop of their connection from
+        # a later one.
+        self._connection_lost = asyncio.Event()
         self._rest_session: aiohttp.ClientSession | None = None
         # BLE proxy mode tracking
         self._ble_session_id: str | None = None
@@ -61,6 +74,74 @@ class SkellyClient:
         handler: Callable[[Any, Any], None],
     ) -> None:
         self._parsed_handler = handler
+
+    def register_disconnected_handler(
+        self,
+        handler: Callable[[], None],
+    ) -> None:
+        """Register a callback for when the BLE link drops unexpectedly.
+
+        Not called for disconnects requested through disconnect().
+        """
+        self._disconnected_handler = handler
+
+    def handle_ble_disconnect(self, client: BleakClient) -> None:
+        """Disconnected callback to pass to BleakClient / establish_connection.
+
+        Ignores callbacks from clients we no longer own (e.g. after disconnect()
+        or a reconnect replaced the client).
+        """
+        if client is not self._client:
+            return
+
+        logger.warning("BLE connection to Skelly device lost")
+        self._discard_pending_events()
+        self._notify_disconnected()
+
+    def _discard_pending_events(self) -> None:
+        """Drop queued events and wake anyone waiting for a reply.
+
+        Replies to queries sent on a lost connection will never arrive, and
+        any already queued must not be matched to queries on the next one.
+        """
+        self._connection_lost.set()
+        while not self.events.empty():
+            self.events.get_nowait()
+
+    def _notify_disconnected(self) -> None:
+        """Call the registered disconnected handler, if any."""
+        if self._disconnected_handler:
+            try:
+                self._disconnected_handler()
+            except Exception:
+                logger.exception("Error in disconnected handler")
+
+    async def _next_event(self, timeout: float, connection_lost: asyncio.Event):
+        """Wait for the next queued event.
+
+        Raises TimeoutError after `timeout`, or ConnectionLostError as soon as
+        `connection_lost` (the waiter's connection) is set.
+        """
+        if connection_lost.is_set():
+            raise ConnectionLostError("Connection to device lost")
+        get_task = asyncio.ensure_future(self.events.get())
+        lost_task = asyncio.ensure_future(connection_lost.wait())
+        try:
+            await asyncio.wait(
+                (get_task, lost_task),
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            lost_task.cancel()
+            if not get_task.done():
+                get_task.cancel()
+        if connection_lost.is_set():
+            # A reply that raced the drop belongs to the lost connection.
+            raise ConnectionLostError("Connection to device lost")
+        if not get_task.done() or get_task.cancelled():
+            raise TimeoutError
+        return get_task.result()
 
     @property
     def is_connected(self) -> bool:
@@ -122,7 +203,9 @@ class SkellyClient:
             if not device:
                 return False
 
-            self._client = BleakClient(device)
+            self._client = BleakClient(
+                device, disconnected_callback=self.handle_ble_disconnect
+            )
             try:
                 await self._client.connect()
             except Exception:
@@ -140,6 +223,9 @@ class SkellyClient:
                 self._client._backend._mtu_size = 23  # noqa: SLF001
                 logger.debug("Initialized MTU to default value to prevent warning")
 
+            # Only now, once the link is up: a late disconnect callback from a
+            # previous or failed client must not mark this connection as lost.
+            self._connection_lost = asyncio.Event()
             await self._start_notifications()
             return True
         return False
@@ -182,6 +268,9 @@ class SkellyClient:
             logger.exception("Failed to start notifications")
 
     async def disconnect(self) -> None:
+        # Fail any pending queries now rather than letting them time out.
+        self._discard_pending_events()
+
         # Stop polling task if running
         if self._polling_task and not self._polling_task.done():
             self._polling_task.cancel()
@@ -215,13 +304,15 @@ class SkellyClient:
                 self._ble_session_id = None
                 self._ble_proxy_mtu = None
 
-        # Disconnect direct BLE client if active
+        # Disconnect direct BLE client if active. Clear self._client first so
+        # handle_ble_disconnect ignores this intentional disconnect.
         if self._client:
-            with contextlib.suppress(Exception):
-                await self._client.stop_notify(commands.NOTIFY_UUID)
-            with contextlib.suppress(Exception):
-                await self._client.disconnect()
+            client = self._client
             self._client = None
+            with contextlib.suppress(Exception):
+                await client.stop_notify(commands.NOTIFY_UUID)
+            with contextlib.suppress(Exception):
+                await client.disconnect()
 
         # Close REST session if it exists
         if self._rest_session:
@@ -475,6 +566,7 @@ class SkellyClient:
                         self._ble_session_id = None
                         if self._polling_task and not self._polling_task.done():
                             self._polling_task.cancel()
+                        self._discard_pending_events()
 
                         # Try to reconnect
                         if await self._connect_via_proxy(timeout=10.0):
@@ -489,6 +581,7 @@ class SkellyClient:
                                 )
                             return  # Command succeeded after reconnection
                         logger.error("Failed to reconnect to BLE device")
+                        self._notify_disconnected()
 
                     raise RuntimeError(f"BLE proxy send failed: {error}")
             except aiohttp.ClientError as err:
@@ -674,6 +767,7 @@ class SkellyClient:
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        connection_lost = self._connection_lost
         temp = []
         file_info_events = []
         expected_count = None
@@ -687,10 +781,7 @@ class SkellyClient:
                         f"Expected {expected_count}, received {len(file_info_events)}",
                     )
 
-                try:
-                    ev = await asyncio.wait_for(self.events.get(), timeout=remaining)
-                except TimeoutError:
-                    raise
+                ev = await self._next_event(remaining, connection_lost)
 
                 if isinstance(ev, parser.FileInfoEvent):
                     file_info_events.append(ev)
@@ -720,10 +811,12 @@ class SkellyClient:
                     temp.append(ev)
 
         finally:
-            # Re-queue non-FileInfoEvent events
-            for e in temp:
-                with contextlib.suppress(Exception):
-                    self.events.put_nowait(e)
+            # Re-queue non-FileInfoEvent events, unless they came from a
+            # connection that has since been lost
+            if not connection_lost.is_set():
+                for e in temp:
+                    with contextlib.suppress(Exception):
+                        self.events.put_nowait(e)
 
     async def set_file_order(
         self,
@@ -741,20 +834,19 @@ class SkellyClient:
         """Wait for an event from self.events that matches predicate.
 
         Non-matching events are temporarily held and re-queued after a match or timeout.
-        Returns the matched event or raises asyncio.TimeoutError.
+        Returns the matched event or raises asyncio.TimeoutError, or
+        ConnectionLostError as soon as the connection drops.
         """
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
+        connection_lost = self._connection_lost
         temp = []
         try:
             while True:
                 remaining = deadline - loop.time()
                 if remaining <= 0:
                     raise TimeoutError
-                try:
-                    ev = await asyncio.wait_for(self.events.get(), timeout=remaining)
-                except TimeoutError:
-                    raise
+                ev = await self._next_event(remaining, connection_lost)
                 if predicate(ev):
                     logger.debug("Matched event: %s", ev)
                     return ev
@@ -762,10 +854,12 @@ class SkellyClient:
                 logger.debug("Non-matching event received while waiting: %s", ev)
                 temp.append(ev)
         finally:
-            # re-queue temp events in order
-            for e in temp:
-                with contextlib.suppress(Exception):
-                    self.events.put_nowait(e)
+            # re-queue temp events in order, unless they came from a
+            # connection that has since been lost
+            if not connection_lost.is_set():
+                for e in temp:
+                    with contextlib.suppress(Exception):
+                        self.events.put_nowait(e)
 
     async def get_volume(self, timeout: float = 2.0) -> int:
         """Query volume and await a VolumeEvent; returns the numeric volume."""
@@ -859,6 +953,9 @@ class SkellyClient:
         """
         try:
             return await self.get_live_name(timeout=2.0)
+        except ConnectionLostError:
+            logger.debug("Connection lost while querying live name")
+            return None
         except TimeoutError:
             logger.debug("Timed out while querying live name")
             return None
@@ -870,6 +967,9 @@ class SkellyClient:
         """Retrieve the PIN code from the device before pairing."""
         try:
             params = await self.get_device_params(timeout=5.0)
+        except ConnectionLostError:
+            logger.debug("Connection lost while querying device params for PIN code")
+            return None
         except TimeoutError:
             logger.debug("Timed out while querying device params for PIN code")
             return None
@@ -1121,6 +1221,7 @@ class SkellyClient:
                     return False
 
                 self._ble_session_id = data["session_id"]
+                self._connection_lost = asyncio.Event()
 
                 # Store MTU size if provided by server
                 self._ble_proxy_mtu = data.get("mtu")
@@ -1158,13 +1259,15 @@ class SkellyClient:
         """
         logger.info("Starting BLE notification polling loop")
 
-        while self._ble_session_id:
+        # This loop belongs to one session; stop if it is cleared or replaced.
+        session_id = self._ble_session_id
+        while session_id and self._ble_session_id == session_id:
             try:
                 session = self._get_rest_session()
                 async with session.get(
                     f"{self.server_url}/ble/notifications",
                     params={
-                        "session_id": self._ble_session_id,
+                        "session_id": session_id,
                         "timeout": 30,  # Long-poll timeout
                     },
                     timeout=aiohttp.ClientTimeout(total=35.0),
@@ -1175,7 +1278,10 @@ class SkellyClient:
                         error = data.get("error", "unknown")
                         if "not found" in error.lower():
                             logger.error("BLE proxy session lost: %s", error)
-                            self._ble_session_id = None
+                            if self._ble_session_id == session_id:
+                                self._ble_session_id = None
+                                self._discard_pending_events()
+                                self._notify_disconnected()
                             break
                         logger.warning("BLE proxy notification poll failed: %s", error)
                         await asyncio.sleep(1.0)  # Brief pause before retry
