@@ -1149,7 +1149,8 @@ class SkellyUltraServer:
             self._log_response("ble/notifications", response_data)
             return web.json_response(response_data)
 
-        except ValueError as exc:
+        except (ValueError, RuntimeError) as exc:
+            # Invalid session, or the BLE device disconnected
             response_data = {
                 "notifications": [],
                 "next_sequence": since,

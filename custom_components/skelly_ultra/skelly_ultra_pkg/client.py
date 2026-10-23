@@ -22,6 +22,19 @@ class ConnectionLostError(TimeoutError):
     """
 
 
+def _is_proxy_session_lost(error: str) -> bool:
+    """Check whether a REST BLE proxy error means our session is gone.
+
+    "disconnected": the server's BLE link to the device dropped.
+    "invalid session_id" / "not found": the server no longer knows the session
+    (e.g. it restarted, or cleaned up the session as idle).
+    """
+    error = error.lower()
+    return any(
+        s in error for s in ("disconnected", "invalid session_id", "not found")
+    )
+
+
 def _is_bluez_backend(client: BleakClient) -> bool:
     """Check whether a connected BleakClient is using the BlueZ backend.
 
@@ -557,10 +570,12 @@ class SkellyClient:
                 data = await self._post_send_command(cmd_bytes)
                 if not data.get("success"):
                     error = data.get("error", "unknown")
-                    # Check if device disconnected - attempt reconnection once
-                    if "disconnected" in error.lower():
+                    # Check if the device disconnected or the session is gone -
+                    # attempt reconnection once
+                    if _is_proxy_session_lost(error):
                         logger.warning(
-                            "BLE device disconnected, attempting automatic reconnection",
+                            "BLE proxy session lost (%s), attempting automatic reconnection",
+                            error,
                         )
                         # Clear old session
                         self._ble_session_id = None
@@ -1261,6 +1276,10 @@ class SkellyClient:
 
         # This loop belongs to one session; stop if it is cleared or replaced.
         session_id = self._ble_session_id
+        # Highest sequence number processed so far. Sent as `since` so the
+        # server only returns newer notifications, and also used to skip any
+        # it sends again (older servers can repeat buffered ones).
+        last_sequence = 0
         while session_id and self._ble_session_id == session_id:
             try:
                 session = self._get_rest_session()
@@ -1268,6 +1287,7 @@ class SkellyClient:
                     f"{self.server_url}/ble/notifications",
                     params={
                         "session_id": session_id,
+                        "since": last_sequence,
                         "timeout": 30,  # Long-poll timeout
                     },
                     timeout=aiohttp.ClientTimeout(total=35.0),
@@ -1276,7 +1296,7 @@ class SkellyClient:
 
                     if not data.get("success"):
                         error = data.get("error", "unknown")
-                        if "not found" in error.lower():
+                        if _is_proxy_session_lost(error):
                             logger.error("BLE proxy session lost: %s", error)
                             if self._ble_session_id == session_id:
                                 self._ble_session_id = None
@@ -1291,6 +1311,12 @@ class SkellyClient:
                     notifications = data.get("notifications", [])
                     for notif in notifications:
                         try:
+                            sequence = notif.get("sequence")
+                            if isinstance(sequence, int):
+                                if sequence <= last_sequence:
+                                    continue
+                                last_sequence = sequence
+
                             # Convert hex string back to bytes
                             raw_data = bytes.fromhex(notif["data"])
                             sender = notif["sender"]

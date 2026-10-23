@@ -76,6 +76,13 @@ class BLESession:
         self.created_at = datetime.now(UTC)
         self.last_activity = datetime.now(UTC)
         self.is_connected = True  # Track connection state
+        # Set when the BLE link drops, to wake a pending notifications long-poll
+        self.disconnected_event = asyncio.Event()
+
+    def mark_disconnected(self) -> None:
+        """Record that the BLE link dropped and wake any pending long-poll."""
+        self.is_connected = False
+        self.disconnected_event.set()
 
     def next_sequence(self) -> int:
         """Get next sequence number.
@@ -453,7 +460,7 @@ class BLESessionManager:
                 discovered_address,
             )
             if session_ref[0]:
-                session_ref[0].is_connected = False
+                session_ref[0].mark_disconnected()
 
         # Pause background scanner to avoid connection conflicts
         await self._pause_scanner()
@@ -579,7 +586,7 @@ class BLESessionManager:
         except Exception as exc:
             _LOGGER.error("Failed to send command: %s", exc)
             # Mark as disconnected if write fails
-            session.is_connected = False
+            session.mark_disconnected()
             raise RuntimeError(f"Failed to send command: {exc}") from exc
 
     async def get_notifications(
@@ -589,7 +596,8 @@ class BLESessionManager:
 
         Args:
             session_id: Session identifier
-            since: Last sequence number client has seen
+            since: Last sequence number client has seen (only echoed back in
+                error responses; delivered notifications are removed instead)
             timeout: Maximum time to wait for notifications
 
         Returns:
@@ -597,25 +605,27 @@ class BLESessionManager:
 
         Raises:
             ValueError: If session_id is invalid
+            RuntimeError: If the BLE device is disconnected, including when it
+                disconnects during the long-poll
         """
         session = self._sessions.get(session_id)
         if not session:
             raise ValueError(f"Invalid session_id: {session_id}")
 
+        # Report a dropped link right away so the client can react, rather
+        # than long-polling forever on a dead session
+        if not session.is_connected:
+            raise RuntimeError("BLE device is disconnected")
+
         notifications = []
 
-        # First, collect any buffered notifications with sequence > since
-        # We peek at all notifications but don't remove them from the queue yet
-        temp_buffer = []
+        # First, hand out everything already buffered, removing it from the
+        # queue so each notification is delivered exactly once. `since` is not
+        # used to filter: clients disagree on whether it means the last
+        # sequence seen (HA) or the next one expected (web controller), and
+        # anything still buffered has not been delivered yet either way.
         while not session.notification_buffer.empty():
-            notif = session.notification_buffer.get_nowait()
-            temp_buffer.append(notif)
-            if notif.sequence > since:
-                notifications.append(notif)
-
-        # Put ALL notifications back into the queue (keeps buffer for debugging)
-        for notif in temp_buffer:
-            _put_nowait_dropping_oldest(session.notification_buffer, notif)
+            notifications.append(session.notification_buffer.get_nowait())
 
         # If we have notifications, return immediately
         if notifications:
@@ -647,10 +657,26 @@ class BLESessionManager:
             timeout,
             session.is_connected,
         )
+        get_task = asyncio.ensure_future(session.notification_buffer.get())
+        disconnected_task = asyncio.ensure_future(session.disconnected_event.wait())
         try:
-            notif = await asyncio.wait_for(
-                session.notification_buffer.get(), timeout=timeout
+            # Wake on a notification or a dropped link, whichever comes first
+            await asyncio.wait(
+                (get_task, disconnected_task),
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
             )
+        finally:
+            disconnected_task.cancel()
+            if not get_task.done():
+                get_task.cancel()
+
+        try:
+            if not get_task.done() or get_task.cancelled():
+                if not session.is_connected:
+                    raise RuntimeError("BLE device is disconnected")
+                raise asyncio.TimeoutError
+            notif = get_task.result()
             notifications.append(notif)
 
             # Grab any additional notifications that arrived while waiting
