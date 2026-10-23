@@ -141,9 +141,11 @@ class SkellyConnectedSwitch(SwitchEntity):
         _LOGGER.debug("Turning on Connected switch - connecting to devices")
 
         try:
-            # Connect to BLE device, unless already connected (e.g. turning on
-            # an already-on switch): reconnecting would drop the live link.
-            ok = self.adapter.client.is_connected or await self.adapter.connect()
+            # Connect to BLE device. Returns right away without touching the
+            # link if already connected, but still turns on automatic
+            # reconnects, which an already-up link may not have yet (e.g. a
+            # second turn-on while the first one restores live mode).
+            ok = await self.adapter.connect()
             if not ok:
                 _LOGGER.error("Failed to connect to BLE device")
                 return
@@ -172,6 +174,7 @@ class SkellyConnectedSwitch(SwitchEntity):
         try:
             # Pause coordinator updates first to stop polling
             self.coordinator.pause_updates()
+            self.adapter.stop_auto_reconnect()
 
             # Disconnect classic BT if connected
             await self.adapter.disconnect_live_mode()

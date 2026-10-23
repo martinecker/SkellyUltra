@@ -22,6 +22,17 @@ from .skelly_ultra_pkg.client import SkellyClient
 
 _LOGGER = logging.getLogger(__name__)
 
+# Waits before each background reconnect attempt after a drop; once these are
+# used up, attempts continue every RECONNECT_MAX_DELAY seconds (the
+# coordinator's poll interval, which used to do the reconnecting).
+RECONNECT_DELAYS = (2.0, 4.0, 8.0, 16.0)
+RECONNECT_MAX_DELAY = 30.0
+# Upper bound on how long a command waits for a reconnect before failing.
+COMMAND_RECONNECT_TIMEOUT = 20.0
+# A command sent this soon after a failed connect attempt fails right away
+# instead of making another attempt of its own.
+COMMAND_RECONNECT_FAIL_FAST = 10.0
+
 
 class SkellyClientAdapter:
     """Adapter that manages a SkellyClient and integrates with Home Assistant's BLE helpers.
@@ -55,6 +66,151 @@ class SkellyClientAdapter:
         self._logger = logger or _LOGGER
         self._live_mode_callbacks: list = []
         self._live_mode_should_connect = live_mode_should_connect
+        # Serializes connects, so the reconnect loop, the coordinator poll,
+        # commands, the Connected switch and disconnect() never overlap.
+        self._connect_lock = asyncio.Lock()
+        # True while the device should stay connected: after a successful
+        # explicit connect() or enable_auto_reconnect(), until disconnect().
+        # Automatic reconnects (loop, poll, commands) only happen while set.
+        self._auto_reconnect = False
+        self._reconnect_task: asyncio.Task | None = None
+        # Live-mode restore (and reconnected callback) after a connect;
+        # cancelled when live mode or the device is disconnected.
+        self._after_connect_task: asyncio.Task | None = None
+        # Counts stop_auto_reconnect() calls (disconnect() makes one too). A
+        # connect that started before one gives up instead of finishing after
+        # it, e.g. while the Connected switch is turned off: in proxy mode the
+        # client still looks connected while disconnect() runs.
+        self._stops = 0
+        # Number of disconnect() calls still running.
+        self._disconnects_running = 0
+        # Bumped whenever a live-mode restore is superseded or started; a
+        # restore only fires the reconnected callback while it is current.
+        self._restore_generation = 0
+        # The connect and live-mode restore tasks running now. A command sent
+        # from one of them on a link that dropped again fails instead of
+        # reconnecting, so a connect never recurses into another one or waits
+        # on the lock it holds. (Tracked per task rather than in a ContextVar,
+        # which would leak into tasks and HA callbacks started from there.)
+        self._connect_tasks: set[asyncio.Task] = set()
+        # Loop time of the last failed connect attempt, so commands and
+        # waiting callers don't stack attempts on top of a failed one.
+        self._last_connect_failure: float | None = None
+        # Set by a drop; the next successful connect calls the reconnected
+        # callback so the coordinator can refresh right away.
+        self._recovering = False
+        self._reconnected_callback: Callable[[], None] | None = None
+        self._client.register_reconnect_handler(self._reconnect_for_command)
+
+    def register_disconnected_handler(self, handler: Callable[[], None]) -> None:
+        """Register a callback for when the BLE link drops unexpectedly.
+
+        Forwards to SkellyClient.register_disconnected_handler; not called for
+        disconnects requested through disconnect().
+        """
+        self._client.register_disconnected_handler(handler)
+
+    def register_reconnected_callback(self, callback: Callable[[], None]) -> None:
+        """Register a callback for when the connection is back after a drop."""
+        self._reconnected_callback = callback
+
+    def enable_auto_reconnect(self) -> None:
+        """Reconnect automatically from now on, even if the next connect() fails.
+
+        For setup with the Connected switch on, so the coordinator poll and
+        commands keep retrying a device that isn't there yet. An explicit
+        connect() only turns this on when it succeeds, so a failed turn-on of
+        the Connected switch doesn't leave the device reconnecting on its own.
+        """
+        self._auto_reconnect = True
+
+    @property
+    def is_reconnecting(self) -> bool:
+        """Return True while the background reconnect loop is running."""
+        return self._reconnect_task is not None and not self._reconnect_task.done()
+
+    def start_reconnect_loop(self) -> None:
+        """Start reconnecting in the background with backoff after a drop.
+
+        Does nothing while automatic reconnects are off (e.g. Connected switch
+        off) or when the loop is already running.
+        """
+        if not self._auto_reconnect:
+            return
+        self._recovering = True
+        if self.is_reconnecting:
+            return
+        self._reconnect_task = self.hass.async_create_background_task(
+            self._reconnect_loop(), name=f"skelly_ultra reconnect {self.address}"
+        )
+
+    async def _reconnect_loop(self) -> None:
+        """Retry connect() with increasing waits until connected or disabled."""
+        attempt = 0
+        while self._auto_reconnect and not self._client.is_connected:
+            delay = (
+                RECONNECT_DELAYS[attempt]
+                if attempt < len(RECONNECT_DELAYS)
+                else RECONNECT_MAX_DELAY
+            )
+            attempt += 1
+            self._logger.debug("Reconnect attempt %d in %.0f seconds", attempt, delay)
+            await asyncio.sleep(delay)
+            # A command or the coordinator may have reconnected meanwhile.
+            if not self._auto_reconnect or self._client.is_connected:
+                break
+            try:
+                # Don't wait for the live-mode restore (a pairing can take
+                # minutes): a drop during it then starts a new loop at once.
+                ok = await self.connect(
+                    attempts=1, automatic=True, restore_live_mode_in_background=True
+                )
+            except Exception:
+                self._logger.exception("Error during background reconnect")
+                ok = False
+            if ok:
+                self._logger.info(
+                    "Reconnected to Skelly device after %d attempt(s)", attempt
+                )
+                # Don't return: the link can drop again before this loop ends,
+                # and start_reconnect_loop() won't start another one while
+                # this one still runs. The while condition checks again.
+                attempt = 0
+                continue
+            self._logger.debug("Background reconnect attempt %d failed", attempt)
+
+    def _failed_recently(self) -> bool:
+        """Return True if a connect attempt failed in the last few seconds."""
+        return (
+            self._last_connect_failure is not None
+            and self.hass.loop.time() - self._last_connect_failure
+            < COMMAND_RECONNECT_FAIL_FAST
+        )
+
+    async def _reconnect_for_command(self) -> bool:
+        """Reconnect handler for SkellyClient.send_command after a drop."""
+        if self._client.is_connected:
+            # Another caller reconnected meanwhile (e.g. replaced a lost proxy session).
+            return True
+        if not self._auto_reconnect or asyncio.current_task() in self._connect_tasks:
+            return False
+        if self._failed_recently():
+            self._logger.debug(
+                "Command issued while disconnected - a reconnect just failed, not retrying yet"
+            )
+            return False
+        self._logger.info("Command issued while disconnected - reconnecting first")
+        try:
+            async with asyncio.timeout(COMMAND_RECONNECT_TIMEOUT):
+                return await self.connect(
+                    attempts=1, automatic=True, restore_live_mode_in_background=True
+                )
+        except TimeoutError:
+            self._logger.warning(
+                "Reconnect for command timed out after %.0f seconds",
+                COMMAND_RECONNECT_TIMEOUT,
+            )
+            return False
 
     def register_live_mode_callback(self, callback) -> None:
         """Register a callback to be notified when live mode connection state changes."""
@@ -266,7 +422,14 @@ class SkellyClientAdapter:
             attempts, backoff, self._try_direct_connect, context="to Skelly device"
         )
 
-    async def connect(self, attempts: int = 3, backoff: float = 1.0) -> bool:
+    async def connect(
+        self,
+        attempts: int = 3,
+        backoff: float = 1.0,
+        *,
+        automatic: bool = False,
+        restore_live_mode_in_background: bool = False,
+    ) -> bool:
         """Connect to the Skelly BLE device.
 
         The connection is established either directly and then using HA's bluetooth helpers
@@ -274,28 +437,210 @@ class SkellyClientAdapter:
 
         Attempts to retrieve a BLE device from HA or the REST server and connect. Retries on
         transient errors with exponential backoff. Returns True on success,
-        False on failure.
+        False on failure, including when the link drops again before this
+        returns. Returns True right away if already connected (e.g. another
+        caller reconnected while this one waited for the lock).
+
+        An explicit connect (setup, Connected switch) turns on automatic
+        reconnects when it succeeds. automatic=True is for the reconnect
+        loop, the coordinator poll and commands: it returns False when
+        automatic reconnects are off (e.g. disconnect() ran meanwhile), and
+        when another caller's attempt failed while this one waited.
+
+        The connect runs in its own task: a caller that is cancelled or times
+        out only stops waiting and never aborts a connect halfway, which
+        could leave an orphan proxy session or a link without notifications.
+        restore_live_mode_in_background returns once BLE is up instead of
+        also waiting for the live-mode restore.
         """
-        if not await self._connect_internal(attempts, backoff):
+        # Not while disconnect() runs: in proxy mode the client still looks
+        # connected until it has closed the session. Wait for it instead.
+        if self._client.is_connected and not self._disconnects_running:
+            if not automatic:
+                self._auto_reconnect = True
+            return True
+        if automatic and not self._auto_reconnect:
             return False
+        task = self.hass.async_create_background_task(
+            self._run_as_connect_task(
+                self._connect(
+                    attempts,
+                    backoff,
+                    automatic=automatic,
+                    restore_live_mode_in_background=restore_live_mode_in_background,
+                )
+            ),
+            name=f"skelly_ultra connect {self.address}",
+        )
+        return await asyncio.shield(task)
 
-        # Immediately enable BT classic mode so that live mode can connect
+    async def _run_as_connect_task(self, coro: Awaitable):
+        """Await coro with the current task marked as a connect task."""
+        task = asyncio.current_task()
+        self._connect_tasks.add(task)
         try:
-            await self._client.enable_classic_bt()
+            return await coro
+        finally:
+            self._connect_tasks.discard(task)
+
+    async def _connect(
+        self,
+        attempts: int,
+        backoff: float,
+        *,
+        automatic: bool,
+        restore_live_mode_in_background: bool,
+    ) -> bool:
+        """Do the work of connect() in its own task."""
+        wait_start = self.hass.loop.time()
+        stops = self._stops
+        async with self._connect_lock:
+            if automatic and not self._auto_reconnect:
+                return False
+            if self._stops != stops:
+                # stop_auto_reconnect() or disconnect() ran while this one waited.
+                return False
+            if self._client.is_connected:
+                if not automatic:
+                    self._auto_reconnect = True
+                return True
+            if (
+                automatic
+                and self._last_connect_failure is not None
+                and self._last_connect_failure >= wait_start
+            ):
+                # Another caller's attempt failed while this one waited.
+                return False
+
+            try:
+                connected = await self._connect_internal(attempts, backoff)
+                if connected:
+                    # Immediately enable BT classic mode so that live mode can connect
+                    try:
+                        await self._client.enable_classic_bt()
+                    except Exception:
+                        self._logger.exception("Failed to enable classic Bluetooth")
+                    # The link can drop again during enable_classic_bt.
+                    connected = self._client.is_connected
+            except Exception:
+                self._logger.exception("Unexpected error while connecting")
+                connected = False
+
+            if not connected:
+                self._last_connect_failure = self.hass.loop.time()
+                return False
+            self._last_connect_failure = None
+
+        # Restore live mode outside the lock: a pairing can take 30s or more,
+        # and commands and other callers must not wait behind it. Cancel the
+        # old restore first; it was superseded, so it leaves the reconnected
+        # callback to this connect's restore. Loop in case another connect
+        # started a restore while this one waited.
+        while self._after_connect_task is not None:
+            old_task = self._after_connect_task
+            self._after_connect_task = None
+            self._restore_generation += 1
+            await self._cancel_task(old_task)
+        if self._stops != stops:
+            # Stopped meanwhile (switch off, unload); don't restore behind its back.
+            return False
+        self._restore_generation += 1
+        self._after_connect_task = self.hass.async_create_background_task(
+            self._run_as_connect_task(self._after_connect(self._restore_generation)),
+            name=f"skelly_ultra live restore {self.address}",
+        )
+        if not restore_live_mode_in_background:
+            # asyncio.wait: disconnect() cancelling the restore must not cancel us.
+            await asyncio.wait((self._after_connect_task,))
+
+        # In proxy mode the client still looks connected while disconnect()
+        # runs, hence the stop count.
+        connected = self._client.is_connected and self._stops == stops
+        if connected and not automatic:
+            # Only now: if the link dropped during the restore, this explicit
+            # connect failed (e.g. the Connected switch stays off) and must
+            # not leave the device reconnecting on its own.
+            self._auto_reconnect = True
+        return connected
+
+    async def _after_connect(self, generation: int) -> None:
+        """Restore live mode, then report a recovered connection.
+
+        The reconnected callback runs after the restore, so the coordinator's
+        refresh doesn't compete with the restore's queries for replies.
+        """
+        try:
+            await self.restore_live_mode_if_needed()
         except Exception:
-            self._logger.exception("Failed to enable classic Bluetooth")
+            self._logger.exception("Error while restoring live mode")
+        finally:
+            # Also when the restore is cancelled (e.g. live mode turned off),
+            # so the refresh after a reconnect isn't lost. Not when a newer
+            # connect replaced this task: its own restore notifies once done.
+            # (A generation, not a task identity check: HA starts tasks
+            # eagerly, so this can run before the task is even stored.)
+            if generation == self._restore_generation:
+                self._notify_reconnected()
 
-        await self.restore_live_mode_if_needed()
+    def _notify_reconnected(self) -> None:
+        """Call the reconnected callback if this connect ended a drop."""
+        if self._recovering and self._client.is_connected:
+            self._recovering = False
+            if self._reconnected_callback:
+                try:
+                    self._reconnected_callback()
+                except Exception:
+                    self._logger.exception("Error in reconnected callback")
 
-        return True
+    @staticmethod
+    async def _cancel_task(task: asyncio.Task | None) -> None:
+        """Cancel a task and wait for it to finish, unless it is the current one."""
+        if task is None or task.done() or task is asyncio.current_task():
+            return
+        task.cancel()
+        # asyncio.wait doesn't raise the task's CancelledError, while our own
+        # cancellation still propagates.
+        await asyncio.wait((task,))
+
+    def stop_auto_reconnect(self) -> None:
+        """Turn off automatic reconnects right away, until the next successful connect().
+
+        disconnect() does this too. Call it first when disconnect_live_mode()
+        runs before disconnect() (Connected switch off, unload), so a
+        cancelled live-mode restore doesn't start a refresh after a reconnect,
+        and a connect already running gives up instead of starting a new
+        restore or reporting success.
+        """
+        self._auto_reconnect = False
+        self._recovering = False
+        self._stops += 1
 
     async def disconnect(self) -> None:
-        """Disconnect the underlying Skelly client and clean up resources."""
+        """Disconnect the underlying Skelly client and clean up resources.
+
+        Also stops automatic reconnects until the next successful connect(),
+        and waits for a connect already in progress so it can't finish after
+        this.
+        """
         self._logger.info("Disconnecting Skelly adapter/client")
+        self._disconnects_running += 1
         try:
-            await self._client.disconnect()
-        except Exception:
-            self._logger.exception("Error while disconnecting Skelly client")
+            self.stop_auto_reconnect()
+            # Take the lock first, so no connect can slip in between stopping
+            # the tasks and closing the link. Neither task needs the lock.
+            async with self._connect_lock:
+                await self._cancel_task(self._reconnect_task)
+                self._reconnect_task = None
+                await self._cancel_task(self._after_connect_task)
+                self._after_connect_task = None
+                # An explicit connect that held the lock may have turned this back on.
+                self._auto_reconnect = False
+                try:
+                    await self._client.disconnect()
+                except Exception:
+                    self._logger.exception("Error while disconnecting Skelly client")
+        finally:
+            self._disconnects_running -= 1
 
     @property
     def client(self) -> SkellyClient:
@@ -321,6 +666,9 @@ class SkellyClientAdapter:
 
     async def disconnect_live_mode(self) -> None:
         """Disconnect the classic/live-mode client managed by the underlying SkellyClient."""
+        # A live-mode restore still running after a reconnect would otherwise
+        # connect it again behind our back.
+        await self._cancel_task(self._after_connect_task)
         try:
             await self._client.disconnect_live_mode()
             # Notify callbacks that connection state changed

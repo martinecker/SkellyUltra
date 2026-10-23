@@ -84,7 +84,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._was_connected = False
         self._pending_state_push = False
         self._pending_state_push_attempts = 0
-        adapter.client.register_disconnected_handler(self._on_device_disconnected)
+        adapter.register_disconnected_handler(self._on_device_disconnected)
+        adapter.register_reconnected_callback(self._on_device_reconnected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def async_update_data_optimistic(self, key: str, value: Any) -> None:
@@ -114,14 +115,28 @@ class SkellyCoordinator(DataUpdateCoordinator):
         """Mark entities unavailable as soon as the BLE link drops.
 
         Without this, entities stay available until the next poll and commands
-        sent in the meantime fail with "Not connected". Reconnecting is still
-        left to the next coordinator poll.
+        sent in the meantime fail with "Not connected". Also starts the
+        adapter's background reconnect, so the device doesn't stay away until
+        the next poll.
         """
         self._was_connected = False
         # The device can't still be playing for us; don't let the playback
         # guard keep returning stale data instead of polling.
         self.mark_playback_inactive()
         self.async_set_update_error(UpdateFailed("Device disconnected"))
+        self.adapter.start_reconnect_loop()
+
+    def _on_device_reconnected(self) -> None:
+        """Poll right away once the connection is back after a drop.
+
+        This makes entities available again and pushes the cached state to
+        the device without waiting for the next scheduled poll.
+        """
+        self.hass.async_create_task(self._async_refresh_after_reconnect())
+
+    async def _async_refresh_after_reconnect(self) -> None:
+        # The base class debouncer, not our 3s debounce + 2s settle delay.
+        await super().async_request_refresh()
 
     def notify_done_initializing(self) -> None:
         """Notifies the coordinator that device initialization started in async_setup_entry is done."""
@@ -345,11 +360,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         if not self.adapter.client.is_connected:
             # Try to reconnect unless the device initialization is still running
-            if not self._is_initializing:
+            # or the adapter's background reconnect is already on it
+            if not self._is_initializing and not self.adapter.is_reconnecting:
                 self._logger.debug(
                     "Coordinator update with device not connected after initialization - attempting to re-connect"
                 )
-                await self.adapter.connect(attempts=1)
+                await self.adapter.connect(attempts=1, automatic=True)
 
             if not self.adapter.client.is_connected:
                 self._logger.debug("Skipping coordinator update - device not connected")

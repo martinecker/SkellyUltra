@@ -1,7 +1,7 @@
 """SkellyClient: high-level async client wrapping Bleak, using commands and parser modules."""
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 import contextlib
 import logging
 from typing import Any
@@ -12,6 +12,10 @@ from bleak import BleakClient, BleakScanner
 from . import commands, parser
 
 logger = logging.getLogger(__name__)
+
+# Consecutive REST errors (server unreachable) after which the notification
+# poll loop gives up on its proxy session and reports a drop.
+PROXY_POLL_ERROR_LIMIT = 3
 
 
 class ConnectionLostError(TimeoutError):
@@ -65,6 +69,7 @@ class SkellyClient:
         )
         self._parsed_handler: Callable[[Any, Any], None] | None = None
         self._disconnected_handler: Callable[[], None] | None = None
+        self._reconnect_handler: Callable[[], Awaitable[bool]] | None = None
         self.events: asyncio.Queue = asyncio.Queue()
         # Set when the current connection is lost; replaced once each new
         # connection is up, so waiters can tell a drop of their connection from
@@ -75,6 +80,10 @@ class SkellyClient:
         self._ble_session_id: str | None = None
         self._polling_task: asyncio.Task | None = None
         self._ble_proxy_mtu: int | None = None
+        # Proxy sessions dropped while the server was unreachable; the server
+        # may still hold them (and the BLE link), so they are closed before
+        # the next connect.
+        self._stale_proxy_sessions: list[str] = []
 
     def register_notification_handler(
         self,
@@ -98,6 +107,32 @@ class SkellyClient:
         """
         self._disconnected_handler = handler
 
+    def register_reconnect_handler(
+        self,
+        handler: Callable[[], Awaitable[bool]],
+    ) -> None:
+        """Register a coroutine that restores the connection after a drop.
+
+        send_command awaits it once when it finds the connection gone, then
+        retries. It should return True once connected, and False when it
+        can't (or won't) reconnect. Without one, send_command raises "Not
+        connected", and proxy mode reconnects through _connect_via_proxy.
+        """
+        self._reconnect_handler = handler
+
+    async def _try_reconnect(self) -> bool:
+        """Ask the reconnect handler to restore the connection."""
+        if self._reconnect_handler is None:
+            if self.use_ble_proxy:
+                return await self._connect_via_proxy(timeout=10.0)
+            return False
+        try:
+            ok = await self._reconnect_handler()
+        except Exception:
+            logger.exception("Error in reconnect handler")
+            return False
+        return bool(ok) and self.is_connected
+
     def handle_ble_disconnect(self, client: BleakClient) -> None:
         """Disconnected callback to pass to BleakClient / establish_connection.
 
@@ -105,6 +140,9 @@ class SkellyClient:
         or a reconnect replaced the client).
         """
         if client is not self._client:
+            return
+        if self._connection_lost.is_set():
+            # Already handled, e.g. by send_command after a failed write.
             return
 
         logger.warning("BLE connection to Skelly device lost")
@@ -316,6 +354,9 @@ class SkellyClient:
             finally:
                 self._ble_session_id = None
                 self._ble_proxy_mtu = None
+
+        if self.use_ble_proxy:
+            await self._close_stale_proxy_sessions()
 
         # Disconnect direct BLE client if active. Clear self._client first so
         # handle_ble_disconnect ignores this intentional disconnect.
@@ -551,7 +592,11 @@ class SkellyClient:
             return await resp.json()
 
     async def send_command(self, cmd_bytes: bytes) -> None:
-        if not self.is_connected:
+        # A command issued right after a drop reconnects first instead of
+        # failing until the next coordinator poll reconnects.
+        if not self.is_connected and (
+            self._reconnect_handler is None or not await self._try_reconnect()
+        ):
             raise RuntimeError("Not connected")
 
         # Log raw outgoing bytes as a space-separated hex string for debugging
@@ -566,6 +611,9 @@ class SkellyClient:
             if not self._ble_session_id:
                 raise RuntimeError("BLE proxy session not established")
 
+            # The session this command is sent on; another caller may replace
+            # it while the request is in flight.
+            session_id = self._ble_session_id
             try:
                 data = await self._post_send_command(cmd_bytes)
                 if not data.get("success"):
@@ -573,18 +621,24 @@ class SkellyClient:
                     # Check if the device disconnected or the session is gone -
                     # attempt reconnection once
                     if _is_proxy_session_lost(error):
-                        logger.warning(
-                            "BLE proxy session lost (%s), attempting automatic reconnection",
-                            error,
-                        )
-                        # Clear old session
-                        self._ble_session_id = None
-                        if self._polling_task and not self._polling_task.done():
-                            self._polling_task.cancel()
-                        self._discard_pending_events()
+                        if self._ble_session_id == session_id:
+                            logger.warning(
+                                "BLE proxy session lost (%s), attempting automatic reconnection",
+                                error,
+                            )
+                            # Clear old session
+                            self._ble_session_id = None
+                            if self._polling_task and not self._polling_task.done():
+                                self._polling_task.cancel()
+                            self._discard_pending_events()
+                            # Report the drop, so entities go unavailable and
+                            # the cached state is pushed again after the
+                            # reconnect (the device may have restarted).
+                            self._notify_disconnected()
 
-                        # Try to reconnect
-                        if await self._connect_via_proxy(timeout=10.0):
+                        # Try to reconnect (returns right away if another
+                        # caller already replaced the session)
+                        if await self._try_reconnect():
                             logger.info(
                                 "Reconnected successfully, retrying command",
                             )
@@ -596,7 +650,6 @@ class SkellyClient:
                                 )
                             return  # Command succeeded after reconnection
                         logger.error("Failed to reconnect to BLE device")
-                        self._notify_disconnected()
 
                     raise RuntimeError(f"BLE proxy send failed: {error}")
             except aiohttp.ClientError as err:
@@ -606,7 +659,20 @@ class SkellyClient:
             # Direct BLE write
             if not self._client:
                 raise RuntimeError("BLE client not connected")
-            await self._client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
+            client = self._client
+            try:
+                await client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
+            except Exception:
+                # The link can drop before bleak's disconnected callback has
+                # run. Report the drop now and reconnect once, like proxy
+                # mode does for a lost session.
+                if client.is_connected or client is not self._client:
+                    raise
+                self.handle_ble_disconnect(client)
+                if not await self._try_reconnect():
+                    raise
+                logger.info("Reconnected after a failed write, retrying command")
+                await self._client.write_gatt_char(commands.WRITE_UUID, cmd_bytes)
 
     # convenience wrappers
     async def enable_classic_bt(self) -> None:
@@ -1219,6 +1285,8 @@ class SkellyClient:
             logger.error("BLE proxy mode requires a valid device address")
             return False
 
+        await self._close_stale_proxy_sessions()
+
         try:
             session = self._get_rest_session()
             async with session.post(
@@ -1265,6 +1333,31 @@ class SkellyClient:
             logger.exception("Unexpected error connecting via BLE proxy")
             return False
 
+    async def _close_stale_proxy_sessions(self) -> None:
+        """Best effort: close proxy sessions dropped while the server was unreachable.
+
+        Otherwise such a session keeps the server's BLE link to the device
+        until its idle cleanup, and new connects fail meanwhile.
+        """
+        while self._stale_proxy_sessions:
+            session_id = self._stale_proxy_sessions[0]
+            try:
+                session = self._get_rest_session()
+                async with session.post(
+                    f"{self.server_url}/ble/disconnect",
+                    json={"session_id": session_id},
+                    timeout=aiohttp.ClientTimeout(total=5.0),
+                ) as resp:
+                    await resp.read()
+            except Exception:
+                # Still unreachable; try again before the next connect.
+                logger.debug(
+                    "Couldn't close stale BLE proxy session %s", session_id, exc_info=True
+                )
+                return
+            logger.info("Closed stale BLE proxy session %s", session_id)
+            self._stale_proxy_sessions.remove(session_id)
+
     async def _notification_poll_loop(self) -> None:
         """Background task that polls for BLE notifications via REST API.
 
@@ -1280,6 +1373,8 @@ class SkellyClient:
         # server only returns newer notifications, and also used to skip any
         # it sends again (older servers can repeat buffered ones).
         last_sequence = 0
+        # Consecutive REST errors; the server may be down or unreachable.
+        poll_errors = 0
         while session_id and self._ble_session_id == session_id:
             try:
                 session = self._get_rest_session()
@@ -1293,6 +1388,7 @@ class SkellyClient:
                     timeout=aiohttp.ClientTimeout(total=35.0),
                 ) as resp:
                     data = await resp.json()
+                    poll_errors = 0
 
                     if not data.get("success"):
                         error = data.get("error", "unknown")
@@ -1365,6 +1461,21 @@ class SkellyClient:
                 raise
             except aiohttp.ClientError:
                 logger.exception("BLE proxy communication error during polling")
+                poll_errors += 1
+                if poll_errors >= PROXY_POLL_ERROR_LIMIT:
+                    # Treat an unreachable server like a drop, so the adapter
+                    # reconnects once it is back instead of keeping a session
+                    # that may be gone.
+                    logger.error(
+                        "BLE proxy server unreachable, giving up on session %s",
+                        session_id,
+                    )
+                    if self._ble_session_id == session_id:
+                        self._ble_session_id = None
+                        self._stale_proxy_sessions.append(session_id)
+                        self._discard_pending_events()
+                        self._notify_disconnected()
+                    break
                 await asyncio.sleep(2.0)  # Pause before retry
             except Exception:
                 logger.exception("Unexpected error in BLE notification polling loop")

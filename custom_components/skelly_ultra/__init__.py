@@ -86,6 +86,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             )
             return
 
+        # The Connected switch is on: keep reconnecting (poll, commands) even
+        # if this first attempt fails
+        adapter.enable_auto_reconnect()
+
         # Attempt to connect to the device
         try:
             ok = await adapter.connect()
@@ -144,6 +148,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return False
 
     hass.data[DOMAIN].pop(entry.entry_id)
+    data["adapter"].stop_auto_reconnect()
     # Ensure any live-mode classic BT client is disconnected first
     try:
         await data["adapter"].disconnect_live_mode()
