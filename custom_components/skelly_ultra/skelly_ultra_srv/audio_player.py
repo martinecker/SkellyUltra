@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from enum import Enum
 import logging
 from pathlib import Path
@@ -39,10 +40,38 @@ class PlayResponse(NamedTuple):
 class AudioPlayer:
     """Manager for audio playback using pw-play."""
 
-    def __init__(self) -> None:
-        """Initialize the audio player."""
+    def __init__(
+        self,
+        on_active_change: Callable[[bool], Awaitable[None]] | None = None,
+    ) -> None:
+        """Initialize the audio player.
+
+        Args:
+            on_active_change: Awaited with True before the first playback
+                starts and with False once nothing is playing anymore
+        """
         self._playback_sessions: dict[str, PlaybackSession] = {}
         self._background_tasks: set[asyncio.Task] = set()
+        self._on_active_change = on_active_change
+        self._active = False
+        self._active_lock = asyncio.Lock()
+
+    async def _set_active(self, active: bool) -> None:
+        """Notify on_active_change when overall playback starts or stops."""
+        async with self._active_lock:
+            if active == self._active:
+                return
+            self._active = active
+            if self._on_active_change is None:
+                return
+            try:
+                await self._on_active_change(active)
+            except Exception:
+                _LOGGER.exception("Error in playback active change callback")
+
+    async def _sync_active(self) -> None:
+        """Set the active state from the sessions still playing."""
+        await self._set_active(bool(self._playback_sessions))
 
     async def play(
         self,
@@ -88,7 +117,15 @@ class AudioPlayer:
         """Play audio on a specific target."""
         target_key = target or "default"
         await self._stop_one(target_key)
+        try:
+            return await self._start_on_target(file_path, target, target_key)
+        finally:
+            await self._sync_active()
 
+    async def _start_on_target(
+        self, file_path: str, target: str | None, target_key: str
+    ) -> PlayResult:
+        """Start pw-play for one target (any old session is already stopped)."""
         _LOGGER.info("Starting playback of: %s on target: %s", file_path, target_key)
 
         try:
@@ -114,6 +151,9 @@ class AudioPlayer:
                 cmd.extend(["--target", pipewire_target])
             cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
+
+            # Let the owner clear the radio (pause scanning) before audio starts
+            await self._set_active(True)
 
             process = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -147,6 +187,13 @@ class AudioPlayer:
 
     async def stop(self, target: str | None = None) -> PlayResult:
         """Stop playback on specific target or all targets."""
+        try:
+            return await self._stop(target)
+        finally:
+            await self._sync_active()
+
+    async def _stop(self, target: str | None) -> PlayResult:
+        """Stop playback without updating the active state."""
         if target is None:
             if not self._playback_sessions:
                 _LOGGER.debug("No audio currently playing")
@@ -212,7 +259,10 @@ class AudioPlayer:
         except Exception:
             _LOGGER.exception("Error monitoring playback on target: %s", target_key)
         finally:
-            self._playback_sessions.pop(target_key, None)
+            # A newer play on this target may have replaced the session already
+            if self._playback_sessions.get(target_key) is session:
+                self._playback_sessions.pop(target_key, None)
+            await self._sync_active()
 
     def is_playing(self, target: str | None = None) -> bool:
         """Check if audio is currently playing."""

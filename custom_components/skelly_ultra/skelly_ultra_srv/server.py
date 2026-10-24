@@ -58,7 +58,10 @@ class SkellyUltraServer:
         self.port = port
         self.debug_json = debug_json
         self.bt_manager = BluetoothManager()
-        self.audio_player = AudioPlayer()
+        self.audio_player = AudioPlayer(
+            on_active_change=self._on_playback_active_change
+        )
+        self._shutting_down = False
         self.ble_manager = BLESessionManager()
         self.app = web.Application(middlewares=[cors_middleware])
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
@@ -1316,8 +1319,26 @@ class SkellyUltraServer:
         await self.bt_manager.start_background_scanner()
         _LOGGER.info("Bluetooth Classic background scanner started")
 
+    async def _on_playback_active_change(self, active: bool) -> None:
+        """Pause BLE and classic scanning while audio plays.
+
+        Discovery on the adapter that carries the A2DP stream takes airtime
+        from it, which makes playback stutter.
+        """
+        if self._shutting_down:
+            return
+        if active:
+            _LOGGER.info("Audio playback started, pausing background scanners")
+            await self.ble_manager.pause_scanning()
+            await self.bt_manager.pause_background_scanner()
+        else:
+            _LOGGER.info("Audio playback finished, resuming background scanners")
+            await self.ble_manager.resume_scanning()
+            await self.bt_manager.resume_background_scanner()
+
     async def _on_cleanup(self, app: web.Application) -> None:
         """Called when application shuts down."""
+        self._shutting_down = True
         await self.bt_manager.stop_background_scanner()
         _LOGGER.info("Bluetooth Classic background scanner stopped")
         await self.ble_manager.stop()

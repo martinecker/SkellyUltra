@@ -121,6 +121,7 @@ class BLESessionManager:
         self._scanner_task: asyncio.Task | None = None
         self._scanner: BleakScanner | None = None
         self._scanner_paused = False
+        self._scanner_holds = 0  # Pending pauses (connects, playback)
         self._device_cache: dict[
             str, CachedDevice
         ] = {}  # Cache scanned devices with timestamps
@@ -161,18 +162,34 @@ class BLESessionManager:
                 _LOGGER.exception("Error disconnecting session %s", session_id)
 
     async def _pause_scanner(self) -> None:
-        """Pause the background scanner temporarily."""
+        """Pause the background scanner temporarily.
+
+        Pauses are counted, so a connect finishing during audio playback
+        does not restart the scanner. Each call needs one _resume_scanner().
+        """
+        self._scanner_holds += 1
         if self._scanner and not self._scanner_paused:
             _LOGGER.info("Pausing background BLE scanner")
             await self._scanner.stop()
             self._scanner_paused = True
 
     async def _resume_scanner(self) -> None:
-        """Resume the background scanner."""
+        """Resume the background scanner once no pause is pending."""
+        self._scanner_holds = max(0, self._scanner_holds - 1)
+        if self._scanner_holds:
+            return
         if self._scanner and self._scanner_paused:
             _LOGGER.info("Resuming background BLE scanner")
             await self._scanner.start()
             self._scanner_paused = False
+
+    async def pause_scanning(self) -> None:
+        """Pause background scanning (e.g. while audio plays on the adapter)."""
+        await self._pause_scanner()
+
+    async def resume_scanning(self) -> None:
+        """Undo one pause_scanning() call."""
+        await self._resume_scanner()
 
     async def _background_scanner(self) -> None:
         """Continuously scan for BLE devices and update cache."""
@@ -196,6 +213,10 @@ class BLESessionManager:
             while True:
                 # Clean up old devices from cache every 30 seconds
                 await asyncio.sleep(30)
+
+                if self._scanner_paused:
+                    # Nothing is refreshed while paused, so keep what we have
+                    continue
 
                 _LOGGER.debug(
                     "Background BLE scanner checking for and cleaning up stale devices"
@@ -609,7 +630,6 @@ class BLESessionManager:
                 await client.connect()
             except Exception as exc:
                 _LOGGER.error("Failed to connect to BLE device: %s", exc)
-                await self._resume_scanner()
                 raise RuntimeError(f"Failed to connect to BLE device: {exc}") from exc
         except Exception:
             # Resume scanner on any error

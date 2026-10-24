@@ -169,6 +169,7 @@ class BluetoothManager:
         self._device_cache: dict[str, str] = {}  # Device name -> MAC address
         self._scanner_task: asyncio.Task | None = None
         self._scanner_running = False
+        self._scanner_paused = False
         self._allow_scanner = allow_scanner
         self._bus: MessageBus | None = None
         self._object_manager = None
@@ -425,6 +426,20 @@ class BluetoothManager:
                 await self._scanner_task
             self._scanner_task = None
             _LOGGER.info("Stopped background Bluetooth scanner")
+
+    async def pause_background_scanner(self) -> None:
+        """Stop the background scanner until resume_background_scanner()."""
+        if self._scanner_task and not self._scanner_task.done():
+            _LOGGER.info("Pausing background Bluetooth scanner")
+            await self.stop_background_scanner()
+            self._scanner_paused = True
+
+    async def resume_background_scanner(self) -> None:
+        """Restart the background scanner if pause_background_scanner() stopped it."""
+        if self._scanner_paused:
+            self._scanner_paused = False
+            _LOGGER.info("Resuming background Bluetooth scanner")
+            await self.start_background_scanner()
 
     def _on_scanner_task_done(self, task: asyncio.Task) -> None:
         """Restart scanner if it unexpectedly stops while allowed to run."""
