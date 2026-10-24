@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import logging
 import os
@@ -33,6 +34,11 @@ from .skelly_ultra_pkg.file_transfer import (
 )
 
 _LOGGER = logging.getLogger(__name__)
+
+# Delay between the per-file setting writes in _restore_file_settings. These are
+# unacknowledged writes the device can drop when sent back-to-back (matches
+# APPLY_ALL_COMMAND_DELAY_MS in the web controller).
+RESTORE_COMMAND_DELAY = 0.04
 
 
 def get_adapter_from_service_call(
@@ -275,11 +281,19 @@ async def _restore_file_settings(
     including an overwrite of an existing file, so callers must capture the
     file's previous FileInfoEvent before uploading and pass it here right
     after the transfer completes, using the pre-upload cluster.
+
+    Writes are paced by RESTORE_COMMAND_DELAY, since the device can drop
+    back-to-back writes.
     """
-    await client.set_movement_action(existing_file.action, cluster, filename)
+
+    async def paced(command) -> None:
+        await command
+        await asyncio.sleep(RESTORE_COMMAND_DELAY)
+
+    await paced(client.set_movement_action(existing_file.action, cluster, filename))
 
     if profile.get("has_eye_image"):
-        await client.set_eye_icon(existing_file.eye_icon, cluster, filename)
+        await paced(client.set_eye_icon(existing_file.eye_icon, cluster, filename))
 
     for light_def in profile.get("lights", []):
         channel = light_def["channel"]
@@ -287,12 +301,20 @@ async def _restore_file_settings(
             continue
         light = existing_file.lights[channel]
 
-        await client.set_light_brightness(channel, light.brightness, cluster, filename)
-        await client.set_light_mode(channel, light.effect_type, cluster, filename)
+        await paced(
+            client.set_light_brightness(channel, light.brightness, cluster, filename)
+        )
+        await paced(
+            client.set_light_mode(channel, light.effect_type, cluster, filename)
+        )
         if light.effect_type != 1:
-            await client.set_light_speed(channel, light.effect_speed, cluster, filename)
+            await paced(
+                client.set_light_speed(channel, light.effect_speed, cluster, filename)
+            )
         r, g, b = light.rgb
-        await client.set_light_rgb(channel, r, g, b, light.color_cycle, cluster, filename)
+        await paced(
+            client.set_light_rgb(channel, r, g, b, light.color_cycle, cluster, filename)
+        )
 
 
 async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
