@@ -13,6 +13,23 @@ from .pipewire_utils import resolve_bluez_output_node
 
 _LOGGER = logging.getLogger(__name__)
 
+# Silence stream that keeps a Bluetooth sink from suspending between clips.
+# Raw zeros from /dev/zero, paced by the sink. dont-reconnect/dont-fallback
+# make it exit when the device goes away instead of moving to another sink.
+_KEEPALIVE_ARGS = [
+    "pw-cat",
+    "--playback",
+    "--raw",
+    "--rate",
+    "48000",
+    "--channels",
+    "2",
+    "--format",
+    "s16",
+    "--properties",
+    '{ node.dont-reconnect = true node.dont-fallback = true media.name = "Skelly keep-alive" }',
+]
+
 
 class PlaybackSession(NamedTuple):
     """Information about an active playback session."""
@@ -53,6 +70,8 @@ class AudioPlayer:
         self._playback_sessions: dict[str, PlaybackSession] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._on_active_change = on_active_change
+        # Target MAC (upper case) -> silence keep-alive process
+        self._keepalives: dict[str, asyncio.subprocess.Process] = {}
         self._active = False
         self._active_lock = asyncio.Lock()
 
@@ -72,6 +91,88 @@ class AudioPlayer:
     async def _sync_active(self) -> None:
         """Set the active state from the sessions still playing."""
         await self._set_active(bool(self._playback_sessions))
+
+    async def start_keepalive(self, target: str, node: str | None = None) -> None:
+        """Stream silence to target so its Bluetooth sink stays awake.
+
+        PipeWire suspends an idle Bluetooth sink and releases the A2DP
+        transport, so every clip used to start on a cold link and stutter
+        for the first seconds. The silence mixes with real playback.
+
+        Args:
+            target: Device MAC address
+            node: PipeWire node name if already resolved
+        """
+        key = target.upper()
+        process = self._keepalives.get(key)
+        if process and process.returncode is None:
+            return
+
+        if node is None:
+            try:
+                node = await resolve_bluez_output_node(target)
+            except RuntimeError as exc:
+                _LOGGER.warning("Keep-alive: cannot resolve node for %s: %s", key, exc)
+                return
+        if not node:
+            _LOGGER.warning("Keep-alive: no PipeWire node for %s", key)
+            return
+
+        try:
+            process = await asyncio.create_subprocess_exec(
+                *_KEEPALIVE_ARGS,
+                "--target",
+                node,
+                "/dev/zero",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except Exception:
+            _LOGGER.exception("Keep-alive: failed to start pw-cat for %s", key)
+            return
+
+        self._keepalives[key] = process
+        _LOGGER.info("Started silence keep-alive on %s (%s)", key, node)
+        task = asyncio.create_task(self._monitor_keepalive(key, process))
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _monitor_keepalive(
+        self, key: str, process: asyncio.subprocess.Process
+    ) -> None:
+        """Forget a keep-alive once its process exits (e.g. device gone)."""
+        try:
+            await process.wait()
+            error_msg = ""
+            if process.stderr:
+                stderr = await process.stderr.read()
+                error_msg = stderr.decode("utf-8", errors="replace").strip()
+            _LOGGER.info(
+                "Silence keep-alive on %s exited with code %s%s",
+                key,
+                process.returncode,
+                f": {error_msg}" if error_msg else "",
+            )
+        except Exception:
+            _LOGGER.exception("Error monitoring keep-alive on %s", key)
+        finally:
+            if self._keepalives.get(key) is process:
+                self._keepalives.pop(key, None)
+
+    async def stop_keepalive(self, target: str | None = None) -> None:
+        """Stop the keep-alive for target, or all of them if target is None."""
+        keys = [target.upper()] if target else list(self._keepalives)
+        for key in keys:
+            process = self._keepalives.pop(key, None)
+            if not process or process.returncode is not None:
+                continue
+            _LOGGER.info("Stopping silence keep-alive on %s", key)
+            process.terminate()
+            try:
+                await asyncio.wait_for(process.wait(), timeout=5)
+            except TimeoutError:
+                process.kill()
+                await process.wait()
 
     async def play(
         self,
@@ -149,6 +250,8 @@ class AudioPlayer:
                     return PlayResult.TARGET_UNREACHABLE
 
                 cmd.extend(["--target", pipewire_target])
+                # Covers devices connected before the server (re)started
+                await self.start_keepalive(target, pipewire_target)
             cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
 

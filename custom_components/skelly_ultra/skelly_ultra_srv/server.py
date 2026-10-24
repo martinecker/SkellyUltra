@@ -185,6 +185,7 @@ class SkellyUltraServer:
 
         for mac in macs:
             try:
+                await self.audio_player.stop_keepalive(mac)
                 await self.bt_manager.disconnect(mac)
             except (OSError, RuntimeError, asyncio.CancelledError) as exc:
                 _LOGGER.debug(
@@ -357,6 +358,10 @@ class SkellyUltraServer:
                 device_name = None
 
             device_info = self.bt_manager.get_device_by_mac(mac) if mac else None
+            if success and mac:
+                await self.audio_player.start_keepalive(
+                    mac, device_info.pipewire_node if device_info else None
+                )
             adapter_path = (
                 device_info.adapter_path
                 if device_info
@@ -932,6 +937,7 @@ class SkellyUltraServer:
             # If no MAC specified, disconnect all (mac=None)
 
             _LOGGER.info("Received disconnect request for: %s", mac or "all devices")
+            await self.audio_player.stop_keepalive(mac)
             success = await self.bt_manager.disconnect(mac)
 
             response_data = {
@@ -1344,6 +1350,7 @@ class SkellyUltraServer:
         await self.ble_manager.stop()
         _LOGGER.info("BLE session manager stopped")
         await self.audio_player.stop()
+        await self.audio_player.stop_keepalive()
         shutil.rmtree(self.app["upload_dir"], ignore_errors=True)
         _LOGGER.info("Audio playback stopped and uploaded files deleted")
 
