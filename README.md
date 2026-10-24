@@ -36,6 +36,7 @@ Both devices share these features:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect per light channel)
   - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
+- 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches)
 - 🎚️ **Number entities**: Volume control, effect speed per light channel
 - 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
 - 🎵 **Media Player entities**:

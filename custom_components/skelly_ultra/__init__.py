@@ -26,6 +26,7 @@ PLATFORMS: list[Platform] = [
     Platform.NUMBER,
     Platform.IMAGE,
     Platform.SWITCH,
+    Platform.BUTTON,
     Platform.MEDIA_PLAYER,
 ]
 
