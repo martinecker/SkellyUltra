@@ -1036,7 +1036,7 @@ class SkellyClient:
             Device name on success, None on failure.
         """
         try:
-            return await self.get_live_name(timeout=2.0)
+            return await self.get_live_name(timeout=5.0)
         except ConnectionLostError:
             logger.debug("Connection lost while querying live name")
             return None

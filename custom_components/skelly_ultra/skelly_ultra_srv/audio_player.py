@@ -14,7 +14,7 @@ from .pipewire_utils import resolve_bluez_output_node, set_node_volume
 _LOGGER = logging.getLogger(__name__)
 
 # Silence stream that keeps a Bluetooth sink from suspending between clips.
-# Raw zeros from /dev/zero, paced by the sink. dont-reconnect/dont-fallback
+# Raw zeros from /dev/zero on stdin, paced by the sink. dont-reconnect/dont-fallback
 # make it exit when the device goes away instead of moving to another sink.
 _KEEPALIVE_ARGS = [
     "pw-cat",
@@ -138,14 +138,19 @@ class AudioPlayer:
             return
 
         try:
-            process = await asyncio.create_subprocess_exec(
-                *_KEEPALIVE_ARGS,
-                "--target",
-                node,
-                "/dev/zero",
-                stdout=asyncio.subprocess.DEVNULL,
-                stderr=asyncio.subprocess.PIPE,
-            )
+            # pw-cat --raw reads stdin, not the file argument (seen with
+            # PipeWire 1.4.2): with the server's stdin on /dev/null it drained
+            # and exited at once. So feed /dev/zero as stdin.
+            with open("/dev/zero", "rb") as zero:
+                process = await asyncio.create_subprocess_exec(
+                    *_KEEPALIVE_ARGS,
+                    "--target",
+                    node,
+                    "-",
+                    stdin=zero,
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.PIPE,
+                )
         except Exception:
             _LOGGER.exception("Keep-alive: failed to start pw-cat for %s", key)
             self._keepalive_retries.pop(key, None)
