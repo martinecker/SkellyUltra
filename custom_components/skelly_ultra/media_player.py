@@ -52,9 +52,11 @@ MAX_UPLOAD_SAMPLE_RATE = 24000
 # Peak level live-mode audio is normalized to.
 TARGET_PEAK_DB = -6.7
 
-# Silence prepended to live-mode audio so a waking Bluetooth link doesn't cut
-# off the start of the clip.
-LEAD_IN_SILENCE_MS = 500
+# Faint noise prepended to live-mode audio. The Skelly mutes its speaker on
+# silence and drops about the first 0.1 s of sound when it unmutes, so a
+# silent lead-in doesn't help; noise around -50 dBFS RMS opens it in time.
+LEAD_IN_MS = 500
+LEAD_IN_NOISE_DB = -45.0
 
 
 async def async_setup_entry(
@@ -338,7 +340,8 @@ class SkellyLiveMediaPlayer(
                         target_sample_rate=TARGET_SAMPLE_RATE,
                         target_channels=TARGET_CHANNELS,
                         target_peak_db=TARGET_PEAK_DB,
-                        lead_in_ms=LEAD_IN_SILENCE_MS,
+                        lead_in_ms=LEAD_IN_MS,
+                        lead_in_noise_db=LEAD_IN_NOISE_DB,
                         output_format=UPLOAD_FORMAT,
                     )
                 )
@@ -353,7 +356,8 @@ class SkellyLiveMediaPlayer(
                         media_path,
                         max_sample_rate=MAX_UPLOAD_SAMPLE_RATE,
                         target_peak_db=TARGET_PEAK_DB,
-                        lead_in_ms=LEAD_IN_SILENCE_MS,
+                        lead_in_ms=LEAD_IN_MS,
+                        lead_in_noise_db=LEAD_IN_NOISE_DB,
                         output_format=UPLOAD_FORMAT,
                     )
                 )
