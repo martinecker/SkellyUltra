@@ -254,7 +254,7 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
 
 
 class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
-    """Select entity for file transfer bitrate.
+    """Select entity for the file transfer bitrate override value.
 
     Shows the current bitrate when override is off (uses default),
     or allows manual selection when override is on.
@@ -271,7 +271,8 @@ class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
         """Initialize the bitrate select entity."""
         super().__init__(coordinator)
         self.coordinator = coordinator
-        self._attr_name = "Bitrate"
+        # Named to sort next to the "Override Bitrate" switch in the HA UI
+        self._attr_name = "Override Bitrate Value"
         self._attr_unique_id = f"{entry_id}_bitrate"
         self._attr_icon = "mdi:music-note"
         self._attr_device_info = device_info

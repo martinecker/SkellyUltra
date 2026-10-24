@@ -227,10 +227,11 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
 
 
 class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
-    """Number entity for file transfer chunk size.
+    """Number entity for the file transfer chunk size override value.
 
-    Shows the calculated chunk size when override is off (read-only),
-    or allows manual setting when override is on.
+    Holds the chunk size used when the Override Chunk Size switch is on
+    (defaults to DEFAULT_CHUNK_SIZE). It can only be changed while the
+    override is on; when it's off, transfers use the MTU-based chunk size.
     """
 
     _attr_has_entity_name = True
@@ -246,7 +247,8 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
         super().__init__(coordinator)
         self.coordinator = coordinator
         self.adapter = adapter
-        self._attr_name = "Chunk Size"
+        # Named to sort next to the "Override Chunk Size" switch in the HA UI
+        self._attr_name = "Override Chunk Size Value"
         self._attr_unique_id = f"{entry_id}_chunk_size"
         self._attr_native_unit_of_measurement = "bytes"
         self._attr_icon = "mdi:package-variant"
@@ -270,26 +272,12 @@ class SkellyChunkSizeNumber(CoordinatorEntity, NumberEntity):
 
     @property
     def native_value(self) -> int | None:
-        """Return current chunk size.
-
-        If override is enabled, returns the user-set value.
-        If override is disabled, calculates from MTU.
-        """
+        """Return the chunk size override value, or the default if not set yet."""
         data = self.coordinator.data
         if not data:
             return None
 
-        override_enabled = data.get("override_chunk_size", False)
-
-        if override_enabled:
-            # Return user-set value
-            return data.get("chunk_size_override", 250)
-
-        # Calculate from MTU (read-only display)
-        # Note: get_chunk_size is async, but properties can't be async.
-        # Return cached MTU-based value from coordinator data if available,
-        # otherwise return default. The actual MTU will be queried during transfer.
-        return data.get("mtu_chunk_size", 250)  # Default fallback
+        return data.get("chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE)
 
     async def async_set_native_value(self, value: float) -> None:
         """Set the chunk size override value.

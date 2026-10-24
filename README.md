@@ -308,7 +308,7 @@ The integration creates different entities depending on which device type you co
   - Shared volume control with device
 - **Sensors**: Volume, live name, storage capacity, file count, file order, BT MAC, pin code, file transfer progress
 - **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Bitrate
-- **Numbers**: Volume, Chunk Size
+- **Numbers**: Volume, Override Chunk Size Value
 
 **Note about entity IDs**: Entity IDs are generated based on:
 1. The BLE device name discovered during config (e.g., "Ultra Skelly v2", "Animated Skelly", or "Lethal Lily")
