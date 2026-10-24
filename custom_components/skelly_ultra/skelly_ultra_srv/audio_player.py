@@ -87,7 +87,7 @@ class AudioPlayer:
     async def _play_on_target(self, file_path: str, target: str | None) -> PlayResult:
         """Play audio on a specific target."""
         target_key = target or "default"
-        await self.stop(target)
+        await self._stop_one(target_key)
 
         _LOGGER.info("Starting playback of: %s on target: %s", file_path, target_key)
 
@@ -154,12 +154,15 @@ class AudioPlayer:
 
             overall_success = True
             for tgt_key in list(self._playback_sessions.keys()):
-                result = await self.stop(tgt_key if tgt_key != "default" else None)
+                result = await self._stop_one(tgt_key)
                 if result is not PlayResult.SUCCESS:
                     overall_success = False
             return PlayResult.SUCCESS if overall_success else PlayResult.ERROR
 
-        target_key = target or "default"
+        return await self._stop_one(target)
+
+    async def _stop_one(self, target_key: str) -> PlayResult:
+        """Stop playback for one session key (a target MAC or "default")."""
         session = self._playback_sessions.get(target_key)
         if not session:
             _LOGGER.debug("No audio playing on target: %s", target_key)

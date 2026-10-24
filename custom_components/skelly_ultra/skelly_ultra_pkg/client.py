@@ -467,13 +467,16 @@ class SkellyClient:
         file_data: bytes,
         filename: str = "audio.wav",
         mac: str | None = None,
+        content_type: str = "audio/wav",
     ) -> dict[str, Any]:
         """Play audio file via REST server to classic BT device.
 
         Args:
             file_data: Audio file data as bytes.
-            filename: Name of the file (for logging/identification).
+            filename: Name of the file (for logging/identification). Its
+                extension should match the audio format of file_data.
             mac: Optional MAC address target. If None, uses the stored live_mode_client_address.
+            content_type: MIME type of file_data.
 
         Returns:
             Response data dict with 'success', 'error', 'is_playing', etc.
@@ -495,7 +498,7 @@ class SkellyClient:
                 "file",
                 file_data,
                 filename=filename,
-                content_type="audio/wav",
+                content_type=content_type,
             )
             if target_mac:
                 data.add_field("mac", target_mac)

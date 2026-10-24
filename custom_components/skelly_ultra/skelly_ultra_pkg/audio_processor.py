@@ -150,15 +150,41 @@ class AudioProcessor:
     ) -> bytes:
         """Process audio file and return WAV data as bytes.
 
+        See process_to_bytes for the arguments.
+        """
+        return cls.process_to_bytes(
+            input_path,
+            target_sample_rate=target_sample_rate,
+            target_channels=target_channels,
+            normalize_gain=normalize_gain,
+            target_peak_db=target_peak_db,
+        )
+
+    @classmethod
+    def process_to_bytes(
+        cls,
+        input_path: str | Path,
+        target_sample_rate: int | None = None,
+        target_channels: int | None = None,
+        normalize_gain: bool = True,
+        target_peak_db: float = -9.0,
+        max_sample_rate: int | None = None,
+        output_format: str = "wav",
+    ) -> bytes:
+        """Process audio file and return the encoded audio data as bytes.
+
         Args:
             input_path: Path to input audio file (any format supported by pydub)
             target_sample_rate: Target sample rate (default: no resampling)
             target_channels: Target channels (default: no conversion)
             normalize_gain: Whether to normalize audio gain (default: True)
             target_peak_db: Target peak level in dB, between -12 and -6 (default: -9)
+            max_sample_rate: Only resample audio whose sample rate is above
+                this (default: no limit). Ignored if target_sample_rate is set.
+            output_format: Output format, e.g. "wav" or "flac" (default: "wav")
 
         Returns:
-            WAV file data as bytes
+            Encoded audio file data as bytes
 
         Raises:
             AudioProcessingError: If processing fails
@@ -176,7 +202,9 @@ class AudioProcessor:
             )
             target_peak_db = max(-12.0, min(-6.0, target_peak_db))
 
-        logger.info("Processing audio file to WAV: %s", input_path)
+        logger.info(
+            "Processing audio file to %s: %s", output_format.upper(), input_path
+        )
 
         try:
             # Load audio file (pydub auto-detects format)
@@ -197,14 +225,21 @@ class AudioProcessor:
                 )
                 audio = audio.set_channels(target_channels)
 
-            # Resample if target sample rate specified
+            # Pick the output sample rate. Resampling is left to ffmpeg during
+            # export, because pydub's set_frame_rate has no anti-alias filter
+            # and folds high frequencies (e.g. sibilance) back into the
+            # audible range when downsampling.
+            output_sample_rate = None
             if target_sample_rate and audio.frame_rate != target_sample_rate:
+                output_sample_rate = target_sample_rate
+            elif max_sample_rate and audio.frame_rate > max_sample_rate:
+                output_sample_rate = max_sample_rate
+            if output_sample_rate:
                 logger.debug(
                     "Resampling from %d Hz to %d Hz",
                     audio.frame_rate,
-                    target_sample_rate,
+                    output_sample_rate,
                 )
-                audio = audio.set_frame_rate(target_sample_rate)
 
             # Normalize gain if requested
             if normalize_gain:
@@ -229,22 +264,26 @@ class AudioProcessor:
                 final_peak_db = audio.max_dBFS
                 logger.debug("Final peak level: %.1f dBFS", final_peak_db)
 
-            # Export to WAV format in memory
+            # Export to the requested format in memory
             buffer = BytesIO()
-            audio.export(buffer, format="wav")
-            wav_data = buffer.getvalue()
+            export_parameters = (
+                ["-ar", str(output_sample_rate)] if output_sample_rate else None
+            )
+            audio.export(buffer, format=output_format, parameters=export_parameters)
+            output_data = buffer.getvalue()
 
         except Exception as exc:
             logger.exception("Failed to process audio file: %s", input_path)
             raise AudioProcessingError(f"Audio processing failed: {exc}") from exc
         else:
             logger.info(
-                "Audio processed successfully: %.2f seconds, %d bytes",
+                "Audio processed successfully: %.2f seconds, %d bytes of %s",
                 len(audio) / 1000.0,
-                len(wav_data),
+                len(output_data),
+                output_format.upper(),
             )
 
-            return wav_data
+            return output_data
 
     @classmethod
     def validate_audio(cls, file_path: str | Path) -> dict[str, any]:

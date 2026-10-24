@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 from pathlib import Path
+import shutil
 import tempfile
 
 from aiohttp import web
@@ -15,6 +17,11 @@ from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager, DeviceInfo
 
 _LOGGER = logging.getLogger(__name__)
+
+# Largest audio upload accepted by /classic/play. The upload is streamed to
+# disk and checked against this limit by the handler, so it is not limited by
+# aiohttp's 1 MB client_max_size, which still applies to all other requests.
+MAX_UPLOAD_SIZE = 50 * 1024 * 1024
 
 
 @web.middleware
@@ -55,6 +62,8 @@ class SkellyUltraServer:
         self.ble_manager = BLESessionManager()
         self.app = web.Application(middlewares=[cors_middleware])
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
+        # Uploaded files whose play request is still being handled
+        self._pending_uploads: set[Path] = set()
         self.app.on_startup.append(self._on_startup)
         self.app.on_cleanup.append(self._on_cleanup)
         self._setup_routes()
@@ -95,6 +104,32 @@ class SkellyUltraServer:
             response_data.update(extra)
         self._log_response(endpoint, response_data)
         return web.json_response(response_data, status=status)
+
+    def _cleanup_uploads(self) -> None:
+        """Delete uploaded files that are no longer playing or being handled.
+
+        Best effort: cleanup runs after every play request, so a problem here
+        is logged but never turns a successful play into an error.
+        """
+        in_use = {str(path) for path in self._pending_uploads}
+        in_use.update(
+            file_path
+            for file_path, playing in self.audio_player.get_all_sessions().values()
+            if playing
+        )
+        try:
+            paths = list(self.app["upload_dir"].iterdir())
+        except OSError as exc:
+            _LOGGER.warning("Could not list upload directory: %s", exc)
+            return
+        for path in paths:
+            if str(path) in in_use:
+                continue
+            try:
+                if path.is_file() or path.is_symlink():
+                    path.unlink(missing_ok=True)
+            except OSError as exc:
+                _LOGGER.warning("Could not delete uploaded file %s: %s", path, exc)
 
     def _resolve_single_session_id(
         self, session_id: str | None
@@ -612,10 +647,12 @@ class SkellyUltraServer:
             "error": "error message if failed"
         }
         """
+        file_path: Path | None = None
         try:
             reader = await request.multipart()
+            upload_dir = self.app["upload_dir"]
 
-            file_data = None
+            file_size = 0
             filename = "audio.wav"
             target = None
             targets = None
@@ -624,9 +661,38 @@ class SkellyUltraServer:
             # Read multipart fields
             async for part in reader:
                 if part.name == "file":
-                    # Read the uploaded file
-                    filename = part.filename or "audio.wav"
-                    file_data = await part.read()
+                    if file_path is not None:
+                        return self._json_error(
+                            "play", "Only one file can be uploaded per request", 400
+                        )
+                    # Stream the uploaded file to disk in chunks instead of
+                    # holding it in memory. Each upload gets a unique name, so
+                    # a new upload never overwrites a file that is still
+                    # playing. The client's file name is only used for display.
+                    filename = Path(part.filename or "").name or "audio.wav"
+                    # Recreate the upload directory in case something deleted
+                    # it, e.g. a /tmp cleaner on a long-running server.
+                    upload_dir.mkdir(parents=True, exist_ok=True)
+                    fd, temp_path = tempfile.mkstemp(
+                        dir=upload_dir, suffix=Path(filename).suffix
+                    )
+                    file_path = Path(temp_path)
+                    self._pending_uploads.add(file_path)
+                    too_large = False
+                    with os.fdopen(fd, "wb") as file:
+                        while chunk := await part.read_chunk():
+                            file_size += len(chunk)
+                            if file_size > MAX_UPLOAD_SIZE:
+                                too_large = True
+                                break
+                            file.write(chunk)
+                    if too_large:
+                        return self._json_error(
+                            "play",
+                            f"Uploaded file is larger than the "
+                            f"{MAX_UPLOAD_SIZE // (1024 * 1024)} MB limit",
+                            413,
+                        )
                 elif part.name == "mac":
                     target = (await part.read()).decode()
                 elif part.name == "device_name":
@@ -652,21 +718,17 @@ class SkellyUltraServer:
             # Log request metadata (not binary file data)
             request_data = {
                 "filename": filename,
-                "file_size": len(file_data) if file_data else 0,
+                "file_size": file_size,
                 "target": target,
                 "targets": targets,
                 "play_all": play_all,
             }
             self._log_request("play", request_data)
 
-            if not file_data:
+            if file_path is None or file_size == 0:
                 return self._json_error("play", "No file uploaded", 400)
 
-            # Save uploaded file to temporary directory
-            upload_dir = self.app["upload_dir"]
-            file_path = upload_dir / filename
-            file_path.write_bytes(file_data)
-            _LOGGER.info("Saved uploaded file to: %s", file_path)
+            _LOGGER.info("Saved uploaded file to: %s (%d bytes)", file_path, file_size)
 
             # Determine target(s)
             final_targets, validation_error = self._resolve_play_targets(
@@ -687,6 +749,12 @@ class SkellyUltraServer:
         except Exception as exc:
             _LOGGER.exception("Error in play")
             return self._json_error("play", str(exc), 500)
+        finally:
+            # Deletes this upload unless it is now playing, plus any earlier
+            # uploads that have finished playing.
+            if file_path is not None:
+                self._pending_uploads.discard(file_path)
+            self._cleanup_uploads()
 
     async def handle_play_filename(self, request: web.Request) -> web.Response:
         """Handle POST /classic/play_filename endpoint with file path.
@@ -1254,6 +1322,9 @@ class SkellyUltraServer:
         _LOGGER.info("Bluetooth Classic background scanner stopped")
         await self.ble_manager.stop()
         _LOGGER.info("BLE session manager stopped")
+        await self.audio_player.stop()
+        shutil.rmtree(self.app["upload_dir"], ignore_errors=True)
+        _LOGGER.info("Audio playback stopped and uploaded files deleted")
 
     async def start(self) -> None:
         """Start the server."""

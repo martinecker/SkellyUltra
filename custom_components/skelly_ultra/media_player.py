@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+from functools import partial
 import logging
 from pathlib import Path
 import tempfile
@@ -39,6 +40,14 @@ _LOGGER = logging.getLogger(__name__)
 TARGET_RESAMPLING = False
 TARGET_SAMPLE_RATE = 8000  # 8kHz
 TARGET_CHANNELS = 1  # Mono
+
+# Audio is uploaded to the REST server as FLAC, which is lossless but about
+# half the size of WAV. Without TARGET_RESAMPLING, audio above
+# MAX_UPLOAD_SAMPLE_RATE is downsampled to it. 24 kHz keeps everything audible
+# in speech on the Skelly speaker and keeps uploads small.
+UPLOAD_FORMAT = "flac"
+UPLOAD_CONTENT_TYPE = "audio/flac"
+MAX_UPLOAD_SAMPLE_RATE = 24000
 
 
 async def async_setup_entry(
@@ -316,24 +325,37 @@ class SkellyLiveMediaPlayer(
                     TARGET_SAMPLE_RATE,
                 )
                 file_data = await self.hass.async_add_executor_job(
-                    AudioProcessor.process_to_wav_bytes,
-                    media_path,
-                    TARGET_SAMPLE_RATE,
-                    TARGET_CHANNELS,
+                    partial(
+                        AudioProcessor.process_to_bytes,
+                        media_path,
+                        target_sample_rate=TARGET_SAMPLE_RATE,
+                        target_channels=TARGET_CHANNELS,
+                        output_format=UPLOAD_FORMAT,
+                    )
                 )
             else:
-                _LOGGER.debug("Processing audio without resampling")
+                _LOGGER.debug(
+                    "Processing audio with sample rate capped at %dHz",
+                    MAX_UPLOAD_SAMPLE_RATE,
+                )
                 file_data = await self.hass.async_add_executor_job(
-                    AudioProcessor.process_to_wav_bytes,
-                    media_path,
-                    None,  # No sample rate conversion
-                    None,  # No channel conversion
+                    partial(
+                        AudioProcessor.process_to_bytes,
+                        media_path,
+                        max_sample_rate=MAX_UPLOAD_SAMPLE_RATE,
+                        output_format=UPLOAD_FORMAT,
+                    )
                 )
 
             # Use the client to upload and play audio via REST server
-            # The client will handle the MAC address and target formatting
+            # The client will handle the MAC address and target formatting.
+            # The upload's extension must match its format, not the source's.
+            upload_stem = Path(self._current_media_title).stem or "audio"
+            upload_name = f"{upload_stem}.{UPLOAD_FORMAT}"
             data = await self.adapter.client.play_audio_live_mode(
-                file_data, filename=self._current_media_title
+                file_data,
+                filename=upload_name,
+                content_type=UPLOAD_CONTENT_TYPE,
             )
 
             if not data.get("success"):

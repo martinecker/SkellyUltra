@@ -299,6 +299,7 @@ The integration creates different entities depending on which device type you co
   - Supports volume control, play/pause, stop
   - Works with TTS (Text-to-Speech) services
   - Supports multiple audio formats (MP3, WAV, FLAC, OGG, M4A, etc.)
+  - Audio is sent to the REST server as FLAC, which needs `ffmpeg` on the Home Assistant host (Home Assistant OS and the official container images include it)
 - **Media Player - Internal Files**: Play audio files stored on the device's internal storage
   - Browse files via media browser UI
   - Next/previous track navigation
