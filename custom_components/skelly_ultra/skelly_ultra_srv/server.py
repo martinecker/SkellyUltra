@@ -660,7 +660,7 @@ class SkellyUltraServer:
         Returns:
         {
             "success": true/false,
-            "filename": "audio.wav",
+            "filename": "name of the uploaded file",
             "is_playing": true/false,
             "sessions": {...},
             "error": "error message if failed"
@@ -672,7 +672,7 @@ class SkellyUltraServer:
             upload_dir = self.app["upload_dir"]
 
             file_size = 0
-            filename = "audio.wav"
+            filename = "audio"
             target = None
             targets = None
             play_all = False
@@ -688,7 +688,7 @@ class SkellyUltraServer:
                     # holding it in memory. Each upload gets a unique name, so
                     # a new upload never overwrites a file that is still
                     # playing. The client's file name is only used for display.
-                    filename = Path(part.filename or "").name or "audio.wav"
+                    filename = Path(part.filename or "").name or "audio"
                     # Recreate the upload directory in case something deleted
                     # it, e.g. a /tmp cleaner on a long-running server.
                     upload_dir.mkdir(parents=True, exist_ok=True)
@@ -1374,14 +1374,18 @@ class SkellyUltraServer:
     async def _on_cleanup(self, app: web.Application) -> None:
         """Called when application shuts down."""
         self._shutting_down = True
+        # Audio first, so a failing Bluetooth or BLE shutdown can't leave
+        # pw-play running or the upload directory behind
+        try:
+            await self.audio_player.stop()
+            await self.audio_player.stop_keepalive()
+        finally:
+            shutil.rmtree(self.app["upload_dir"], ignore_errors=True)
+        _LOGGER.info("Audio playback stopped and uploaded files deleted")
         await self.bt_manager.stop_background_scanner()
         _LOGGER.info("Bluetooth Classic background scanner stopped")
         await self.ble_manager.stop()
         _LOGGER.info("BLE session manager stopped")
-        await self.audio_player.stop()
-        await self.audio_player.stop_keepalive()
-        shutil.rmtree(self.app["upload_dir"], ignore_errors=True)
-        _LOGGER.info("Audio playback stopped and uploaded files deleted")
 
     async def start(self) -> None:
         """Start the server."""

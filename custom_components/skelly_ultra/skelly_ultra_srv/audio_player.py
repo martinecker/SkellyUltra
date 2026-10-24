@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from collections.abc import Awaitable, Callable
 from enum import Enum
 import logging
@@ -45,6 +46,9 @@ class PlaybackSession(NamedTuple):
     process: asyncio.subprocess.Process
     file_path: str
     target: str | None
+    # Number of the play request (see AudioPlayer._request_seq). Only a newer
+    # request replaces or stops this session.
+    generation: int
 
 
 class PlayResult(Enum):
@@ -77,7 +81,20 @@ class AudioPlayer:
                 starts and with False once nothing is playing anymore
             keepalive: Run silence keep-alive streams (see start_keepalive)
         """
+        # Session key (see _session_key) -> playback session
         self._playback_sessions: dict[str, PlaybackSession] = {}
+        # Session key -> lock held while starting or stopping playback there,
+        # so two plays for the same speaker can't both start pw-play. One per
+        # target ever used, never removed.
+        self._target_locks: dict[str, asyncio.Lock] = {}
+        # Numbers play and stop-all requests in arrival order. A request never
+        # stops or replaces playback from a newer one: while a multi-target
+        # play waits for a target's lock, newer requests may get there first.
+        self._request_seq = 0
+        # Number of the latest stop of all targets or untargeted play
+        self._stop_all_seq = 0
+        # Session key -> number of the latest stop of that target
+        self._target_stop_seqs: dict[str, int] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._on_active_change = on_active_change
         # Target MAC (upper case) -> silence keep-alive process
@@ -101,6 +118,20 @@ class AudioPlayer:
                 await self._on_active_change(active)
             except Exception:
                 _LOGGER.exception("Error in playback active change callback")
+
+    @staticmethod
+    def _session_key(target: str | None) -> str:
+        """Return the session key for target: its MAC in upper case, or "default".
+
+        "default" itself maps to "default", since that is the key clients see.
+        """
+        if not target or target.lower() == "default":
+            return "default"
+        return target.upper()
+
+    def _target_lock(self, key: str) -> asyncio.Lock:
+        """Return the lock for a session key, creating it on first use."""
+        return self._target_locks.setdefault(key, asyncio.Lock())
 
     async def _sync_active(self) -> None:
         """Set the active state from the sessions still playing."""
@@ -243,7 +274,7 @@ class AudioPlayer:
         """Play an audio file using pw-play.
 
         Args:
-            file_path: Path to the .wav file to play
+            file_path: Path to the audio file to play
             targets: List of target devices to play on
 
         Returns:
@@ -260,10 +291,14 @@ class AudioPlayer:
             _LOGGER.error("Path is not a file: %s", file_path)
             return PlayResponse(PlayResult.ERROR, [])
 
+        self._request_seq += 1
+        seq = self._request_seq
+        if not targets:
+            self._stop_all_seq = seq
         success_count = 0
         unreachable: list[str] = []
         for tgt in target_list:
-            result = await self._play_on_target(file_path, tgt)
+            result = await self._play_on_target(file_path, tgt, seq)
             if result is PlayResult.SUCCESS:
                 success_count += 1
             elif result is PlayResult.TARGET_UNREACHABLE and tgt:
@@ -275,17 +310,53 @@ class AudioPlayer:
             return PlayResponse(PlayResult.TARGET_UNREACHABLE, unreachable)
         return PlayResponse(PlayResult.ERROR, unreachable)
 
-    async def _play_on_target(self, file_path: str, target: str | None) -> PlayResult:
-        """Play audio on a specific target."""
-        target_key = target or "default"
-        await self._stop_one(target_key)
+    async def _play_on_target(
+        self, file_path: str, target: str | None, seq: int
+    ) -> PlayResult:
+        """Play audio on a specific target, replacing what plays there.
+
+        seq is the number of the play request (see _request_seq).
+        """
+        target_key = self._session_key(target)
         try:
-            return await self._start_on_target(file_path, target, target_key)
+            # Held across stop, node lookup and spawn: a second play for the
+            # same target waits here, then stops this one and replaces it.
+            # Plays for different targets still start in parallel.
+            async with contextlib.AsyncExitStack() as locks:
+                await locks.enter_async_context(self._target_lock(target_key))
+                if target is None:
+                    # The default sink is usually one of the connected
+                    # speakers, so stop everything rather than mix streams.
+                    # Take the other targets' locks too (in sorted order, after
+                    # "default"), so a targeted play still starting can't
+                    # start pw-play after this stop.
+                    others = set(self._playback_sessions) | set(self._target_locks)
+                    others.discard(target_key)
+                    for key in sorted(others):
+                        await locks.enter_async_context(self._target_lock(key))
+                current = self._playback_sessions.get(target_key)
+                stop_seq = max(
+                    self._stop_all_seq, self._target_stop_seqs.get(target_key, 0)
+                )
+                if stop_seq > seq or (current is not None and current.generation > seq):
+                    # A newer request stopped this target or already plays on
+                    # it: leave that alone and start nothing here
+                    _LOGGER.info(
+                        "Skipping playback of %s on %s: replaced by a newer request",
+                        file_path,
+                        target_key,
+                    )
+                    return PlayResult.SUCCESS
+                if target is None:
+                    await self._stop_all(seq)
+                else:
+                    await self._stop_one(target_key)
+                return await self._start_on_target(file_path, target, target_key, seq)
         finally:
             await self._sync_active()
 
     async def _start_on_target(
-        self, file_path: str, target: str | None, target_key: str
+        self, file_path: str, target: str | None, target_key: str, generation: int
     ) -> PlayResult:
         """Start pw-play for one target (any old session is already stopped)."""
         _LOGGER.info("Starting playback of: %s on target: %s", file_path, target_key)
@@ -327,9 +398,13 @@ class AudioPlayer:
                 stderr=asyncio.subprocess.PIPE,
             )
 
-            self._playback_sessions[target_key] = PlaybackSession(
-                process=process, file_path=file_path, target=target
+            session = PlaybackSession(
+                process=process,
+                file_path=file_path,
+                target=target,
+                generation=generation,
             )
+            self._playback_sessions[target_key] = session
 
         except FileNotFoundError:
             _LOGGER.error("pw-play command not found. Is PipeWire installed?")
@@ -338,7 +413,7 @@ class AudioPlayer:
             _LOGGER.exception("Failed to start playback on target: %s", target_key)
             return PlayResult.ERROR
         else:
-            task = asyncio.create_task(self._monitor_playback(target_key))
+            task = asyncio.create_task(self._monitor_playback(target_key, session))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
 
@@ -352,58 +427,84 @@ class AudioPlayer:
             return PlayResult.SUCCESS
 
     async def stop(self, target: str | None = None) -> PlayResult:
-        """Stop playback on specific target or all targets."""
+        """Stop playback on specific target or all targets.
+
+        Waits for a play that is still starting on the target, so a stop sent
+        right after a play stops that play.
+        """
         try:
-            return await self._stop(target)
+            if target is None:
+                self._request_seq += 1
+                self._stop_all_seq = generation = self._request_seq
+                overall_success = True
+                for key in sorted(
+                    set(self._playback_sessions) | set(self._target_locks)
+                ):
+                    async with self._target_lock(key):
+                        result = await self._stop_one(key, generation)
+                    if result is not PlayResult.SUCCESS:
+                        overall_success = False
+                return PlayResult.SUCCESS if overall_success else PlayResult.ERROR
+
+            target_key = self._session_key(target)
+            self._request_seq += 1
+            generation = self._target_stop_seqs[target_key] = self._request_seq
+            async with self._target_lock(target_key):
+                return await self._stop_one(target_key, generation)
         finally:
             await self._sync_active()
 
-    async def _stop(self, target: str | None) -> PlayResult:
-        """Stop playback without updating the active state."""
-        if target is None:
-            if not self._playback_sessions:
-                _LOGGER.debug("No audio currently playing")
-                return PlayResult.SUCCESS
+    async def _stop_all(self, generation: int) -> None:
+        """Stop every session from before generation (the caller holds the locks)."""
+        for target_key in list(self._playback_sessions):
+            await self._stop_one(target_key, generation)
 
-            overall_success = True
-            for tgt_key in list(self._playback_sessions.keys()):
-                result = await self._stop_one(tgt_key)
-                if result is not PlayResult.SUCCESS:
-                    overall_success = False
-            return PlayResult.SUCCESS if overall_success else PlayResult.ERROR
+    async def _stop_one(
+        self, target_key: str, generation: int | None = None
+    ) -> PlayResult:
+        """Stop playback for one session key (a target MAC or "default").
 
-        return await self._stop_one(target)
-
-    async def _stop_one(self, target_key: str) -> PlayResult:
-        """Stop playback for one session key (a target MAC or "default")."""
+        With generation, only a session from an earlier request is stopped: a
+        play made after a stop of all targets began must keep playing.
+        """
         session = self._playback_sessions.get(target_key)
         if not session:
             _LOGGER.debug("No audio playing on target: %s", target_key)
             return PlayResult.SUCCESS
+        if generation is not None and session.generation >= generation:
+            _LOGGER.debug("Keeping newer playback on target: %s", target_key)
+            return PlayResult.SUCCESS
 
+        process = session.process
         try:
-            session.process.terminate()
-            try:
-                await asyncio.wait_for(session.process.wait(), timeout=5)
-            except TimeoutError:
-                _LOGGER.warning("Process didn't terminate gracefully, killing it")
-                session.process.kill()
-                await session.process.wait()
+            if process.returncode is None:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(process.wait(), timeout=5)
+                except TimeoutError:
+                    _LOGGER.warning("Process didn't terminate gracefully, killing it")
+                    process.kill()
+                    await process.wait()
+                _LOGGER.info("Playback stopped successfully on target: %s", target_key)
+            else:
+                _LOGGER.debug("Playback on target %s already finished", target_key)
 
+        except ProcessLookupError:
+            # Exited on its own just before the signal: stopped all the same
+            _LOGGER.debug("Playback on target %s already finished", target_key)
         except Exception:
             _LOGGER.exception("Failed to stop playback on target: %s", target_key)
             return PlayResult.ERROR
-        else:
-            _LOGGER.info("Playback stopped successfully on target: %s", target_key)
+
+        # A newer play may have replaced the session while this one stopped
+        if self._playback_sessions.get(target_key) is session:
             self._playback_sessions.pop(target_key, None)
-            return PlayResult.SUCCESS
+        return PlayResult.SUCCESS
 
-    async def _monitor_playback(self, target_key: str) -> None:
-        """Monitor the playback process and clean up when it finishes."""
-        session = self._playback_sessions.get(target_key)
-        if not session:
-            return
-
+    async def _monitor_playback(
+        self, target_key: str, session: PlaybackSession
+    ) -> None:
+        """Monitor one playback process and clean up when it finishes."""
         try:
             await session.process.wait()
             returncode = session.process.returncode
@@ -438,8 +539,7 @@ class AudioPlayer:
                     return True
             return False
 
-        target_key = target or "default"
-        session = self._playback_sessions.get(target_key)
+        session = self._playback_sessions.get(self._session_key(target))
         return session is not None and session.process.returncode is None
 
     def get_current_file(self, target: str | None = None) -> str | None:
@@ -450,8 +550,7 @@ class AudioPlayer:
                     return session.file_path
             return None
 
-        target_key = target or "default"
-        session = self._playback_sessions.get(target_key)
+        session = self._playback_sessions.get(self._session_key(target))
         if session and session.process.returncode is None:
             return session.file_path
         return None
