@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from typing import NamedTuple
 
-from .pipewire_utils import resolve_bluez_output_node
+from .pipewire_utils import resolve_bluez_output_node, set_node_volume
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -60,18 +60,21 @@ class AudioPlayer:
     def __init__(
         self,
         on_active_change: Callable[[bool], Awaitable[None]] | None = None,
+        keepalive: bool = True,
     ) -> None:
         """Initialize the audio player.
 
         Args:
             on_active_change: Awaited with True before the first playback
                 starts and with False once nothing is playing anymore
+            keepalive: Run silence keep-alive streams (see start_keepalive)
         """
         self._playback_sessions: dict[str, PlaybackSession] = {}
         self._background_tasks: set[asyncio.Task] = set()
         self._on_active_change = on_active_change
         # Target MAC (upper case) -> silence keep-alive process
         self._keepalives: dict[str, asyncio.subprocess.Process] = {}
+        self._keepalive_enabled = keepalive
         self._active = False
         self._active_lock = asyncio.Lock()
 
@@ -103,6 +106,8 @@ class AudioPlayer:
             target: Device MAC address
             node: PipeWire node name if already resolved
         """
+        if not self._keepalive_enabled:
+            return
         key = target.upper()
         process = self._keepalives.get(key)
         if process and process.returncode is None:
@@ -167,12 +172,10 @@ class AudioPlayer:
             if not process or process.returncode is not None:
                 continue
             _LOGGER.info("Stopping silence keep-alive on %s", key)
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=5)
-            except TimeoutError:
-                process.kill()
-                await process.wait()
+            # Kill right away: there is only silence to lose, and pw-cat
+            # ignores SIGTERM once its sink is gone (seen on the Pi)
+            process.kill()
+            await process.wait()
 
     async def play(
         self,
@@ -252,6 +255,8 @@ class AudioPlayer:
                 cmd.extend(["--target", pipewire_target])
                 # Covers devices connected before the server (re)started
                 await self.start_keepalive(target, pipewire_target)
+                # WirePlumber may have restored a lower sink volume since connect
+                await set_node_volume(pipewire_target, 1.0)
             cmd.extend(["--volume", "1.0"])
             cmd.append(file_path)
 

@@ -552,3 +552,42 @@ def _log_parse_failure(payload: str) -> None:
         _LOGGER.error("Failed to parse pw-dump output; payload saved to %s", tmp_path)
 
     raise RuntimeError("Failed to parse pw-dump output")
+
+
+async def set_node_volume(node_name: str, volume: float = 1.0) -> bool:
+    """Set a sink's volume with pactl (pipewire-pulse), by node name.
+
+    WirePlumber gives a sink it hasn't seen before a default volume of 0.4
+    and remembers per-device volumes, so a new Skelly would play quietly.
+    pactl takes the sink name directly; wpctl only takes ids, which change
+    on every reconnect.
+
+    Returns:
+        True if pactl accepted the change.
+    """
+    percent = f"{round(volume * 100)}%"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "pactl",
+            "set-sink-volume",
+            node_name,
+            percent,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
+    except (FileNotFoundError, OSError, TimeoutError) as exc:
+        _LOGGER.warning("pactl set-sink-volume failed for %s: %s", node_name, exc)
+        return False
+
+    if proc.returncode != 0:
+        _LOGGER.warning(
+            "pactl set-sink-volume %s exited with code %s: %s",
+            node_name,
+            proc.returncode,
+            (stderr or b"").decode(errors="replace").strip(),
+        )
+        return False
+
+    _LOGGER.info("Set volume of %s to %s", node_name, percent)
+    return True

@@ -40,6 +40,7 @@ For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 - 🌐 **aiohttp** (Python web framework)
 - 📡 **bluetoothctl** (part of bluez - Bluetooth management)
 - 🔊 **pw-play** (part of PipeWire - audio playback)
+- 🎚️ **pactl** (part of pulseaudio-utils, needs pipewire-pulse running - sets each Skelly's speaker volume to 100% after it connects; without it a newly paired Skelly stays at WirePlumber's default of 40%)
 
 **Important**: When using a Raspberry Pi to run the server it is *highly* recommended to use a dedicated Bluetooth USB dongle. The built-in Bluetooth controller usually has problems to stream audio to a classic Bluetooth speaker device like the Ultra Skelly, resulting in very choppy playback. I've successfully used the TP-Link UB500 Plus.
 
@@ -50,10 +51,10 @@ For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 ```bash
 # On Debian/Ubuntu
 sudo apt-get update
-sudo apt-get install bluez pipewire-bin python3-pip
+sudo apt-get install bluez pipewire-bin pulseaudio-utils python3-pip
 
 # On Fedora
-sudo dnf install bluez pipewire-utils python3-pip
+sudo dnf install bluez pipewire-utils pulseaudio-utils python3-pip
 ```
 
 To install the Python dependencies, which are specified in `pyproject.toml`, simply run `pip`:

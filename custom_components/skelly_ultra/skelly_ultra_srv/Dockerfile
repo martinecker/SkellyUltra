@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # Audio processing and streaming
     pipewire \
     pipewire-pulse \
+    pulseaudio-utils \
     wireplumber \
     libspa-0.2-bluetooth \
     # D-Bus for automated pairing

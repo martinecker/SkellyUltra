@@ -46,6 +46,11 @@ async def main():
         default=8765,
         help="Port to listen on (default: 8765)",
     )
+    parser.add_argument(
+        "--no-keepalive",
+        action="store_true",
+        help="Don't stream silence to live-mode devices to keep their sink awake",
+    )
     args = parser.parse_args()
 
     # Configure colored logging
@@ -70,7 +75,10 @@ async def main():
         )
 
     server = SkellyUltraServer(
-        host=args.host, port=args.port, debug_json=args.debug_json
+        host=args.host,
+        port=args.port,
+        debug_json=args.debug_json,
+        keepalive=not args.no_keepalive,
     )
 
     print(f"""Starting Skelly Ultra REST server on http://{args.host}:{args.port}

@@ -15,6 +15,7 @@ from aiohttp import web
 from .audio_player import AudioPlayer, PlayResult
 from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager, DeviceInfo
+from .pipewire_utils import resolve_bluez_output_node, set_node_volume
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,7 +46,11 @@ class SkellyUltraServer:
     """REST server for managing Bluetooth connections and audio playback."""
 
     def __init__(
-        self, host: str = "0.0.0.0", port: int = 8765, debug_json: bool = False
+        self,
+        host: str = "0.0.0.0",
+        port: int = 8765,
+        debug_json: bool = False,
+        keepalive: bool = True,
     ) -> None:
         """Initialize the server.
 
@@ -53,15 +58,17 @@ class SkellyUltraServer:
             host: Host address to bind to
             port: Port to listen on
             debug_json: Enable debug logging of JSON requests/responses
+            keepalive: Keep each live-mode sink awake with a silence stream
         """
         self.host = host
         self.port = port
         self.debug_json = debug_json
         self.bt_manager = BluetoothManager()
         self.audio_player = AudioPlayer(
-            on_active_change=self._on_playback_active_change
+            on_active_change=self._on_playback_active_change, keepalive=keepalive
         )
         self._shutting_down = False
+        self._volume_tasks: set[asyncio.Task] = set()
         self.ble_manager = BLESessionManager()
         self.app = web.Application(middlewares=[cors_middleware])
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
@@ -359,9 +366,13 @@ class SkellyUltraServer:
 
             device_info = self.bt_manager.get_device_by_mac(mac) if mac else None
             if success and mac:
-                await self.audio_player.start_keepalive(
-                    mac, device_info.pipewire_node if device_info else None
-                )
+                node = device_info.pipewire_node if device_info else None
+                task = asyncio.create_task(self._set_sink_volume_when_ready(mac))
+                self._volume_tasks.add(task)
+                task.add_done_callback(self._volume_tasks.discard)
+                # A keep-alive left from before a drop may be stuck on the old sink
+                await self.audio_player.stop_keepalive(mac)
+                await self.audio_player.start_keepalive(mac, node)
             adapter_path = (
                 device_info.adapter_path
                 if device_info
@@ -1324,6 +1335,24 @@ class SkellyUltraServer:
         _LOGGER.info("BLE session manager started")
         await self.bt_manager.start_background_scanner()
         _LOGGER.info("Bluetooth Classic background scanner started")
+
+    async def _set_sink_volume_when_ready(self, mac: str) -> None:
+        """Set the device's sink to full volume once PipeWire has set it up.
+
+        Right after a classic connect the sink often has no ports yet, and
+        WirePlumber applies its stored (or default 0.4) volume when it does,
+        so setting it immediately gets overwritten.
+        """
+        try:
+            node = await resolve_bluez_output_node(mac, attempts=15)
+            if not node:
+                _LOGGER.warning("Sink for %s never became ready, volume not set", mac)
+                return
+            # Give WirePlumber a moment to finish restoring its volume first
+            await asyncio.sleep(2.0)
+            await set_node_volume(node, 1.0)
+        except Exception:
+            _LOGGER.exception("Failed to set sink volume for %s", mac)
 
     async def _on_playback_active_change(self, active: bool) -> None:
         """Pause BLE and classic scanning while audio plays.
