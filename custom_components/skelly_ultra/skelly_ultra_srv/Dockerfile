@@ -1,7 +1,9 @@
 # Skelly Ultra REST Server Docker Image
 # Provides Bluetooth Classic audio playback support for Home Assistant integration
 
-FROM python:3.11-slim-bookworm
+# Trixie for PipeWire 1.4: bookworm's pw-cat 0.3.65 has no --raw, which the
+# silence keep-alive needs
+FROM python:3.13-slim-trixie
 
 # Install system dependencies for Bluetooth, audio, and D-Bus
 RUN apt-get update && apt-get install -y --no-install-recommends \
