@@ -49,6 +49,13 @@ UPLOAD_FORMAT = "flac"
 UPLOAD_CONTENT_TYPE = "audio/flac"
 MAX_UPLOAD_SAMPLE_RATE = 24000
 
+# Peak level live-mode audio is normalized to.
+TARGET_PEAK_DB = -6.7
+
+# Silence prepended to live-mode audio so a waking Bluetooth link doesn't cut
+# off the start of the clip.
+LEAD_IN_SILENCE_MS = 500
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities
@@ -330,6 +337,8 @@ class SkellyLiveMediaPlayer(
                         media_path,
                         target_sample_rate=TARGET_SAMPLE_RATE,
                         target_channels=TARGET_CHANNELS,
+                        target_peak_db=TARGET_PEAK_DB,
+                        lead_in_ms=LEAD_IN_SILENCE_MS,
                         output_format=UPLOAD_FORMAT,
                     )
                 )
@@ -343,6 +352,8 @@ class SkellyLiveMediaPlayer(
                         AudioProcessor.process_to_bytes,
                         media_path,
                         max_sample_rate=MAX_UPLOAD_SAMPLE_RATE,
+                        target_peak_db=TARGET_PEAK_DB,
+                        lead_in_ms=LEAD_IN_SILENCE_MS,
                         output_format=UPLOAD_FORMAT,
                     )
                 )

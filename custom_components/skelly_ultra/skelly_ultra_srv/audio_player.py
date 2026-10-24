@@ -30,6 +30,14 @@ _KEEPALIVE_ARGS = [
     '{ node.dont-reconnect = true node.dont-fallback = true media.name = "Skelly keep-alive" }',
 ]
 
+# A keep-alive started right after connect can exit within a second, because
+# the sink is still being set up. Restart it this many times in a row, waiting
+# _KEEPALIVE_RETRY_DELAY seconds first. A run of _KEEPALIVE_STABLE_SECS or
+# longer resets the count.
+_KEEPALIVE_MAX_RETRIES = 5
+_KEEPALIVE_RETRY_DELAY = 2.0
+_KEEPALIVE_STABLE_SECS = 30.0
+
 
 class PlaybackSession(NamedTuple):
     """Information about an active playback session."""
@@ -74,6 +82,9 @@ class AudioPlayer:
         self._on_active_change = on_active_change
         # Target MAC (upper case) -> silence keep-alive process
         self._keepalives: dict[str, asyncio.subprocess.Process] = {}
+        # Target MAC (upper case) -> restarts since the last stable run. A key
+        # is present while the keep-alive is wanted, until stop_keepalive.
+        self._keepalive_retries: dict[str, int] = {}
         self._keepalive_enabled = keepalive
         self._active = False
         self._active_lock = asyncio.Lock()
@@ -112,15 +123,18 @@ class AudioPlayer:
         process = self._keepalives.get(key)
         if process and process.returncode is None:
             return
+        self._keepalive_retries.setdefault(key, 0)
 
         if node is None:
             try:
                 node = await resolve_bluez_output_node(target)
             except RuntimeError as exc:
                 _LOGGER.warning("Keep-alive: cannot resolve node for %s: %s", key, exc)
+                self._keepalive_retries.pop(key, None)
                 return
         if not node:
             _LOGGER.warning("Keep-alive: no PipeWire node for %s", key)
+            self._keepalive_retries.pop(key, None)
             return
 
         try:
@@ -134,6 +148,7 @@ class AudioPlayer:
             )
         except Exception:
             _LOGGER.exception("Keep-alive: failed to start pw-cat for %s", key)
+            self._keepalive_retries.pop(key, None)
             return
 
         self._keepalives[key] = process
@@ -145,7 +160,8 @@ class AudioPlayer:
     async def _monitor_keepalive(
         self, key: str, process: asyncio.subprocess.Process
     ) -> None:
-        """Forget a keep-alive once its process exits (e.g. device gone)."""
+        """Restart a keep-alive that exits on its own, or forget it."""
+        started = asyncio.get_running_loop().time()
         try:
             await process.wait()
             error_msg = ""
@@ -161,13 +177,50 @@ class AudioPlayer:
         except Exception:
             _LOGGER.exception("Error monitoring keep-alive on %s", key)
         finally:
-            if self._keepalives.get(key) is process:
+            # stop_keepalive pops the process first, so still being registered
+            # means it exited on its own
+            unexpected = self._keepalives.get(key) is process
+            if unexpected:
                 self._keepalives.pop(key, None)
+
+        if not unexpected or key not in self._keepalive_retries:
+            return
+        if asyncio.get_running_loop().time() - started >= _KEEPALIVE_STABLE_SECS:
+            self._keepalive_retries[key] = 0
+        retries = self._keepalive_retries[key] + 1
+        if retries > _KEEPALIVE_MAX_RETRIES:
+            _LOGGER.warning(
+                "Silence keep-alive on %s keeps exiting; giving up after %d restarts",
+                key,
+                _KEEPALIVE_MAX_RETRIES,
+            )
+            self._keepalive_retries.pop(key, None)
+            return
+        self._keepalive_retries[key] = retries
+
+        await asyncio.sleep(_KEEPALIVE_RETRY_DELAY)
+        # Stopped or already restarted (e.g. by a play) while waiting
+        if key not in self._keepalive_retries or key in self._keepalives:
+            return
+        _LOGGER.info(
+            "Restarting silence keep-alive on %s (attempt %d/%d)",
+            key,
+            retries,
+            _KEEPALIVE_MAX_RETRIES,
+        )
+        # Resolve the node again: it may have been recreated, or the device
+        # may be gone (then start_keepalive logs that and gives up)
+        await self.start_keepalive(key)
 
     async def stop_keepalive(self, target: str | None = None) -> None:
         """Stop the keep-alive for target, or all of them if target is None."""
-        keys = [target.upper()] if target else list(self._keepalives)
+        if target:
+            keys = [target.upper()]
+        else:
+            keys = list(self._keepalives)
+            self._keepalive_retries.clear()
         for key in keys:
+            self._keepalive_retries.pop(key, None)
             process = self._keepalives.pop(key, None)
             if not process or process.returncode is not None:
                 continue

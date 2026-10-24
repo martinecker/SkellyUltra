@@ -170,6 +170,7 @@ class AudioProcessor:
         target_peak_db: float = -9.0,
         max_sample_rate: int | None = None,
         output_format: str = "wav",
+        lead_in_ms: int = 0,
     ) -> bytes:
         """Process audio file and return the encoded audio data as bytes.
 
@@ -182,6 +183,7 @@ class AudioProcessor:
             max_sample_rate: Only resample audio whose sample rate is above
                 this (default: no limit). Ignored if target_sample_rate is set.
             output_format: Output format, e.g. "wav" or "flac" (default: "wav")
+            lead_in_ms: Silence to prepend, in milliseconds (default: 0)
 
         Returns:
             Encoded audio file data as bytes
@@ -263,6 +265,14 @@ class AudioProcessor:
                 # Verify final level
                 final_peak_db = audio.max_dBFS
                 logger.debug("Final peak level: %.1f dBFS", final_peak_db)
+
+            # Prepend silence (after normalizing, so it can't affect the peak)
+            if lead_in_ms > 0:
+                logger.debug("Prepending %d ms of silence", lead_in_ms)
+                silence = AudioSegment.silent(
+                    duration=lead_in_ms, frame_rate=audio.frame_rate
+                ).set_channels(audio.channels).set_sample_width(audio.sample_width)
+                audio = silence + audio
 
             # Export to the requested format in memory
             buffer = BytesIO()
