@@ -12,6 +12,8 @@ import uuid
 from bleak import BleakClient, BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from dbus_next import BusType, Message, MessageType
+from dbus_next.aio import MessageBus
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -421,14 +423,77 @@ class BLESessionManager:
             )
         return device
 
-    def _device_not_found_message(self, address: str) -> str:
-        """Build the error for a device that never advertised."""
-        message = f"Device not found: {address}"
-        live = [
+    def _live_session_ids(self, address: str) -> list[str]:
+        """Return ids of this server's sessions still connected to address."""
+        return [
             sid
             for sid, session in self._sessions.items()
             if session.address.upper() == address and session.is_connected
         ]
+
+    async def _disconnect_stale_bluez_link(self, address: str) -> bool:
+        """Drop a BlueZ connection to address that no session owns.
+
+        BlueZ keeps a BLE link up when the process that opened it dies (for
+        example after the server is killed and restarted). The device then
+        stops advertising, so it never reaches the cache and every connect
+        fails with "Device not found". Returns True if a link was dropped.
+        """
+        bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+        try:
+            reply = await bus.call(
+                Message(
+                    destination="org.bluez",
+                    path="/",
+                    interface="org.freedesktop.DBus.ObjectManager",
+                    member="GetManagedObjects",
+                )
+            )
+            if reply.message_type == MessageType.ERROR:
+                _LOGGER.debug("GetManagedObjects failed: %s", reply.body)
+                return False
+
+            dropped = False
+            for path, interfaces in reply.body[0].items():
+                props = interfaces.get("org.bluez.Device1")
+                if not props or "Address" not in props:
+                    continue
+                if props["Address"].value.upper() != address:
+                    continue
+                connected = props.get("Connected")
+                if not connected or not connected.value:
+                    continue
+
+                _LOGGER.warning(
+                    "Device %s is connected in BlueZ (%s) but not by any session, "
+                    "disconnecting the stale link",
+                    address,
+                    path,
+                )
+                result = await bus.call(
+                    Message(
+                        destination="org.bluez",
+                        path=path,
+                        interface="org.bluez.Device1",
+                        member="Disconnect",
+                    )
+                )
+                if result.message_type == MessageType.ERROR:
+                    _LOGGER.warning(
+                        "Failed to disconnect stale link on %s: %s",
+                        path,
+                        result.body,
+                    )
+                else:
+                    dropped = True
+            return dropped
+        finally:
+            bus.disconnect()
+
+    def _device_not_found_message(self, address: str) -> str:
+        """Build the error for a device that never advertised."""
+        message = f"Device not found: {address}"
+        live = self._live_session_ids(address)
         if live:
             # A connected device stops advertising, so it never reaches the cache
             message += (
@@ -474,6 +539,13 @@ class BLESessionManager:
                     timeout,
                     address,
                 )
+                if not self._live_session_ids(address):
+                    try:
+                        await self._disconnect_stale_bluez_link(address)
+                    except Exception:
+                        _LOGGER.debug(
+                            "Could not check BlueZ for a stale link", exc_info=True
+                        )
                 device = await self._wait_for_device(
                     find_cached_by_address,
                     lambda d: d.address.upper() == address,
