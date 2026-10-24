@@ -376,6 +376,67 @@ class BLESessionManager:
             except Exception:
                 _LOGGER.exception("Error in cleanup loop")
 
+    def _background_scanner_running(self) -> bool:
+        """Return True if the background scanner task is alive."""
+        return self._scanner_task is not None and not self._scanner_task.done()
+
+    async def _wait_for_device(
+        self,
+        find_cached: Callable[[], BLEDevice | None],
+        matches: Callable[[BLEDevice], bool],
+        timeout: float,
+    ) -> BLEDevice | None:
+        """Wait for a device to show up, without colliding with other scans.
+
+        BlueZ allows only one discovery per D-Bus client and adapter, so
+        starting a second BleakScanner while the background scanner runs
+        fails with org.bluez.Error.InProgress. While the background scanner
+        task is alive (even if paused for another connect), wait for it to
+        put the device in the cache. Only scan here if it is not running.
+        """
+        if self._background_scanner_running():
+            start_time = asyncio.get_event_loop().time()
+            while asyncio.get_event_loop().time() - start_time < timeout:
+                await asyncio.sleep(0.5)
+                device = find_cached()
+                if device:
+                    _LOGGER.info(
+                        "Background scanner found %s after %.1fs",
+                        device.address,
+                        asyncio.get_event_loop().time() - start_time,
+                    )
+                    return device
+            return None
+
+        _LOGGER.warning("Background scanner not running, scanning directly")
+        device = await BleakScanner.find_device_by_filter(
+            lambda d, _adv: matches(d), timeout=timeout
+        )
+        if device:
+            # Cache with unknown RSSI since the scan result has none
+            self._device_cache[device.address] = CachedDevice(
+                device=device,
+                rssi=-100,  # Unknown RSSI
+                last_seen=datetime.now(UTC),
+            )
+        return device
+
+    def _device_not_found_message(self, address: str) -> str:
+        """Build the error for a device that never advertised."""
+        message = f"Device not found: {address}"
+        live = [
+            sid
+            for sid, session in self._sessions.items()
+            if session.address.upper() == address and session.is_connected
+        ]
+        if live:
+            # A connected device stops advertising, so it never reaches the cache
+            message += (
+                f" (still connected in session {', '.join(live)}; "
+                "disconnect that session first)"
+            )
+        return message
+
     async def create_session(
         self, address: str | None, name_filter: str, timeout: float = 10.0
     ) -> tuple[str, str]:
@@ -397,50 +458,51 @@ class BLESessionManager:
         device: BLEDevice | None = None
 
         if address:
-            # Try to use cached device from background scanner
-            cached = self._device_cache.get(address)
-            if cached:
-                device = cached.device
+            address = address.upper()
+
+            def find_cached_by_address() -> BLEDevice | None:
+                cached = self._device_cache.get(address)
+                return cached.device if cached else None
+
+            device = find_cached_by_address()
+            if device:
                 _LOGGER.info("Using cached BLE device for address: %s", address)
             else:
-                # Not in cache - try to find it via scan
                 _LOGGER.warning(
                     "Device not in cache (background scanner may not have seen it yet), "
-                    "scanning for address: %s",
+                    "waiting up to %.1fs for address: %s",
+                    timeout,
                     address,
                 )
-                device = await BleakScanner.find_device_by_address(
-                    address, timeout=timeout
+                device = await self._wait_for_device(
+                    find_cached_by_address,
+                    lambda d: d.address.upper() == address,
+                    timeout,
                 )
-                if device:
-                    # Cache with unknown RSSI since we used find_device_by_address
-                    self._device_cache[address] = CachedDevice(
-                        device=device,
-                        rssi=-100,  # Unknown RSSI
-                        last_seen=datetime.now(UTC),
-                    )
-                else:
-                    raise RuntimeError(f"Device not found: {address}")
+                if not device:
+                    raise RuntimeError(self._device_not_found_message(address))
         else:
             # Discover device by name (fallback - shouldn't normally be used)
             _LOGGER.warning(
                 "Discovering BLE devices by name (this is a fallback path): %s",
                 name_filter,
             )
-            devices = await BleakScanner.discover(timeout=timeout)
-            for d in devices:
-                if d.name and name_filter.lower() in d.name.lower():
-                    device = d
-                    self._device_cache[d.address] = CachedDevice(
-                        device=d,
-                        rssi=-100,  # Unknown RSSI from discover()
-                        last_seen=datetime.now(UTC),
-                    )
-                    _LOGGER.info("Found matching device: %s at %s", d.name, d.address)
-                    break
 
+            def matches_name(d: BLEDevice) -> bool:
+                return bool(d.name) and name_filter.lower() in d.name.lower()
+
+            def find_cached_by_name() -> BLEDevice | None:
+                for cached in self._device_cache.values():
+                    if matches_name(cached.device):
+                        return cached.device
+                return None
+
+            device = find_cached_by_name() or await self._wait_for_device(
+                find_cached_by_name, matches_name, timeout
+            )
             if not device:
                 raise RuntimeError(f"Device not found: {name_filter}")
+            _LOGGER.info("Found matching device: %s at %s", device.name, device.address)
 
         # At this point, device is guaranteed to be set (or exception raised)
         discovered_address = device.address
