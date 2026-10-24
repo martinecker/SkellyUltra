@@ -72,6 +72,9 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         self._attr_device_info = device_info
 
         self._profile = profile
+        # Eye icon currently shown, so polls that don't change it don't
+        # bump image_last_updated (which is the entity's state)
+        self._last_eye_icon: int | None = None
 
     async def async_added_to_hass(self) -> None:
         """Register callbacks when entity is added and set initial state."""
@@ -79,6 +82,7 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
         # Update timestamp to reflect the current coordinator value (if any)
         data = getattr(self.coordinator, "data", None)
         if data and data.get("eye_icon") is not None:
+            self._last_eye_icon = data.get("eye_icon")
             self._attr_image_last_updated = datetime.now(tz=timezone.utc)
         # Ensure HA writes initial state
         self.async_write_ha_state()
@@ -86,12 +90,17 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
     def _handle_coordinator_update(self) -> None:
         """Called when the coordinator has new data.
 
-        Update the image_last_updated so the image proxy token changes and
-        clients will re-fetch the image when the icon changes.
+        Update the image_last_updated only when the eye icon changed, so the
+        image proxy token changes and clients re-fetch the image, without
+        writing a new state on every poll.
         """
-        self._attr_image_last_updated = datetime.now(tz=timezone.utc)
-        # Clear cached image so image() is called again
-        self._cached_image = None
+        data = getattr(self.coordinator, "data", None)
+        eye = data.get("eye_icon") if data else None
+        if eye is not None and eye != self._last_eye_icon:
+            self._last_eye_icon = eye
+            self._attr_image_last_updated = datetime.now(tz=timezone.utc)
+            # Clear cached image so image() is called again
+            self._cached_image = None
         super()._handle_coordinator_update()
 
     def image(self) -> bytes | None:
