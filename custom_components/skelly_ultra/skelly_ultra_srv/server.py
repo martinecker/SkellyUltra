@@ -15,6 +15,7 @@ from aiohttp import web
 from .audio_player import AudioPlayer, PlayResult
 from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager, DeviceInfo
+from .link_quality import MgmtPermissionError, async_get_link_info
 from .pipewire_utils import resolve_bluez_output_node, set_node_volume
 
 _LOGGER = logging.getLogger(__name__)
@@ -74,6 +75,10 @@ class SkellyUltraServer:
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
         # Uploaded files whose play request is still being handled
         self._pending_uploads: set[Path] = set()
+        # /link_quality is polled, so its permission warning is logged once
+        # and other errors only when they change
+        self._link_quality_denied_logged = False
+        self._link_quality_last_error: str | None = None
         self.app.on_startup.append(self._on_startup)
         self.app.on_cleanup.append(self._on_cleanup)
         self._setup_routes()
@@ -324,6 +329,7 @@ class SkellyUltraServer:
         self.app.router.add_get("/classic/status", self.handle_status)
 
         self.app.router.add_get("/health", self.handle_health)
+        self.app.router.add_get("/link_quality", self.handle_link_quality)
 
         # BLE proxy endpoints
         self.app.router.add_get("/ble/scan_devices", self.handle_ble_scan_devices)
@@ -1026,6 +1032,80 @@ class SkellyUltraServer:
 
         response_data = {"status": "ok"}
         self._log_response("health", response_data)
+        return web.json_response(response_data)
+
+    async def handle_link_quality(self, request: web.Request) -> web.Response:
+        """Handle GET /link_quality endpoint.
+
+        Returns RSSI and TX power of the active Bluetooth links (LE and/or
+        classic, on any adapter) to a device, read from the kernel.
+        Query param: address=<MAC> (required)
+
+        For classic (bredr) links, the controller reports RSSI relative to
+        its golden receive power range (0 = good) instead of absolute dBm.
+
+        Returns:
+        {
+            "address": "AA:BB:CC:DD:EE:FF",
+            "connected": true,
+            "links": [
+                {
+                    "adapter": "hci0",
+                    "address": "AA:BB:CC:DD:EE:FF",
+                    "address_type": "le_public",
+                    "transport": "le",
+                    "rssi": -62,
+                    "tx_power": 4,
+                    "max_tx_power": 4
+                }
+            ]
+        }
+        """
+        address = request.query.get("address", "").strip().upper()
+        self._log_request("link_quality", {"address": address})
+
+        if len(address) != 17 or address.count(":") != 5:
+            return web.json_response(
+                {"error": "Query parameter 'address' must be a MAC address"},
+                status=400,
+            )
+
+        try:
+            links = await async_get_link_info(address)
+        except ValueError:
+            return web.json_response(
+                {"error": "Query parameter 'address' must be a MAC address"},
+                status=400,
+            )
+        except MgmtPermissionError:
+            if not self._link_quality_denied_logged:
+                self._link_quality_denied_logged = True
+                _LOGGER.warning(
+                    "Reading link quality needs root or CAP_NET_ADMIN "
+                    "(run the server as root or in the privileged container)"
+                )
+            return web.json_response(
+                {"error": "Server lacks permission to read link quality"},
+                status=403,
+            )
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            if error != self._link_quality_last_error:
+                self._link_quality_last_error = error
+                _LOGGER.warning(
+                    "Failed to read link quality for %s: %s", address, error
+                )
+            _LOGGER.debug("Link quality error details", exc_info=True)
+            return web.json_response({"error": str(exc)}, status=500)
+
+        self._link_quality_last_error = None
+
+        response_data = {
+            "address": address,
+            "connected": bool(links),
+            "links": links,
+        }
+        self._log_response("link_quality", response_data)
         return web.json_response(response_data)
 
     async def handle_ble_scan_devices(self, request: web.Request) -> web.Response:

@@ -572,6 +572,29 @@ class SkellyClient:
             logger.exception("Unexpected error during status request")
             raise
 
+    async def get_link_quality(self, address: str) -> list[dict[str, Any]]:
+        """Get RSSI/TX power of the REST server's links to a device.
+
+        Covers both the BLE link (proxy mode) and the classic live-mode link.
+        Each link dict has adapter, transport ("le" or "bredr"), rssi,
+        tx_power and max_tx_power; it's empty if the server has no link to
+        the address.
+
+        Raises:
+            aiohttp.ClientError: On REST server communication errors,
+                including error responses (e.g. 403 when the server lacks
+                permission to read link quality).
+        """
+        session = self._get_rest_session()
+        async with session.get(
+            f"{self.server_url}/link_quality",
+            params={"address": address},
+            timeout=aiohttp.ClientTimeout(total=5.0),
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            return data.get("links", [])
+
     @property
     def client(self) -> BleakClient | None:
         return self._client

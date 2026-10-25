@@ -4,8 +4,19 @@ from __future__ import annotations
 
 from datetime import timedelta
 
-from homeassistant.components.sensor import SensorEntity
+import logging
+
+from homeassistant.components.sensor import (
+    SensorDeviceClass,
+    SensorEntity,
+    SensorStateClass,
+)
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import (
+    SIGNAL_STRENGTH_DECIBELS,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    EntityCategory,
+)
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.event import async_call_later
@@ -14,6 +25,8 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
 from .helpers import get_device_info
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
@@ -45,6 +58,17 @@ async def async_setup_entry(
             transfer_sensor,
         ]
     )
+
+    # The REST server reads link quality from its own adapters, so the BLE
+    # link is only covered in proxy mode. Live mode always goes through it.
+    rssi_sensors: list[SensorEntity] = [
+        SkellyLiveModeSignalSensor(coordinator, entry.entry_id, device_info)
+    ]
+    if coordinator.adapter.client.use_ble_proxy:
+        rssi_sensors.append(
+            SkellyBLESignalSensor(coordinator, entry.entry_id, device_info)
+        )
+    async_add_entities(rssi_sensors)
 
 
 class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
@@ -231,6 +255,114 @@ class SkellyLiveBTMacSensor(SensorEntity):
         client = getattr(self.adapter, "client", None)
         mac = getattr(client, "live_mode_client_address", None) if client else None
         return mac if mac else "<not connected>"
+
+
+class _SkellyLinkSignalSensor(SensorEntity):
+    """Base for sensors polling a link's RSSI from the REST server."""
+
+    _attr_has_entity_name = True
+    _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _transport: str  # "le" or "bredr", as reported by the server
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the link signal sensor."""
+        self.adapter = coordinator.adapter
+        self._attr_device_info = device_info
+        self._error_logged = False
+
+    def _link_address(self) -> str | None:
+        """Return the MAC address of the link, or None while not connected."""
+        raise NotImplementedError
+
+    async def async_update(self) -> None:
+        """Poll the REST server for the link's RSSI."""
+        address = self._link_address()
+        if not address:
+            self._attr_native_value = None
+            self._attr_extra_state_attributes = {}
+            self._attr_available = True
+            return
+
+        try:
+            links = await self.adapter.client.get_link_quality(address)
+        except Exception as err:  # noqa: BLE001 - any server failure
+            if not self._error_logged:
+                self._error_logged = True
+                _LOGGER.warning(
+                    "Could not read %s from REST server: %s", self.name, err
+                )
+            self._attr_available = False
+            return
+
+        self._error_logged = False
+        self._attr_available = True
+        link = next(
+            (ln for ln in links if ln.get("transport") == self._transport), None
+        )
+        if link is None:
+            self._attr_native_value = None
+            self._attr_extra_state_attributes = {}
+            return
+        self._attr_native_value = link.get("rssi")
+        self._attr_extra_state_attributes = {
+            "adapter": link.get("adapter"),
+            "tx_power": link.get("tx_power"),
+            "max_tx_power": link.get("max_tx_power"),
+        }
+
+
+class SkellyBLESignalSensor(_SkellyLinkSignalSensor):
+    """RSSI of the REST server's BLE link to the Skelly (proxy mode)."""
+
+    _transport = "le"
+    _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the BLE signal sensor."""
+        super().__init__(coordinator, entry_id, device_info)
+        self._attr_name = "BLE Signal Strength"
+        self._attr_unique_id = f"{entry_id}_ble_rssi"
+
+    def _link_address(self) -> str | None:
+        client = self.adapter.client
+        return client.address if client.is_connected else None
+
+
+class SkellyLiveModeSignalSensor(_SkellyLinkSignalSensor):
+    """RSSI of the live-mode Bluetooth Classic link.
+
+    Controllers report classic RSSI relative to their golden receive power
+    range (0 = inside the range, negative = too weak) rather than in dBm.
+    """
+
+    _transport = "bredr"
+    _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the live mode signal sensor."""
+        super().__init__(coordinator, entry_id, device_info)
+        self._attr_name = "Live Mode Signal Strength"
+        self._attr_unique_id = f"{entry_id}_live_mode_rssi"
+
+    def _link_address(self) -> str | None:
+        return self.adapter.client.live_mode_client_address
 
 
 class SkellyPinCodeSensor(CoordinatorEntity, SensorEntity):

@@ -328,6 +328,7 @@ bluetoothctl
 ### 📑 Endpoint Table of Contents
 
 - [GET /health](#-get-health) - Health check
+- [GET /link_quality](#-get-link_quality) - RSSI of the LE/classic links to a device
 
 #### Bluetooth Classic Audio Endpoints
 
@@ -366,6 +367,39 @@ Simple health check endpoint.
     "status": "ok"
 }
 ```
+
+### 📶 GET /link_quality
+
+**Read RSSI and TX power of the server's active Bluetooth links to a device.**
+
+Covers BLE (proxy mode) and classic (live mode) links on any adapter. The values come from the kernel's Bluetooth management interface (like `btmgmt conn-info`), because BlueZ's D-Bus API only reports RSSI for discovery results and a connected Skelly stops advertising. Needs root or `CAP_NET_ADMIN` (the privileged Docker container has it); otherwise the endpoint returns 403.
+
+**Query parameters:**
+- `address` (required): MAC address of the device (the BLE address, or the live-mode classic address)
+
+**Response:**
+
+```json
+{
+    "address": "AA:BB:CC:DD:EE:FF",
+    "connected": true,
+    "links": [
+        {
+            "adapter": "hci0",
+            "address": "AA:BB:CC:DD:EE:FF",
+            "address_type": "le_public",
+            "transport": "le",
+            "rssi": -62,
+            "tx_power": 4,
+            "max_tx_power": 4
+        }
+    ]
+}
+```
+
+`links` is empty if the server has no link to the address. `rssi`/`tx_power` are `null` when the controller can't report them. For LE links `rssi` is in dBm. For classic (`bredr`) links the controller reports RSSI in dB relative to its golden receive power range: 0 means the signal is inside the range, negative means it is too weak.
+
+You can also run it from the command line: `sudo python3 -m skelly_ultra_srv.link_quality AA:BB:CC:DD:EE:FF`
 
 ### 🔐 POST /classic/pair_and_trust_by_name
 
