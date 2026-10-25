@@ -311,8 +311,6 @@ async def _run_pw_dump() -> tuple[list[dict[str, object]], str]:
     if not payload:
         return [], payload
 
-    payload = _remove_lonely_bracket_lines(payload)
-
     # pw-dump's output isn't always one clean JSON document - depending on
     # pipewire version, timing, and what else is writing to stdout, it can
     # come back malformed in several different ways. Each fallback below
@@ -320,7 +318,13 @@ async def _run_pw_dump() -> tuple[list[dict[str, object]], str]:
     # attempts before it fail.
     #
     # 1. The happy path: the whole payload is one valid JSON array/object.
+    # Try it before stripping bracket-only lines, since pw-dump also puts
+    # the closing "]" of nested arrays on their own lines and stripping
+    # those breaks otherwise valid output (losing e.g. object ids).
     data = _try_parse(payload)
+    if data is None:
+        payload = _remove_lonely_bracket_lines(payload)
+        data = _try_parse(payload)
     if data is None:
         # 2. Some versions/setups prepend log lines before the JSON blob;
         # retry starting from the first "[" or "{" found anywhere in the
@@ -554,40 +558,72 @@ def _log_parse_failure(payload: str) -> None:
     raise RuntimeError("Failed to parse pw-dump output")
 
 
+async def _find_node_id(node_name: str) -> int | None:
+    """Return the PipeWire object id of the node named node_name."""
+
+    dump, _ = await _run_pw_dump()
+    for entry in dump:
+        entry_type = entry.get("type")
+        if not isinstance(entry_type, str) or "Node" not in entry_type:
+            continue
+        info = entry.get("info")
+        if not isinstance(info, dict):
+            continue
+        props = info.get("props") or info.get("properties")
+        if not isinstance(props, dict) or props.get("node.name") != node_name:
+            continue
+        node_id = entry.get("id")
+        if isinstance(node_id, int):
+            return node_id
+    return None
+
+
 async def set_node_volume(node_name: str, volume: float = 1.0) -> bool:
-    """Set a sink's volume with pactl (pipewire-pulse), by node name.
+    """Set a sink's volume with wpctl, by node name.
 
     WirePlumber gives a sink it hasn't seen before a default volume of 0.4
     and remembers per-device volumes, so a new Skelly would play quietly.
-    pactl takes the sink name directly; wpctl only takes ids, which change
-    on every reconnect.
+    wpctl only takes object ids, which change on every reconnect, so the id
+    is looked up with pw-dump first. wpctl talks over the same pipewire-0
+    socket as pw-play; pactl would also need the pipewire-pulse socket,
+    which the container doesn't mount.
 
     Returns:
-        True if pactl accepted the change.
+        True if wpctl accepted the change.
     """
-    percent = f"{round(volume * 100)}%"
+    try:
+        node_id = await _find_node_id(node_name)
+    except RuntimeError as exc:
+        _LOGGER.warning("Could not look up PipeWire id of %s: %s", node_name, exc)
+        return False
+    if node_id is None:
+        _LOGGER.warning("Could not set volume: no PipeWire node named %s", node_name)
+        return False
+
+    level = f"{volume:.2f}"
     try:
         proc = await asyncio.create_subprocess_exec(
-            "pactl",
-            "set-sink-volume",
-            node_name,
-            percent,
+            "wpctl",
+            "set-volume",
+            str(node_id),
+            level,
             stdout=asyncio.subprocess.DEVNULL,
             stderr=asyncio.subprocess.PIPE,
         )
         _, stderr = await asyncio.wait_for(proc.communicate(), timeout=5.0)
     except (FileNotFoundError, OSError, TimeoutError) as exc:
-        _LOGGER.warning("pactl set-sink-volume failed for %s: %s", node_name, exc)
+        _LOGGER.warning("wpctl set-volume failed for %s: %s", node_name, exc)
         return False
 
     if proc.returncode != 0:
         _LOGGER.warning(
-            "pactl set-sink-volume %s exited with code %s: %s",
+            "wpctl set-volume %s (%s) exited with code %s: %s",
+            node_id,
             node_name,
             proc.returncode,
             (stderr or b"").decode(errors="replace").strip(),
         )
         return False
 
-    _LOGGER.info("Set volume of %s to %s", node_name, percent)
+    _LOGGER.info("Set volume of %s (id %s) to %s", node_name, node_id, level)
     return True
