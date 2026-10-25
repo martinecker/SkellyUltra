@@ -617,10 +617,12 @@ class BLESessionManager:
             if session_ref[0]:
                 session_ref[0].mark_disconnected()
 
-        # Pause background scanner to avoid connection conflicts
-        await self._pause_scanner()
-
+        # Pause background scanner to avoid connection conflicts. Resumed in
+        # the finally below, also when the request is cancelled (HA gave up
+        # waiting); a leaked pause would stop the scanner for good.
+        client: BleakClient | None = None
         try:
+            await self._pause_scanner()
             # Create BleakClient with disconnected_callback parameter
             _LOGGER.info("Connecting to BLE device: %s", discovered_address)
             client = BleakClient(
@@ -631,46 +633,55 @@ class BLESessionManager:
             except Exception as exc:
                 _LOGGER.error("Failed to connect to BLE device: %s", exc)
                 raise RuntimeError(f"Failed to connect to BLE device: {exc}") from exc
-        except Exception:
-            # Resume scanner on any error
-            await self._resume_scanner()
-            raise
 
-        # Create session and store reference for the disconnection callback
-        session = BLESession(
-            session_id=session_id, client=client, address=discovered_address
-        )
-        session_ref[0] = session
+            # Create session and store reference for the disconnection callback
+            session = BLESession(
+                session_id=session_id, client=client, address=discovered_address
+            )
+            session_ref[0] = session
 
-        # Register raw notification handler
-        def notification_callback(sender, data: bytes) -> None:
-            """Capture raw notification bytes."""
+            # Register raw notification handler
+            def notification_callback(sender, data: bytes) -> None:
+                """Capture raw notification bytes."""
+                try:
+                    # Log raw notification bytes
+                    raw_hex = " ".join(f"{b:02X}" for b in data)
+                    _LOGGER.debug(
+                        "[BLE SESSION %s] Received notification (%d bytes): %s",
+                        session_id[:8],
+                        len(data),
+                        raw_hex,
+                    )
+                    session.buffer_notification(sender, data)
+                    session.last_activity = datetime.now(UTC)
+                except Exception:
+                    _LOGGER.exception("Error in notification callback")
+
+            # Start notifications on the characteristic
             try:
-                # Log raw notification bytes
-                raw_hex = " ".join(f"{b:02X}" for b in data)
-                _LOGGER.debug(
-                    "[BLE SESSION %s] Received notification (%d bytes): %s",
-                    session_id[:8],
-                    len(data),
-                    raw_hex,
+                await client.start_notify(NOTIFY_UUID, notification_callback)
+                _LOGGER.info("Started notifications for BLE session %s", session_id)
+            except Exception as exc:
+                _LOGGER.error("Failed to start notifications: %s", exc)
+                raise RuntimeError(f"Failed to start notifications: {exc}") from exc
+        except BaseException as exc:
+            if isinstance(exc, asyncio.CancelledError):
+                _LOGGER.warning(
+                    "BLE connect to %s cancelled (client gave up waiting)",
+                    discovered_address,
                 )
-                session.buffer_notification(sender, data)
-                session.last_activity = datetime.now(UTC)
-            except Exception:
-                _LOGGER.exception("Error in notification callback")
-
-        # Start notifications on the characteristic
-        try:
-            await client.start_notify(NOTIFY_UUID, notification_callback)
-            _LOGGER.info("Started notifications for BLE session %s", session_id)
-        except Exception as exc:
-            _LOGGER.error("Failed to start notifications: %s", exc)
+            # Drop a link that is (half) up, or BlueZ keeps it and the device
+            # stops advertising. Shielded so a cancellation can't cut it short.
+            if client is not None:
+                await asyncio.shield(self._abort_connect(client))
+            raise
+        finally:
+            # Best effort: a failed scanner restart must not lose a session
+            # that is up, or replace the connect's own error
             try:
-                await client.disconnect()
+                await self._resume_scanner()
             except Exception:
-                pass
-            await self._resume_scanner()
-            raise RuntimeError(f"Failed to start notifications: {exc}") from exc
+                _LOGGER.warning("Could not resume BLE scanner", exc_info=True)
 
         self._sessions[session_id] = session
 
@@ -696,10 +707,16 @@ class BLESessionManager:
                 "Created BLE session %s for device %s", session_id, discovered_address
             )
 
-        # Resume scanner now that connection is established
-        await self._resume_scanner()
-
         return session_id, discovered_address, mtu
+
+    @staticmethod
+    async def _abort_connect(client: BleakClient) -> None:
+        """Disconnect a client whose session setup failed or was cancelled."""
+        try:
+            async with asyncio.timeout(10):
+                await client.disconnect()
+        except BaseException:  # noqa: BLE001 - best effort
+            _LOGGER.debug("Disconnect after failed connect failed", exc_info=True)
 
     async def send_command(self, session_id: str, cmd_bytes: bytes) -> None:
         """Send raw command bytes to BLE device.

@@ -1189,9 +1189,17 @@ class SkellyUltraServer:
             name_filter = data.get("name_filter", "Animated Skelly")
             timeout = data.get("timeout", 10.0)
 
-            session_id, device_address, mtu = await self.ble_manager.create_session(
-                address=address, name_filter=name_filter, timeout=timeout
-            )
+            # Classic discovery on the same adapter can hold up the LE
+            # connect, so pause it like during playback
+            try:
+                await self.bt_manager.pause_background_scanner()
+                session_id, device_address, mtu = (
+                    await self.ble_manager.create_session(
+                        address=address, name_filter=name_filter, timeout=timeout
+                    )
+                )
+            finally:
+                await self.bt_manager.resume_background_scanner()
 
             response_data = {
                 "success": True,
@@ -1442,14 +1450,25 @@ class SkellyUltraServer:
         """
         if self._shutting_down:
             return
+        # Each manager separately: both count their pauses, so a failure in
+        # one must not skip the other's pause (and unbalance its resume)
         if active:
             _LOGGER.info("Audio playback started, pausing background scanners")
-            await self.ble_manager.pause_scanning()
-            await self.bt_manager.pause_background_scanner()
+            steps = (
+                self.ble_manager.pause_scanning,
+                self.bt_manager.pause_background_scanner,
+            )
         else:
             _LOGGER.info("Audio playback finished, resuming background scanners")
-            await self.ble_manager.resume_scanning()
-            await self.bt_manager.resume_background_scanner()
+            steps = (
+                self.ble_manager.resume_scanning,
+                self.bt_manager.resume_background_scanner,
+            )
+        for step in steps:
+            try:
+                await step()
+            except Exception:
+                _LOGGER.exception("Failed to pause/resume a background scanner")
 
     async def _on_cleanup(self, app: web.Application) -> None:
         """Called when application shuts down."""

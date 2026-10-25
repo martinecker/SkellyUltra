@@ -170,6 +170,7 @@ class BluetoothManager:
         self._scanner_task: asyncio.Task | None = None
         self._scanner_running = False
         self._scanner_paused = False
+        self._scanner_holds = 0  # Pending pauses (playback, BLE connects)
         self._allow_scanner = allow_scanner
         self._bus: MessageBus | None = None
         self._object_manager = None
@@ -422,20 +423,36 @@ class BluetoothManager:
         if self._scanner_task:
             self._scanner_running = False
             self._scanner_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            try:
                 await self._scanner_task
-            self._scanner_task = None
+            except asyncio.CancelledError:
+                # The scanner task's own cancellation is expected; one aimed
+                # at the caller (e.g. an abandoned request) is passed on
+                current = asyncio.current_task()
+                if current is not None and current.cancelling():
+                    raise
+            finally:
+                self._scanner_task = None
             _LOGGER.info("Stopped background Bluetooth scanner")
 
     async def pause_background_scanner(self) -> None:
-        """Stop the background scanner until resume_background_scanner()."""
+        """Stop the background scanner until resume_background_scanner().
+
+        Pauses are counted (playback and BLE connects can overlap), so each
+        call needs one resume_background_scanner().
+        """
+        self._scanner_holds += 1
         if self._scanner_task and not self._scanner_task.done():
             _LOGGER.info("Pausing background Bluetooth scanner")
-            await self.stop_background_scanner()
+            # Set first, so resume restarts it even if stopping raises
             self._scanner_paused = True
+            await self.stop_background_scanner()
 
     async def resume_background_scanner(self) -> None:
         """Restart the background scanner if pause_background_scanner() stopped it."""
+        self._scanner_holds = max(0, self._scanner_holds - 1)
+        if self._scanner_holds:
+            return
         if self._scanner_paused:
             self._scanner_paused = False
             _LOGGER.info("Resuming background Bluetooth scanner")
@@ -1126,13 +1143,14 @@ if __name__ == "__main__":
         )
         _LOGGER.debug("Sudo script content:\n%s", script)
 
-        # Pause background scanner during sudo pairing to avoid discovery conflicts
-        scanner_was_running = self._scanner_task is not None
-        if scanner_was_running:
-            _LOGGER.debug("Pausing background scanner during sudo pairing")
-            await self.stop_background_scanner()
-
+        # Pause background scanner during sudo pairing to avoid discovery
+        # conflicts. Counted like other pauses, so pairing during playback
+        # or a BLE connect doesn't restart it early. Inside the try, so a
+        # cancellation while stopping still resumes it.
         try:
+            _LOGGER.debug("Pausing background scanner during sudo pairing")
+            await self.pause_background_scanner()
+
             # Run the script with sudo -n (non-interactive, fail if password required)
             # Note: stderr is NOT captured so subprocess output flows immediately to console
             proc = await asyncio.create_subprocess_exec(
@@ -1208,10 +1226,9 @@ if __name__ == "__main__":
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg) from exc
         finally:
-            # Resume background scanner if it was running before
-            if scanner_was_running:
-                _LOGGER.debug("Resuming background scanner after sudo pairing")
-                await self.start_background_scanner()
+            # Restarts the background scanner if it was running before
+            _LOGGER.debug("Resuming background scanner after sudo pairing")
+            await self.resume_background_scanner()
 
     async def _async_pair_without_root(
         self,

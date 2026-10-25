@@ -1318,7 +1318,10 @@ class SkellyClient:
             async with session.post(
                 f"{self.server_url}/ble/connect",
                 json={"address": self.address},
-                timeout=aiohttp.ClientTimeout(total=timeout + 5.0),
+                # The server may wait up to `timeout` for the device to show
+                # up in its scan and then up to `timeout` again to connect.
+                # Giving up earlier cancels a connect that might still work.
+                timeout=aiohttp.ClientTimeout(total=2 * timeout + 10.0),
             ) as resp:
                 data = await resp.json()
 
