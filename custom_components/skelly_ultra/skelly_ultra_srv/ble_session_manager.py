@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
+import re
 import uuid
 
 from bleak import BleakClient, BleakScanner
+from bleak.backends.bluezdbus.version import BlueZFeatures
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from dbus_next import BusType, Message, MessageType
@@ -36,6 +39,41 @@ def _put_nowait_dropping_oldest(queue: asyncio.Queue, item) -> None:
 # Skelly Ultra BLE UUIDs
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
+
+
+async def _prime_bluez_version_check(timeout: float = 5.0) -> None:
+    """Do bleak's one-time BlueZ version check ourselves, with a timeout.
+
+    bleak runs `bluetoothctl --version` on the first connect after start and
+    makes every other connect wait for it without a timeout. After a Pi
+    power-up that check cant hang and no connect ever finishes, so we run it here
+    at startup and mark it done whatever happens.
+    """
+    if BlueZFeatures.checked_bluez_version:
+        return
+    proc = None
+    try:
+        async with asyncio.timeout(timeout):
+            proc = await asyncio.create_subprocess_exec(
+                "bluetoothctl",
+                "--version",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            out, _ = await proc.communicate()
+        match = re.search(rb"(\d+)\.(\d+)", out)
+        if match:
+            major, minor = map(int, match.groups())
+            BlueZFeatures.supported_version = major == 5 and minor >= 55
+            _LOGGER.info("BlueZ version %d.%d", major, minor)
+        else:
+            _LOGGER.warning("Could not parse BlueZ version, assuming 5.55+")
+    except Exception as exc:  # noqa: BLE001 - assume a supported BlueZ
+        _LOGGER.warning("BlueZ version check failed (%s), assuming 5.55+", exc)
+        if proc is not None and proc.returncode is None:
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+    BlueZFeatures.checked_bluez_version = True
 
 
 @dataclass
@@ -132,6 +170,7 @@ class BLESessionManager:
         if self._cleanup_task is None:
             self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if self._scanner_task is None:
+            await _prime_bluez_version_check()
             self._scanner_task = asyncio.create_task(self._background_scanner())
             _LOGGER.info("Started background BLE scanner")
 
@@ -629,10 +668,14 @@ class BLESessionManager:
                 device, timeout=timeout, disconnected_callback=disconnection_callback
             )
             try:
-                await client.connect()
+                # bleak's timeout only covers part of connect(); a hang
+                # before it (seen after a power-up) would block forever
+                async with asyncio.timeout(timeout + 10):
+                    await client.connect()
             except Exception as exc:
-                _LOGGER.error("Failed to connect to BLE device: %s", exc)
-                raise RuntimeError(f"Failed to connect to BLE device: {exc}") from exc
+                reason = str(exc) or "timed out"
+                _LOGGER.error("Failed to connect to BLE device: %s", reason)
+                raise RuntimeError(f"Failed to connect to BLE device: {reason}") from exc
 
             # Create session and store reference for the disconnection callback
             session = BLESession(
