@@ -184,6 +184,13 @@ class BluetoothManager:
         self._bus: MessageBus | None = None
         self._object_manager = None
         self._adapter_paths: list[str] = []
+        self._unpowered_adapters: set[str] = set()
+        # Adapter path -> event loop time of the last attempt to power it on
+        self._power_on_attempts: dict[str, float] = {}
+        # Adapter path -> its power-on attempt, shared by concurrent callers
+        self._power_on_tasks: dict[str, asyncio.Task[bool]] = {}
+        # Adapters whose last power-on failed
+        self._power_on_failed: set[str] = set()
         self._adapter_lock = asyncio.Lock()
         self._adapter_interfaces: dict[str, Any] = {}
         self._adapter_props: dict[str, Any] = {}
@@ -293,13 +300,49 @@ class BluetoothManager:
 
         obj_manager = await self._async_get_object_manager()
         objects = await obj_manager.call_get_managed_objects()
-        adapter_paths = sorted(
-            path
-            for path, interfaces in objects.items()
-            if "org.bluez.Adapter1" in interfaces
-        )
+        adapter_paths = []
+        unpowered = set()
+        to_power: list[str] = []
+        for path, interfaces in objects.items():
+            props = interfaces.get("org.bluez.Adapter1")
+            if props is None:
+                continue
+            powered = props.get("Powered")
+            # An adapter that won't power on (e.g. a dongle whose firmware
+            # fails to load) can't connect, so leave it out
+            if powered is not None and self._variant_value(powered):
+                adapter_paths.append(path)
+                self._power_on_failed.discard(path)
+            elif path in self._power_on_failed:
+                unpowered.add(path)
+                # Retried in the background, as a failing one can be slow; a
+                # later refresh picks it up if it powers on
+                self._schedule_power_on(path)
+            else:
+                to_power.append(path)
         if not adapter_paths:
-            raise RuntimeError("No Bluetooth adapters found")
+            # Nothing else to use: worth waiting for the failing ones too
+            to_power.extend(sorted(unpowered))
+            unpowered.clear()
+        for path in to_power:
+            # It may just be off, so try while the caller waits
+            if await asyncio.shield(self._power_on(path)):
+                adapter_paths.append(path)
+            else:
+                unpowered.add(path)
+        adapter_paths.sort()
+        for path in unpowered - self._unpowered_adapters:
+            _LOGGER.warning(
+                "Bluetooth adapter %s is not powered, not using it",
+                self._format_adapter(path),
+            )
+        self._unpowered_adapters = unpowered
+        if not adapter_paths:
+            raise RuntimeError(
+                "No powered Bluetooth adapters found"
+                if unpowered
+                else "No Bluetooth adapters found"
+            )
 
         removed = set(self._adapter_connections) - set(adapter_paths)
         for path in removed:
@@ -312,6 +355,61 @@ class BluetoothManager:
 
         self._adapter_paths = adapter_paths
         return adapter_paths
+
+    def _power_on(self, adapter_path: str) -> asyncio.Task[bool]:
+        """Return the adapter's power-on attempt, starting one if none runs."""
+        task = self._power_on_tasks.get(adapter_path)
+        if task is None or task.done():
+            self._power_on_attempts[adapter_path] = asyncio.get_running_loop().time()
+            task = asyncio.create_task(self._async_try_power_on(adapter_path))
+            self._power_on_tasks[adapter_path] = task
+        return task
+
+    def _schedule_power_on(self, adapter_path: str) -> None:
+        """Try to power on an adapter in the background, once a minute at most."""
+        last = self._power_on_attempts.get(adapter_path)
+        now = asyncio.get_running_loop().time()
+        if last is None or now - last >= 60.0:
+            self._power_on(adapter_path)
+
+    async def _async_try_power_on(self, adapter_path: str) -> bool:
+        """Set an adapter's Powered property; return whether it is on.
+
+        BlueZ answers once the adapter is on or failed to turn on.
+        """
+        try:
+            bus = await self._async_get_bus()
+            introspection = await bus.introspect("org.bluez", adapter_path)
+            proxy = bus.get_proxy_object("org.bluez", adapter_path, introspection)
+            props = self._proxy_interface(proxy, "org.freedesktop.DBus.Properties")
+            try:
+                await asyncio.wait_for(
+                    props.call_set(
+                        "org.bluez.Adapter1", "Powered", Variant("b", True)
+                    ),
+                    3.0,
+                )
+            except DBusError as exc:
+                if exc.type != "org.bluez.Error.Busy":
+                    raise
+                # Someone else (e.g. bluetoothd at startup) is powering it on
+                async with asyncio.timeout(3.0):
+                    while not self._variant_value(
+                        await props.call_get("org.bluez.Adapter1", "Powered")
+                    ):
+                        await asyncio.sleep(0.25)
+        except Exception as exc:  # noqa: BLE001 - also runs as a background task
+            if adapter_path not in self._power_on_failed:
+                _LOGGER.warning(
+                    "Could not power on %s, will retry: %s",
+                    self._format_adapter(adapter_path),
+                    str(exc) or type(exc).__name__,
+                )
+            self._power_on_failed.add(adapter_path)
+            return False
+        _LOGGER.info("Powered on %s", self._format_adapter(adapter_path))
+        self._power_on_failed.discard(adapter_path)
+        return True
 
     async def _async_get_adapter_paths(self) -> list[str]:
         """Return cached adapter paths, refreshing if necessary."""
@@ -832,7 +930,8 @@ class BluetoothManager:
         interfaces: dict[str, tuple[Any, Any]] = {}
         for adapter_path in self._known_device_adapters(normalized_mac):
             if adapter_path not in self._adapter_paths:
-                self._forget_device_adapter(normalized_mac, adapter_path)
+                if adapter_path not in self._unpowered_adapters:
+                    self._forget_device_adapter(normalized_mac, adapter_path)
                 continue
             if self._adapter_connections.get(adapter_path):
                 continue
@@ -1646,6 +1745,7 @@ if __name__ == "__main__":
         timeout: float = 30.0,
         *,
         adapter_path: str | None = None,
+        preferred_adapter: str | None = None,
     ) -> tuple[bool, str | None]:
         """Pair and trust a Bluetooth device by name using D-Bus agent.
 
@@ -1658,6 +1758,7 @@ if __name__ == "__main__":
             timeout: Maximum time to wait for pairing to complete
             adapter_path: Optional adapter path override to force pairing via
                 a specific adapter
+            preferred_adapter: See pair_and_trust_by_mac
 
         Returns:
             Tuple of (success: bool, mac_address: str | None)
@@ -1675,7 +1776,11 @@ if __name__ == "__main__":
 
             # Now pair using the MAC address
             success = await self.pair_and_trust_by_mac(
-                mac_address, pin, timeout, adapter_path=adapter_path
+                mac_address,
+                pin,
+                timeout,
+                adapter_path=adapter_path,
+                preferred_adapter=preferred_adapter,
             )
         except RuntimeError:
             raise
@@ -1692,6 +1797,42 @@ if __name__ == "__main__":
         timeout: float = 30.0,
         *,
         adapter_path: str | None = None,
+        preferred_adapter: str | None = None,
+    ) -> bool:
+        """Pair and trust a device; see _async_pair_and_trust_by_mac()."""
+        normalized_mac = self._normalize_mac(mac)
+        # (adapter, other devices whose reservation of it this pairing takes)
+        takeover: list[tuple[str, list[str]]] = []
+        paired = await self._async_pair_and_trust_by_mac(
+            mac,
+            pin,
+            timeout,
+            adapter_path=adapter_path,
+            preferred_adapter=preferred_adapter,
+            takeover=takeover,
+        )
+        if paired and takeover:
+            adapter, others = takeover[0]
+            for other_mac in others:
+                _LOGGER.info(
+                    "%s is now paired on %s (where its BLE link is); %s "
+                    "will pair on another adapter",
+                    normalized_mac,
+                    self._format_adapter(adapter),
+                    other_mac,
+                )
+                self._forget_device_adapter(other_mac, adapter)
+        return paired
+
+    async def _async_pair_and_trust_by_mac(
+        self,
+        mac: str,
+        pin: str,
+        timeout: float = 30.0,
+        *,
+        adapter_path: str | None = None,
+        preferred_adapter: str | None = None,
+        takeover: list[tuple[str, list[str]]] | None = None,
     ) -> bool:
         """Pair and trust a Bluetooth device by MAC address using D-Bus agent.
 
@@ -1712,6 +1853,9 @@ if __name__ == "__main__":
             pin: PIN code for pairing
             timeout: Maximum time to wait for pairing to complete
             adapter_path: Optional adapter path override
+            preferred_adapter: Adapter to use if its live slot is free, e.g.
+                the one the device's BLE link is on. An idle device that has
+                it reserved gives it up and pairs elsewhere next time.
 
         Returns:
             True if pairing and trust successful, False otherwise
@@ -1754,14 +1898,33 @@ if __name__ == "__main__":
             target_adapter = adapter_path
         else:
             candidate: str | None = None
+            if preferred_adapter and preferred_adapter in self._adapter_paths:
+                if self._adapter_is_available(preferred_adapter, normalized_mac):
+                    candidate = preferred_adapter
+                    reserving = [
+                        other_mac
+                        for other_mac, adapters in self._device_adapter_map.items()
+                        if other_mac != normalized_mac and preferred_adapter in adapters
+                    ]
+                    if reserving and takeover is not None:
+                        # Idle devices give it up once the pairing succeeds
+                        takeover.append((preferred_adapter, reserving))
+                else:
+                    _LOGGER.info(
+                        "%s can't use %s like its BLE link: it is in use",
+                        normalized_mac,
+                        self._format_adapter(preferred_adapter),
+                    )
             for adapter in known_adapters:
+                if candidate is not None:
+                    break
                 if adapter not in self._adapter_paths:
-                    self._forget_device_adapter(normalized_mac, adapter)
+                    if adapter not in self._unpowered_adapters:
+                        self._forget_device_adapter(normalized_mac, adapter)
                     continue
                 if self._adapter_connections.get(adapter) is not None:
                     continue
                 candidate = adapter
-                break
 
             if candidate is None:
                 candidate = self._find_available_adapter(normalized_mac)
@@ -1864,13 +2027,14 @@ if __name__ == "__main__":
             self._active_pairing_agent = None
 
     async def connect_by_name(
-        self, device_name: str, pin: str
+        self, device_name: str, pin: str, *, preferred_adapter: str | None = None
     ) -> tuple[bool, str | None]:
         """Connect and pair to a Bluetooth device by name.
 
         Args:
             device_name: Name of the Bluetooth device
             pin: PIN code for pairing
+            preferred_adapter: See connect_by_mac
 
         Returns:
             Tuple of (success: bool, mac_address: str | None)
@@ -1883,7 +2047,9 @@ if __name__ == "__main__":
             mac_address = await self._discover_device_mac_by_name(device_name)
 
             # Now connect using the MAC address
-            success = await self.connect_by_mac(mac_address, pin)
+            success = await self.connect_by_mac(
+                mac_address, pin, preferred_adapter=preferred_adapter
+            )
         except RuntimeError:
             raise
         except (DBusError, OSError) as exc:
@@ -1892,12 +2058,16 @@ if __name__ == "__main__":
         else:
             return (success, mac_address if success else None)
 
-    async def connect_by_mac(self, mac: str, pin: str) -> bool:
+    async def connect_by_mac(
+        self, mac: str, pin: str, *, preferred_adapter: str | None = None
+    ) -> bool:
         """Connect and pair to a Bluetooth device by MAC address.
 
         Args:
             mac: MAC address of the Bluetooth device
             pin: PIN code for pairing (provided for logging/reference)
+            preferred_adapter: Adapter to use if the device is paired and idle
+                on it, e.g. the one the device's BLE link is on
 
         Returns:
             True if connection successful, False otherwise
@@ -1933,6 +2103,9 @@ if __name__ == "__main__":
             _LOGGER.error(error_msg)
             raise RuntimeError(error_msg)
 
+        if preferred_adapter in ordered_candidates:
+            ordered_candidates.remove(preferred_adapter)
+            ordered_candidates.insert(0, preferred_adapter)
         adapter_path = ordered_candidates[0]
         device, device_props = candidate_interfaces[adapter_path]
         adapter_display = self._format_adapter(adapter_path)

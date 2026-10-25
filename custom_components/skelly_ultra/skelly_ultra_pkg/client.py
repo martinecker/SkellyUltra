@@ -1136,7 +1136,13 @@ class SkellyClient:
                 session = self._get_rest_session()
                 async with session.post(
                     f"{self.server_url}/classic/pair_and_trust_by_name",
-                    json={"device_name": live_name, "pin": bt_pin, "timeout": timeout},
+                    json={
+                        "device_name": live_name,
+                        "pin": bt_pin,
+                        "timeout": timeout,
+                        # Lets the server pair on the BLE link's adapter
+                        "ble_address": self.address,
+                    },
                     timeout=timeout_config,
                 ) as resp:
                     pair_data = await resp.json()
@@ -1232,7 +1238,7 @@ class SkellyClient:
             session = self._get_rest_session()
             async with session.post(
                 f"{self.server_url}/classic/connect_by_mac",
-                json={"mac": mac_address, "pin": bt_pin},
+                json={"mac": mac_address, "pin": bt_pin, "ble_address": self.address},
                 timeout=timeout_config,
             ) as resp:
                 connect_data = await resp.json()
@@ -1315,9 +1321,13 @@ class SkellyClient:
 
         try:
             session = self._get_rest_session()
+            payload = {"address": self.address}
+            if self._live_mode_client_address:
+                # Lets the server keep the BLE link on the live link's adapter
+                payload["live_address"] = self._live_mode_client_address
             async with session.post(
                 f"{self.server_url}/ble/connect",
-                json={"address": self.address},
+                json=payload,
                 # The server may wait up to `timeout` for the device to show
                 # up in its scan and then up to `timeout` again to connect.
                 # Giving up earlier cancels a connect that might still work.

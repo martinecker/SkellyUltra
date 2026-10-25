@@ -7,11 +7,13 @@ import json
 import logging
 import os
 from pathlib import Path
+import re
 import shutil
 import tempfile
 
 from aiohttp import web
 
+from .adapter_selection import LiveConstraints
 from .audio_player import AudioPlayer, PlayResult
 from .ble_session_manager import BLESessionManager
 from .bluetooth_manager import BluetoothManager, DeviceInfo
@@ -24,6 +26,8 @@ _LOGGER = logging.getLogger(__name__)
 # disk and checked against this limit by the handler, so it is not limited by
 # aiohttp's 1 MB client_max_size, which still applies to all other requests.
 MAX_UPLOAD_SIZE = 50 * 1024 * 1024
+
+_MAC_RE = re.compile(r"[0-9A-F]{2}(:[0-9A-F]{2}){5}")
 
 
 @web.middleware
@@ -71,6 +75,10 @@ class SkellyUltraServer:
         self._shutting_down = False
         self._volume_tasks: set[asyncio.Task] = set()
         self.ble_manager = BLESessionManager()
+        # A Skelly's BLE address -> its live mode (classic) address, learned
+        # from requests that name both. Used to keep both links on one adapter.
+        self._live_addresses: dict[str, str] = {}
+        self.ble_manager.set_live_constraints_provider(self._live_constraints)
         self.app = web.Application(middlewares=[cors_middleware])
         self.app["upload_dir"] = Path(tempfile.mkdtemp(prefix="skelly_audio_"))
         # Uploaded files whose play request is still being handled
@@ -82,6 +90,103 @@ class SkellyUltraServer:
         self.app.on_startup.append(self._on_startup)
         self.app.on_cleanup.append(self._on_cleanup)
         self._setup_routes()
+
+    @staticmethod
+    def _adapter_name(adapter_path: str | None) -> str | None:
+        """Return "hci0" for "/org/bluez/hci0"."""
+        return adapter_path.rsplit("/", 1)[-1] if adapter_path else None
+
+    def _remember_live_address(
+        self, ble_address: str | None, live_address: str | None
+    ) -> None:
+        """Remember that a BLE address and a live address are one Skelly."""
+        if not isinstance(ble_address, str) or not isinstance(live_address, str):
+            return
+        ble_address = ble_address.upper()
+        live_address = live_address.upper()
+        if not (_MAC_RE.fullmatch(ble_address) and _MAC_RE.fullmatch(live_address)):
+            return
+        if self._live_addresses.get(ble_address) == live_address:
+            return
+        # A live address belongs to one Skelly only
+        for other, live in list(self._live_addresses.items()):
+            if live == live_address:
+                del self._live_addresses[other]
+        self._live_addresses[ble_address] = live_address
+        _LOGGER.info(
+            "BLE device %s and live mode device %s are one Skelly",
+            ble_address,
+            live_address,
+        )
+
+    def _connected_live_adapter(self, live_address: str) -> str | None:
+        """Return the adapter of live_address's classic link if it is up."""
+        for mac, info in self.bt_manager.get_connected_devices().items():
+            if mac.upper() == live_address:
+                return self._adapter_name(info.adapter_path)
+        return None
+
+    def _live_constraints(self, ble_address: str) -> LiveConstraints:
+        """Tell a BLE connect where this Skelly's live link is or may go.
+
+        See adapter_selection: a Skelly's links share one adapter, and
+        Skellys using live mode each need an adapter of their own.
+        """
+        ble_address = ble_address.upper()
+        live = self._live_addresses.get(ble_address)
+        constraints = LiveConstraints(needs_slot=live is not None)
+        if live:
+            constraints.pinned = self._connected_live_adapter(live)
+            constraints.previous = self._adapter_name(
+                self.bt_manager.get_device_adapter_path(live)
+            )
+
+        for other_ble, other_live in self._live_addresses.items():
+            if other_ble == ble_address:
+                continue
+            # A connected Skelly keeps its adapter: its live link's, or its
+            # BLE link's (where its live link will go)
+            taken = self._connected_live_adapter(
+                other_live
+            ) or self.ble_manager.connected_adapter(other_ble)
+            if taken:
+                constraints.blocked.add(taken)
+                continue
+            rssi = self.ble_manager.adapter_rssi(other_ble)
+            if rssi:
+                constraints.rivals = [*constraints.rivals, rssi]
+
+        # Live links of devices not tied to a BLE address hold their adapter too
+        known_live = set(self._live_addresses.values())
+        for mac, info in self.bt_manager.get_connected_devices().items():
+            name = self._adapter_name(info.adapter_path)
+            if mac.upper() not in known_live and name:
+                constraints.blocked.add(name)
+        return constraints
+
+    def _preferred_live_adapter(self, ble_address: str | None) -> str | None:
+        """Return the adapter path a live link should use: its BLE link's."""
+        if not isinstance(ble_address, str) or not ble_address:
+            return None
+        ble_address = ble_address.upper()
+        adapter = self.ble_manager.connected_adapter(ble_address)
+        if not adapter:
+            return None
+        # BLE links can share an adapter, live links can't: leave it to
+        # another live mode Skelly whose BLE link is on it too
+        for other_ble in self._live_addresses:
+            if (
+                other_ble != ble_address
+                and self.ble_manager.connected_adapter(other_ble) == adapter
+            ):
+                _LOGGER.info(
+                    "Not pairing %s's live link on %s: %s's BLE link is there",
+                    ble_address,
+                    adapter,
+                    other_ble,
+                )
+                return None
+        return f"/org/bluez/{adapter}"
 
     def _log_request(self, endpoint: str, data: dict | None) -> None:
         """Log incoming request data in debug mode.
@@ -355,20 +460,29 @@ class SkellyUltraServer:
             self._log_request(endpoint, data)
 
             pin = data.get("pin", "1234")
+            # The Skelly's BLE address: its live link goes on the same adapter
+            ble_address = data.get("ble_address")
+            preferred_adapter = self._preferred_live_adapter(ble_address)
 
             if by_name:
                 device_name = data.get("device_name")
                 if not device_name:
                     return self._json_error(endpoint, "device_name is required", 400)
                 _LOGGER.info("Received %s request for: %s", endpoint, device_name)
-                success, mac = await self.bt_manager.connect_by_name(device_name, pin)
+                success, mac = await self.bt_manager.connect_by_name(
+                    device_name, pin, preferred_adapter=preferred_adapter
+                )
             else:
                 mac = data.get("mac")
                 if not mac:
                     return self._json_error(endpoint, "mac is required", 400)
                 _LOGGER.info("Received %s request for: %s", endpoint, mac)
-                success = await self.bt_manager.connect_by_mac(mac, pin)
+                success = await self.bt_manager.connect_by_mac(
+                    mac, pin, preferred_adapter=preferred_adapter
+                )
                 device_name = None
+            if success:
+                self._remember_live_address(ble_address, mac)
 
             device_info = self.bt_manager.get_device_by_mac(mac) if mac else None
             if success and mac:
@@ -460,6 +574,8 @@ class SkellyUltraServer:
             pin = data.get("pin", "1234")
             timeout = data.get("timeout", 30.0)
             adapter_path = data.get("adapter_path")
+            # The Skelly's BLE address: its live link goes on the same adapter
+            ble_address = data.get("ble_address")
 
             if by_name:
                 device_name = data.get("device_name")
@@ -476,20 +592,31 @@ class SkellyUltraServer:
             # Pairing discovers on a D-Bus connection of its own (or in a sudo
             # subprocess), so keep the BLE scanner's discovery calls out of
             # its way (see bluez_discovery)
+            preferred_adapter = self._preferred_live_adapter(ble_address)
             try:
                 await self.ble_manager.pause_scanning()
                 if by_name:
                     _LOGGER.info("Received %s request for: %s", endpoint, device_name)
                     success, mac = await self.bt_manager.pair_and_trust_by_name(
-                        device_name, pin, timeout, adapter_path=adapter_path
+                        device_name,
+                        pin,
+                        timeout,
+                        adapter_path=adapter_path,
+                        preferred_adapter=preferred_adapter,
                     )
                 else:
                     _LOGGER.info("Received %s request for: %s", endpoint, mac)
                     success = await self.bt_manager.pair_and_trust_by_mac(
-                        mac, pin, timeout, adapter_path=adapter_path
+                        mac,
+                        pin,
+                        timeout,
+                        adapter_path=adapter_path,
+                        preferred_adapter=preferred_adapter,
                     )
             finally:
                 await self.ble_manager.resume_scanning()
+            if success:
+                self._remember_live_address(ble_address, mac)
 
             mapped_adapter = self.bt_manager.get_device_adapter_path(mac)
 
@@ -1176,14 +1303,19 @@ class SkellyUltraServer:
         {
             "address": "AA:BB:CC:DD:EE:FF",  # optional
             "name_filter": "Animated Skelly",  # optional, defaults to "Animated Skelly"
-            "timeout": 10.0  # optional, defaults to 10.0
+            "timeout": 10.0,  # optional, defaults to 10.0
+            "live_address": "AA:BB:CC:DD:EE:00"  # optional, the Skelly's live mode MAC
         }
+
+        The adapter is chosen by signal strength, on the adapter of the
+        Skelly's live link if that is up (see adapter_selection).
 
         Returns:
         {
             "success": true/false,
             "session_id": "sess-abc123",
             "address": "AA:BB:CC:DD:EE:FF",
+            "adapter": "hci0",  # adapter the link uses, if known
             "mtu": 517,  # optional, BLE MTU size in bytes if available
             "error": "error message if failed"
         }
@@ -1195,6 +1327,7 @@ class SkellyUltraServer:
             address = data.get("address")
             name_filter = data.get("name_filter", "Animated Skelly")
             timeout = data.get("timeout", 10.0)
+            self._remember_live_address(address, data.get("live_address"))
 
             # Classic discovery on the same adapter can hold up the LE
             # connect, so pause it like during playback
@@ -1208,10 +1341,12 @@ class SkellyUltraServer:
             finally:
                 await self.bt_manager.resume_background_scanner()
 
+            session_info = self.ble_manager.get_session_info(session_id) or {}
             response_data = {
                 "success": True,
                 "session_id": session_id,
                 "address": device_address,
+                "adapter": session_info.get("adapter"),
             }
             # Include MTU if available
             if mtu is not None:

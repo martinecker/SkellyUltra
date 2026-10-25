@@ -424,6 +424,7 @@ This endpoint discovers the device by name, then uses a D-Bus agent to handle PI
 - `device_name` (required): Name of the Bluetooth device to pair
 - `pin` (required): PIN code for pairing
 - `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
+- `ble_address` (optional): The Skelly's BLE address. If it has a BLE proxy session, the live link uses the same adapter (see [Adapter selection](#adapter-selection))
 
 **Response (success):**
 
@@ -492,6 +493,7 @@ This endpoint uses a D-Bus agent to handle PIN code requests automatically, elim
 - `mac` (required): MAC address of the device to pair
 - `pin` (required): PIN code for pairing
 - `timeout` (optional): Maximum time to wait for pairing, default 30 seconds
+- `ble_address` (optional): The Skelly's BLE address. If it has a BLE proxy session, the live link uses the same adapter (see [Adapter selection](#adapter-selection))
 
 **Response (success):**
 
@@ -582,9 +584,12 @@ Connect to a Bluetooth device by MAC address.
 ```json
 {
     "mac": "AA:BB:CC:DD:EE:FF",
-    "pin": "1234"
+    "pin": "1234",
+    "ble_address": "AA:BB:CC:DD:EE:00"
 }
 ```
+
+`ble_address` (optional) is the Skelly's BLE address. If it has a BLE proxy session, the live link uses the same adapter (see [Adapter selection](#adapter-selection))
 
 **Response:**
 
@@ -929,7 +934,8 @@ This endpoint discovers and connects to a Halloween prop BLE device, then create
 {
     "address": "AA:BB:CC:DD:EE:FF",  // Optional: specific MAC address
     "name_filter": "Animated Skelly",  // Optional: device name filter (default: "Animated Skelly")
-    "timeout": 10.0  // Optional: discovery timeout in seconds (default: 10.0)
+    "timeout": 10.0,  // Optional: discovery timeout in seconds (default: 10.0)
+    "live_address": "AA:BB:CC:DD:EE:00"  // Optional: the Skelly's live mode (classic) MAC
 }
 ```
 
@@ -938,6 +944,7 @@ This endpoint discovers and connects to a Halloween prop BLE device, then create
 - `address` (optional): BLE device MAC address. If provided, connects directly to this address.
 - `name_filter` (optional): Device name substring for discovery. Default is "Animated Skelly".
 - `timeout` (optional): Maximum time to wait for device discovery. Default is 10 seconds.
+- `live_address` (optional): The Skelly's live mode MAC, so its BLE link can join its live link's adapter (see [Adapter selection](#adapter-selection)).
 
 **Response (success):**
 
@@ -945,9 +952,20 @@ This endpoint discovers and connects to a Halloween prop BLE device, then create
 {
     "success": true,
     "session_id": "sess-abc12345",
-    "address": "AA:BB:CC:DD:EE:FF"
+    "address": "AA:BB:CC:DD:EE:FF",
+    "adapter": "hci1"
 }
 ```
+
+#### Adapter selection
+
+With more than one Bluetooth adapter, the server scans for BLE devices on all of them and keeps each adapter's average signal strength (RSSI) to each device. A connect by `address` then picks the adapter:
+
+- A Skelly's BLE link and live mode (classic) link go through the same adapter, since they come from the same device. The HA integration tells the server which addresses belong together (`ble_address` and `live_address`).
+- If the Skelly's live link is up, its BLE link uses that adapter.
+- Skellys that use live mode each get an adapter of their own. Between them, the server picks the split that gives the weakest Skelly the best signal. Devices without live mode just use the adapter with the best signal.
+- A Skelly only moves away from the adapter it used before if another one is at least 8 dB better, because moving the live link means pairing it again. Nothing moves while a link is connected.
+- Adapters that aren't powered (for example a dongle whose firmware fails to load) are skipped for both BLE and live mode connects.
 
 **Response (failure):**
 

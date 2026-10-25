@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import contextlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 import logging
 import re
@@ -21,6 +21,7 @@ from dbus_fast import Message as FastMessage, MessageType as FastMessageType
 from dbus_next import BusType, Message, MessageType
 from dbus_next.aio import MessageBus
 
+from .adapter_selection import AdapterChoice, LiveConstraints, choose_adapter
 from .bluez_discovery import run_discovery_call
 
 _LOGGER = logging.getLogger(__name__)
@@ -85,6 +86,51 @@ async def _prime_bluez_version_check(timeout: float = 5.0) -> None:
 SCANNER_START_TIMEOUT = 15.0
 # How often the background scanner retries a failed start
 SCANNER_RETRY_INTERVAL = 10.0
+# Weight of a new RSSI reading in an adapter's average for a device
+RSSI_AVERAGING = 0.3
+# How long a connect waits for every scanning adapter to report the device,
+# so the adapter is chosen from all of them
+ADAPTER_REPORT_GRACE = 2.0
+
+
+def _adapter_of(device: BLEDevice) -> str | None:
+    """Return the adapter (e.g. "hci0") whose BlueZ object device is."""
+    details = device.details
+    path = details.get("path") if isinstance(details, dict) else None
+    if not isinstance(path, str) or not path.startswith("/org/bluez/hci"):
+        return None
+    return path.split("/")[3]
+
+
+async def _list_adapters() -> list[str]:
+    """Return the names of the powered adapters, e.g. ["hci0", "hci1"].
+
+    An adapter that doesn't power on (e.g. a dongle whose firmware fails to
+    load) still shows up in BlueZ, but can't scan or connect.
+    """
+    bus = await MessageBus(bus_type=BusType.SYSTEM).connect()
+    try:
+        reply = await bus.call(
+            Message(
+                destination="org.bluez",
+                path="/",
+                interface="org.freedesktop.DBus.ObjectManager",
+                member="GetManagedObjects",
+            )
+        )
+    finally:
+        bus.disconnect()
+    if reply.message_type == MessageType.ERROR:
+        raise RuntimeError(f"GetManagedObjects failed: {reply.body}")
+    adapters = []
+    for path, interfaces in reply.body[0].items():
+        props = interfaces.get("org.bluez.Adapter1")
+        if props is None:
+            continue
+        powered = props.get("Powered")
+        if powered is not None and powered.value:
+            adapters.append(path.rsplit("/", 1)[-1])
+    return sorted(adapters)
 
 
 def _reset_bleak_bluez_manager() -> None:
@@ -112,7 +158,9 @@ def _reset_bleak_bluez_manager() -> None:
     _LOGGER.warning("Reset bleak's BlueZ D-Bus connection")
 
 
-async def _stop_bleak_discovery(timeout: float = 5.0) -> None:
+async def _stop_bleak_discovery(
+    adapter: str | None = None, timeout: float = 5.0
+) -> None:
     """Withdraw a discovery request bleak's BlueZ connection may still hold.
 
     BlueZ registers a client for discovery as soon as StartDiscovery arrives,
@@ -121,6 +169,7 @@ async def _stop_bleak_discovery(timeout: float = 5.0) -> None:
     and when the connection can't be reset because sessions depend on it.
     BlueZ answers InProgress while a request of that client is still pending
     (see bluez_discovery), so that is retried until the timeout. Best effort.
+    adapter: e.g. "hci1"; bleak's default adapter if not given.
     """
     instances = getattr(bluez_manager, "_global_instances", None) or {}
     manager = instances.get(asyncio.get_running_loop())
@@ -132,7 +181,11 @@ async def _stop_bleak_discovery(timeout: float = 5.0) -> None:
             while True:
                 message = FastMessage(
                     destination="org.bluez",
-                    path=manager.get_default_adapter(),
+                    path=(
+                        f"/org/bluez/{adapter}"
+                        if adapter
+                        else manager.get_default_adapter()
+                    ),
                     interface="org.bluez.Adapter1",
                     member="StopDiscovery",
                 )
@@ -161,12 +214,23 @@ class RawNotification:
 
 
 @dataclass
+class AdapterSighting:
+    """A device as seen by one adapter."""
+
+    device: BLEDevice  # BlueZ object on that adapter, to connect through it
+    rssi: float  # Moving average of the adapter's readings
+    last_seen: datetime
+
+
+@dataclass
 class CachedDevice:
     """Cached BLE device with last seen timestamp."""
 
     device: BLEDevice
     rssi: int
     last_seen: datetime
+    # Per adapter (e.g. "hci0"), to pick the adapter with the best signal
+    sightings: dict[str, AdapterSighting] = field(default_factory=dict)
 
 
 class BLESession:
@@ -190,6 +254,8 @@ class BLESession:
         self.created_at = datetime.now(UTC)
         self.last_activity = datetime.now(UTC)
         self.is_connected = True  # Track connection state
+        self.adapter: str | None = None  # Adapter the link uses, e.g. "hci0"
+        self.device: BLEDevice | None = None  # Its BlueZ object on that adapter
         # Set when the BLE link drops, to wake a pending notifications long-poll
         self.disconnected_event = asyncio.Event()
 
@@ -231,8 +297,15 @@ class BLESessionManager:
         self._sessions: dict[str, BLESession] = {}
         self._cleanup_task: asyncio.Task | None = None
         self._scanner_task: asyncio.Task | None = None
-        self._scanner: BleakScanner | None = None
-        self._scanner_started = False  # Whether self._scanner is scanning
+        # One background scanner per adapter (e.g. "hci0"), so each adapter's
+        # signal to each device is known
+        self._scanners: dict[str, BleakScanner] = {}
+        self._scanners_started: set[str] = set()  # Adapters that are scanning
+        self._scanning = False  # Whether the background scanner loop started
+        # BLE address -> adapter of its last session
+        self._last_adapter: dict[str, str] = {}
+        # Classic (live mode) side's requirements for a BLE address, if any
+        self._live_constraints: Callable[[str], LiveConstraints] | None = None
         # Serializes starts (background loop and resume can race)
         self._scanner_start_lock = asyncio.Lock()
         self._direct_scan_lock = asyncio.Lock()
@@ -290,7 +363,7 @@ class BLESessionManager:
         does not restart the scanner. Each call needs one _resume_scanner().
         """
         self._scanner_holds += 1
-        if self._scanner and not self._scanner_paused:
+        if self._scanning and not self._scanner_paused:
             _LOGGER.info("Pausing background BLE scanner")
             self._scanner_paused = True
             await self._stop_scanner()
@@ -300,7 +373,7 @@ class BLESessionManager:
         self._scanner_holds = max(0, self._scanner_holds - 1)
         if self._scanner_holds:
             return
-        if self._scanner and self._scanner_paused:
+        if self._scanning and self._scanner_paused:
             _LOGGER.info("Resuming background BLE scanner")
             self._scanner_paused = False
             # The background scanner loop starts it, so a hanging start can't
@@ -315,79 +388,194 @@ class BLESessionManager:
         """Undo one pause_scanning() call."""
         await self._resume_scanner()
 
+    def set_live_constraints_provider(
+        self, provider: Callable[[str], LiveConstraints] | None
+    ) -> None:
+        """Set what the live mode side requires of a BLE connect's adapter."""
+        self._live_constraints = provider
+
     def _on_detection(
         self, device: BLEDevice, advertisement_data: AdvertisementData
     ) -> None:
         """Handle device detection during background scan."""
-        self._device_cache[device.address] = CachedDevice(
-            device=device,
-            rssi=advertisement_data.rssi,
-            last_seen=datetime.now(UTC),
-        )
+        now = datetime.now(UTC)
+        rssi = advertisement_data.rssi
+        cached = self._device_cache.get(device.address)
+        if cached is None:
+            cached = CachedDevice(device=device, rssi=rssi, last_seen=now)
+            self._device_cache[device.address] = cached
+        else:
+            cached.device = device
+            cached.rssi = rssi
+            cached.last_seen = now
 
-    def _new_scanner(self) -> None:
-        """Replace the background scanner with a fresh, stopped one."""
-        self._scanner = BleakScanner(detection_callback=self._on_detection)
-        self._scanner_started = False
+        adapter = _adapter_of(device)
+        # bleak also reports other property changes, and a device whose RSSI
+        # BlueZ dropped (after discovery stopped) as -127: not a reading
+        props = (advertisement_data.platform_data or (None, None))[-1]
+        if adapter is None or not isinstance(props, dict) or "RSSI" not in props:
+            return
+        sighting = cached.sightings.get(adapter)
+        if (
+            sighting is None
+            or (now - sighting.last_seen).total_seconds() > self._device_cache_timeout
+        ):
+            cached.sightings[adapter] = AdapterSighting(device, float(rssi), now)
+        else:
+            sighting.device = device
+            sighting.rssi += RSSI_AVERAGING * (rssi - sighting.rssi)
+            sighting.last_seen = now
+
+    def _new_scanner(self, adapter: str | None = None) -> None:
+        """Replace an adapter's background scanner (default: all) with a fresh one."""
+        for name in [adapter] if adapter else list(self._scanners):
+            self._scanners[name] = BleakScanner(
+                detection_callback=self._on_detection, bluez={"adapter": name}
+            )
+            self._scanners_started.discard(name)
+
+    async def _refresh_scanner_adapters(self) -> None:
+        """Keep one background scanner per adapter BlueZ currently has."""
+        try:
+            adapters = await _list_adapters()
+        except Exception:  # noqa: BLE001 - keep the current scanners
+            _LOGGER.debug("Listing Bluetooth adapters failed", exc_info=True)
+            return
+        async with self._scanner_start_lock:
+            for name in list(self._scanners):
+                if name in adapters:
+                    continue
+                _LOGGER.info(
+                    "Bluetooth adapter %s is gone or powered off, dropping its "
+                    "BLE scanner",
+                    name,
+                )
+                if name in self._scanners_started:
+                    # BlueZ dropped the adapter's discovery with it, but bleak
+                    # still has the scanner's callback registered; stop()
+                    # removes it before its StopDiscovery fails
+                    with contextlib.suppress(Exception):
+                        await run_discovery_call(self._scanners[name].stop, 5.0)
+                del self._scanners[name]
+                self._scanners_started.discard(name)
+                for cached in self._device_cache.values():
+                    cached.sightings.pop(name, None)
+            for name in adapters:
+                if name not in self._scanners:
+                    _LOGGER.info("Adding background BLE scanner for %s", name)
+                    self._new_scanner(name)
+
+    def _adapter_rssi(self, address: str) -> dict[str, float]:
+        """Return the averaged RSSI per adapter that has recently seen address."""
+        cached = self._device_cache.get(address.upper())
+        if cached is None:
+            return {}
+        now = datetime.now(UTC)
+        return {
+            adapter: sighting.rssi
+            for adapter, sighting in cached.sightings.items()
+            if (now - sighting.last_seen).total_seconds() <= self._device_cache_timeout
+        }
+
+    def adapter_rssi(self, address: str) -> dict[str, float]:
+        """Public form of _adapter_rssi(), for the live mode side's planning."""
+        return self._adapter_rssi(address)
+
+    def _connected_session(self, address: str) -> BLESession | None:
+        """Return a connected session to address, if any."""
+        address = address.upper()
+        for session in self._sessions.values():
+            if session.address.upper() == address and session.is_connected:
+                return session
+        return None
+
+    def connected_adapter(self, address: str) -> str | None:
+        """Return the adapter of a connected session to address, if any."""
+        session = self._connected_session(address)
+        return session.adapter if session else None
 
     async def _start_scanner(self) -> bool:
-        """Start the background scanner, giving up if the start hangs.
+        """Start every adapter's background scanner that isn't running.
+
+        Returns whether all of them are scanning.
+        """
+        async with self._scanner_start_lock:
+            if not self._scanners or self._scanner_paused:
+                return False
+            all_started = True
+            for adapter in list(self._scanners):
+                if self._scanner_paused:
+                    return False
+                if adapter in self._scanners_started:
+                    continue
+                if not await self._start_adapter_scanner(adapter):
+                    all_started = False
+            return all_started
+
+    async def _start_adapter_scanner(self, adapter: str) -> bool:
+        """Start one adapter's background scanner, giving up if the start hangs.
 
         Returns whether it is scanning. A stuck start is cancelled (which
         releases bleak's BlueZ lock) and, when no session needs it, bleak's
         BlueZ connection is reset so the next try starts clean.
+        Called with _scanner_start_lock held.
         """
-        async with self._scanner_start_lock:
-            if self._scanner is None or self._scanner_paused:
-                return False
-            if self._scanner_started:
-                return True
-            scanner = self._scanner
+        scanner = self._scanners.get(adapter)
+        if scanner is None:
+            return False
+        try:
+            await run_discovery_call(
+                scanner.start, SCANNER_START_TIMEOUT, run_if_abandoned=False
+            )
+        except TimeoutError:
+            _LOGGER.warning(
+                "Background BLE scanner start on %s hung for %.0fs, will retry",
+                adapter,
+                SCANNER_START_TIMEOUT,
+            )
+            await self._recover_bluez_manager(adapter=adapter)
+            return False
+        except BleakDBusError as exc:
+            _LOGGER.warning(
+                "Background BLE scanner failed to start on %s: %s", adapter, exc
+            )
+            if exc.dbus_error == "org.bluez.Error.InProgress":
+                # Likely a discovery request from a start we gave up on
+                await self._recover_bluez_manager(adapter=adapter)
+            else:
+                self._new_scanner(adapter)
+            return False
+        except Exception as exc:  # noqa: BLE001 - retried by the scanner loop
+            _LOGGER.warning(
+                "Background BLE scanner failed to start on %s: %s", adapter, exc
+            )
+            self._new_scanner(adapter)
+            return False
+        if self._scanner_paused or scanner is not self._scanners.get(adapter):
+            # Paused (or replaced) while starting: undo the start
             try:
-                await run_discovery_call(
-                    scanner.start, SCANNER_START_TIMEOUT, run_if_abandoned=False
-                )
+                await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
             except TimeoutError:
-                _LOGGER.warning(
-                    "Background BLE scanner start hung for %.0fs, will retry",
-                    SCANNER_START_TIMEOUT,
-                )
-                await self._recover_bluez_manager()
-                return False
-            except BleakDBusError as exc:
-                _LOGGER.warning("Background BLE scanner failed to start: %s", exc)
-                if exc.dbus_error == "org.bluez.Error.InProgress":
-                    # Likely a discovery request from a start we gave up on
-                    await self._recover_bluez_manager()
-                else:
-                    self._new_scanner()
-                return False
-            except Exception as exc:  # noqa: BLE001 - retried by the scanner loop
-                _LOGGER.warning("Background BLE scanner failed to start: %s", exc)
-                self._new_scanner()
-                return False
-            if self._scanner_paused or scanner is not self._scanner:
-                # Paused (or replaced) while starting: undo the start
-                try:
-                    await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
-                except TimeoutError:
-                    _LOGGER.warning("Background BLE scanner stop hung")
-                    await self._recover_bluez_manager()
-                except Exception:  # noqa: BLE001 - best effort
-                    _LOGGER.debug("Undoing a scanner start failed", exc_info=True)
-                    await _stop_bleak_discovery()
-                return False
-            self._scanner_started = True
-            _LOGGER.info("Background BLE scanner started")
-            return True
+                _LOGGER.warning("Background BLE scanner stop on %s hung", adapter)
+                await self._recover_bluez_manager(adapter=adapter)
+            except Exception:  # noqa: BLE001 - best effort
+                _LOGGER.debug("Undoing a scanner start failed", exc_info=True)
+                await _stop_bleak_discovery(adapter)
+            return False
+        self._scanners_started.add(adapter)
+        _LOGGER.info("Background BLE scanner started on %s", adapter)
+        return True
 
-    async def _recover_bluez_manager(self, own_connect: bool = False) -> None:
+    async def _recover_bluez_manager(
+        self, own_connect: bool = False, adapter: str | None = None
+    ) -> None:
         """Reset bleak's BlueZ connection after a hang, if nothing needs it.
 
         Connected sessions and connects in progress get their notifications
         and disconnect events through that connection, so it's left alone
         while any exist (cancelling the stuck call has already released its
-        lock); a leftover discovery request is withdrawn instead.
+        lock); a leftover discovery request is withdrawn instead, on adapter
+        (the one whose scanner failed) or on every scanner's adapter.
         own_connect: called by a connect that is itself still counted.
         """
         others_connecting = self._connects_in_flight - (1 if own_connect else 0)
@@ -397,8 +585,12 @@ class BLESessionManager:
             _LOGGER.warning(
                 "Not resetting bleak's BlueZ connection: it is in use by sessions"
             )
-            self._new_scanner()
-            await _stop_bleak_discovery()
+            adapters = [adapter] if adapter else list(self._scanners)
+            for name in adapters:
+                if name in self._scanners:
+                    self._new_scanner(name)
+            for name in adapters or [None]:
+                await _stop_bleak_discovery(name)
             return
 
         async def reset() -> None:
@@ -408,42 +600,53 @@ class BLESessionManager:
             await asyncio.sleep(1.0)
 
         await run_discovery_call(reset)
-        # The old scanner was registered with the dropped manager
+        # All scanners were registered with the dropped manager
         self._new_scanner()
 
     async def _stop_scanner(self) -> None:
-        """Stop the background scanner if it is scanning. Best effort.
+        """Stop every adapter's background scanner that is scanning."""
+        for adapter in list(self._scanners_started):
+            await self._stop_adapter_scanner(adapter)
+
+    async def _stop_adapter_scanner(self, adapter: str) -> None:
+        """Stop one adapter's background scanner. Best effort.
 
         StopDiscovery fails with InProgress once BlueZ has lost track of an
         earlier discovery request of bleak's connection (see bluez_discovery),
         and it can hang like a start. That must not fail the connect that
-        pauses the scanner. bleak drops the scanner's stop handle before it calls
-        StopDiscovery, so the scanner is replaced and the discovery request
-        is withdrawn directly (or the BlueZ connection reset after a hang).
+        pauses the scanner. bleak drops the scanner's stop handle before it
+        calls StopDiscovery, so the scanner is replaced and the discovery
+        request is withdrawn directly (or the BlueZ connection reset after a
+        hang).
         """
-        if not (self._scanner and self._scanner_started):
+        scanner = self._scanners.get(adapter)
+        self._scanners_started.discard(adapter)
+        if scanner is None:
             return
-        self._scanner_started = False
         try:
-            await run_discovery_call(self._scanner.stop, SCANNER_START_TIMEOUT)
+            await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
         except asyncio.CancelledError:
             # The stop handle is gone either way, so don't reuse this scanner
-            self._new_scanner()
+            self._new_scanner(adapter)
             raise
         except TimeoutError:
             _LOGGER.warning(
-                "Stopping background BLE scanner hung for %.0f s",
+                "Stopping background BLE scanner on %s hung for %.0f s",
+                adapter,
                 SCANNER_START_TIMEOUT,
             )
-            await self._recover_bluez_manager()
+            await self._recover_bluez_manager(adapter=adapter)
         except Exception as err:  # noqa: BLE001 - best effort
-            _LOGGER.warning("Stopping background BLE scanner failed: %s", err)
-            self._new_scanner()
-            await _stop_bleak_discovery()
+            _LOGGER.warning(
+                "Stopping background BLE scanner on %s failed: %s", adapter, err
+            )
+            self._new_scanner(adapter)
+            await _stop_bleak_discovery(adapter)
 
     async def _background_scanner(self) -> None:
         """Continuously scan for BLE devices and update cache."""
-        self._new_scanner()
+        self._scanning = True
+        await self._refresh_scanner_adapters()
 
         try:
             started = await self._start_scanner()
@@ -462,6 +665,8 @@ class BLESessionManager:
                     # Nothing is refreshed while paused, so keep what we have
                     continue
 
+                # Picks up adapters that were plugged in or unplugged
+                await self._refresh_scanner_adapters()
                 started = await self._start_scanner()
 
                 _LOGGER.debug(
@@ -474,6 +679,10 @@ class BLESessionManager:
                     age = (now - cached.last_seen).total_seconds()
                     if age > self._device_cache_timeout:
                         expired_devices.append(address)
+                    for adapter, sighting in list(cached.sightings.items()):
+                        age = (now - sighting.last_seen).total_seconds()
+                        if age > self._device_cache_timeout:
+                            del cached.sightings[adapter]
 
                 for address in expired_devices:
                     device_name = self._device_cache[address].device.name or "Unknown"
@@ -682,7 +891,8 @@ class BLESessionManager:
         found: list[BLEDevice] = []
         seen = asyncio.Event()
 
-        def on_detection(d: BLEDevice, _adv: AdvertisementData) -> None:
+        def on_detection(d: BLEDevice, adv: AdvertisementData) -> None:
+            self._on_detection(d, adv)
             if not found and matches(d):
                 found.append(d)
                 seen.set()
@@ -721,15 +931,7 @@ class BLESessionManager:
                     await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
                 except Exception:  # noqa: BLE001 - best effort
                     _LOGGER.debug("Stopping the direct BLE scan failed", exc_info=True)
-        device = found[0] if found else None
-        if device:
-            # Cache with unknown RSSI since the scan result has none
-            self._device_cache[device.address] = CachedDevice(
-                device=device,
-                rssi=-100,  # Unknown RSSI
-                last_seen=datetime.now(UTC),
-            )
-        return device
+        return found[0] if found else None
 
     def _live_session_ids(self, address: str) -> list[str]:
         """Return ids of this server's sessions still connected to address."""
@@ -810,6 +1012,78 @@ class BLESessionManager:
             )
         return message
 
+    async def _choose_connect_device(
+        self, address: str, fallback: BLEDevice, deadline: float
+    ) -> BLEDevice:
+        """Return the device object of the adapter to connect address through.
+
+        Each adapter has its own BlueZ object for a device, and connecting
+        through an object uses that adapter. See adapter_selection for how
+        the adapter is chosen. Falls back to `fallback` (any adapter).
+        Waits no longer than deadline (event loop time).
+        """
+        loop = asyncio.get_running_loop()
+        connected = self._connected_session(address)
+        if connected is not None and connected.device is not None:
+            # Never move a connected link (e.g. a retried connect). It doesn't
+            # advertise, so its adapter's sighting may have expired.
+            _LOGGER.info(
+                "Connecting %s via %s: its BLE link is on it",
+                address,
+                connected.adapter,
+            )
+            return connected.device
+
+        # Give every scanning adapter a moment to report the device
+        grace = min(loop.time() + ADAPTER_REPORT_GRACE, deadline)
+        while loop.time() < grace and not set(self._scanners_started) <= set(
+            self._adapter_rssi(address)
+        ):
+            await asyncio.sleep(0.25)
+
+        constraints = None
+        if self._live_constraints is not None:
+            try:
+                constraints = self._live_constraints(address)
+            except Exception:
+                _LOGGER.exception("Could not get live mode constraints for %s", address)
+        rssi = self._adapter_rssi(address)
+        choice = choose_adapter(
+            rssi, previous=self._last_adapter.get(address), constraints=constraints
+        )
+        readings = (
+            ", ".join(f"{name} {value:.0f} dBm" for name, value in sorted(rssi.items()))
+            or "no readings"
+        )
+        if choice.adapter is None:
+            _LOGGER.info("No adapter choice for %s (%s)", address, choice.reason)
+            return fallback
+
+        while True:
+            cached = self._device_cache.get(address)
+            sighting = cached.sightings.get(choice.adapter) if cached else None
+            if sighting is not None or loop.time() >= deadline:
+                break
+            # A pinned adapter that hasn't seen the device yet
+            await asyncio.sleep(0.5)
+        if sighting is None:
+            _LOGGER.warning(
+                "Wanted %s for %s (%s), but it hasn't seen the device; using %s",
+                choice.adapter,
+                address,
+                choice.reason,
+                _adapter_of(fallback) or "the default adapter",
+            )
+            return fallback
+        _LOGGER.info(
+            "Connecting %s via %s: %s (%s)",
+            address,
+            choice.adapter,
+            choice.reason,
+            readings,
+        )
+        return sighting.device
+
     async def create_session(
         self, address: str | None, name_filter: str, timeout: float = 10.0
     ) -> tuple[str, str]:
@@ -829,6 +1103,9 @@ class BLESessionManager:
         """
         # Discover device or use provided address
         device: BLEDevice | None = None
+        # Finding the device and its adapter share timeout; connecting has
+        # its own (HA waits 2 * timeout + 10 s for the whole request)
+        find_deadline = asyncio.get_running_loop().time() + max(timeout, 0)
 
         if address:
             address = address.upper()
@@ -861,6 +1138,7 @@ class BLESessionManager:
                 )
                 if not device:
                     raise RuntimeError(self._device_not_found_message(address))
+            device = await self._choose_connect_device(address, device, find_deadline)
         else:
             # Discover device by name (fallback - shouldn't normally be used)
             _LOGGER.warning(
@@ -937,6 +1215,8 @@ class BLESessionManager:
             session = BLESession(
                 session_id=session_id, client=client, address=discovered_address
             )
+            session.adapter = _adapter_of(device)
+            session.device = device
             session_ref[0] = session
 
             # Register raw notification handler
@@ -987,6 +1267,8 @@ class BLESessionManager:
                 _LOGGER.warning("Could not resume BLE scanner", exc_info=True)
 
         self._sessions[session_id] = session
+        if session.adapter:
+            self._last_adapter[discovered_address.upper()] = session.adapter
 
         # Get MTU size if available
         mtu = None
@@ -1234,6 +1516,7 @@ class BLESessionManager:
             "last_activity": session.last_activity.isoformat(),
             "buffer_size": session.notification_buffer.qsize(),
             "is_connected": bool(session.client.is_connected),
+            "adapter": session.adapter,
         }
 
     def list_sessions(self) -> list[dict]:
