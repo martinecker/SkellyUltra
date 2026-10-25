@@ -13,12 +13,21 @@ from typing import Any, NamedTuple, cast
 
 from dbus_next import BusType, Variant
 from dbus_next.aio import MessageBus
-from dbus_next.errors import DBusError
+from dbus_next.errors import DBusError, InterfaceNotFoundError
 from dbus_next.service import ServiceInterface, method, signal
 
+from .bluez_discovery import run_discovery_call
 from .pipewire_utils import resolve_bluez_output_node
 
 _LOGGER = logging.getLogger(__name__)
+
+# How long a connection may look stale before it is dropped, unless BlueZ
+# reports it disconnected. PipeWire can briefly lose the nodes of healthy
+# links, e.g. when another Bluetooth adapter is unplugged.
+STALE_CONNECTION_GRACE = 15.0
+# Stale checks further apart than this (e.g. while the scanner was paused
+# for playback) don't count as one stale period
+STALE_CHECK_MAX_GAP = 60.0
 
 
 class DeviceInfo(NamedTuple):
@@ -183,6 +192,8 @@ class BluetoothManager:
         self._adapter_rr_index = 0
         self._active_pairing_agent: PairingAgent | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        # MAC -> (first, latest) check that found the connection stale
+        self._stale_since: dict[str, tuple[float, float]] = {}
 
     @staticmethod
     def _normalize_mac(mac: str) -> str:
@@ -541,7 +552,9 @@ class BluetoothManager:
         for adapter_path in adapter_paths:
             adapter, _ = await self._async_get_adapter(adapter_path)
             adapter_label = self._adapter_label(adapter_path)
-            await adapter.call_start_discovery()
+            await run_discovery_call(
+                adapter.call_start_discovery, run_if_abandoned=False
+            )
             try:
                 while True:
                     if await self._async_device_known(mac):
@@ -560,7 +573,7 @@ class BluetoothManager:
                 with contextlib.suppress(
                     Exception
                 ):  # pragma: no cover - best effort cleanup
-                    await adapter.call_stop_discovery()
+                    await run_discovery_call(adapter.call_stop_discovery)
         raise RuntimeError(
             f"Device {mac} was not discovered within {timeout} seconds. "
             "Ensure it is in pairing mode and in range."
@@ -627,9 +640,18 @@ class BluetoothManager:
 
     @staticmethod
     def _proxy_interface(proxy_obj: Any, interface: str) -> Any:
-        """Return a proxy interface with loose typing for dbus_next."""
+        """Return a proxy interface with loose typing for dbus_next.
 
-        return cast(Any, proxy_obj.get_interface(interface))
+        Raises RuntimeError if the object doesn't have the interface (any
+        more), e.g. an adapter that was unplugged.
+        """
+
+        try:
+            return cast(Any, proxy_obj.get_interface(interface))
+        except InterfaceNotFoundError as exc:
+            raise RuntimeError(
+                f"{interface} is not available on {proxy_obj.path}"
+            ) from exc
 
     async def _async_ensure_adapter_powered(
         self, adapter_path: str | None = None
@@ -678,6 +700,8 @@ class BluetoothManager:
 
         self._adapter_connections[adapter_path] = normalized_mac
         self._remember_device_adapter(normalized_mac, adapter_path)
+        # A new connection starts with a clean record
+        self._stale_since.pop(normalized_mac, None)
 
         device_name: str | None = None
         try:
@@ -842,8 +866,8 @@ class BluetoothManager:
             scan_duration: How long to scan for devices (in seconds)
             stop_scan: Whether to stop scanning after getting results
         """
+        adapter_paths = await self._async_refresh_adapters()
         await self._async_ensure_adapter_powered()
-        adapter_paths = await self._async_get_adapter_paths()
 
         for adapter_path in adapter_paths:
             adapter, adapter_props = await self._async_get_adapter(adapter_path)
@@ -879,7 +903,9 @@ class BluetoothManager:
                     scan_duration,
                 )
                 try:
-                    await adapter.call_start_discovery()
+                    await run_discovery_call(
+                        adapter.call_start_discovery, run_if_abandoned=False
+                    )
                 except DBusError as exc:
                     error_name = getattr(exc, "_dbus_error_name", "") or ""
                     message = str(exc).lower()
@@ -905,8 +931,8 @@ class BluetoothManager:
                     _LOGGER.debug("Cached device: %s -> %s", device_name, mac_address)
             finally:
                 if stop_scan and started_here:
-                    with contextlib.suppress(DBusError):
-                        await adapter.call_stop_discovery()
+                    with contextlib.suppress(DBusError, TimeoutError):
+                        await run_discovery_call(adapter.call_stop_discovery)
 
     async def _background_scanner(self) -> None:
         """Continuously scan for Bluetooth devices and update cache."""
@@ -941,17 +967,23 @@ class BluetoothManager:
                 adapter_paths = []
 
             for adapter_path in adapter_paths:
-                with contextlib.suppress(DBusError):
+                with contextlib.suppress(DBusError, RuntimeError, TimeoutError):
                     adapter, _ = await self._async_get_adapter(adapter_path)
-                    await adapter.call_stop_discovery()
+                    await run_discovery_call(adapter.call_stop_discovery)
 
             _LOGGER.info("Background Bluetooth scanner stopped")
 
     async def _async_validate_connected_devices(self) -> None:
-        """Ensure tracked connections remain active at both PipeWire and DBus levels."""
+        """Ensure tracked connections remain active at both PipeWire and DBus levels.
 
-        if not self._connected_devices:
-            return
+        A link BlueZ still reports connected (or whose state can't be read)
+        is only dropped once it has looked stale for STALE_CONNECTION_GRACE.
+        """
+
+        tracked = {self._normalize_mac(mac) for mac in self._connected_devices}
+        for stale_mac in list(self._stale_since):
+            if stale_mac not in tracked:
+                del self._stale_since[stale_mac]
 
         for mac, info in list(self._connected_devices.items()):
             normalized_mac = self._normalize_mac(mac)
@@ -971,7 +1003,8 @@ class BluetoothManager:
                     exc,
                 )
 
-            dbus_ok = False
+            # None: BlueZ knows the device but its state couldn't be read
+            dbus_connected: bool | None = False
             try:
                 _, device_props = await self._async_get_device_interfaces(
                     normalized_mac,
@@ -987,24 +1020,46 @@ class BluetoothManager:
                 )
             else:
                 try:
-                    dbus_ok = bool(
+                    dbus_connected = bool(
                         await self._async_device_property(device_props, "Connected")
                     )
                 except DBusError as exc:
+                    dbus_connected = None
                     _LOGGER.debug(
                         "Failed to read Connected property for %s: %s",
                         mac,
                         exc,
                     )
 
-            if node_ok and dbus_ok:
+            if node_ok and dbus_connected:
+                self._stale_since.pop(normalized_mac, None)
                 continue
 
             reasons: list[str] = []
             if not node_ok:
                 reasons.append("PipeWire node missing")
-            if not dbus_ok:
+            if dbus_connected is None:
+                reasons.append("DBus state unknown")
+            elif not dbus_connected:
                 reasons.append("DBus disconnected")
+
+            if dbus_connected is not False:
+                now = asyncio.get_running_loop().time()
+                first_seen, last_seen = self._stale_since.get(
+                    normalized_mac, (now, now)
+                )
+                if now - last_seen > STALE_CHECK_MAX_GAP:
+                    first_seen = now
+                self._stale_since[normalized_mac] = (first_seen, now)
+                if now - first_seen < STALE_CONNECTION_GRACE:
+                    _LOGGER.info(
+                        "Bluetooth connection for %s looks stale (%s); "
+                        "checking again before disconnecting",
+                        mac,
+                        "; ".join(reasons),
+                    )
+                    continue
+            self._stale_since.pop(normalized_mac, None)
 
             _LOGGER.warning(
                 "Detected stale Bluetooth connection for %s: %s. Disconnecting",
@@ -1361,7 +1416,13 @@ if __name__ == "__main__":
                 "Ensure Bluetooth hardware is available and enabled."
             ) from exc
 
-        adapter = self._proxy_interface(proxy_obj, "org.bluez.Adapter1")
+        try:
+            adapter = self._proxy_interface(proxy_obj, "org.bluez.Adapter1")
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Bluetooth adapter {adapter_label} is not available. "
+                "Ensure Bluetooth hardware is available and enabled."
+            ) from exc
         adapter_props = self._proxy_interface(
             proxy_obj, "org.freedesktop.DBus.Properties"
         )
@@ -1397,10 +1458,12 @@ if __name__ == "__main__":
             adapter_label,
             adapter_path,
         )
-        await adapter.call_start_discovery()
+        await run_discovery_call(
+            adapter.call_start_discovery, run_if_abandoned=False
+        )
         await asyncio.sleep(8)
-        with contextlib.suppress(DBusError):
-            await adapter.call_stop_discovery()
+        with contextlib.suppress(DBusError, TimeoutError):
+            await run_discovery_call(adapter.call_stop_discovery)
         _LOGGER.debug("Discovery stopped on %s (%s)", adapter_label, adapter_path)
 
         try:
@@ -1657,7 +1720,7 @@ if __name__ == "__main__":
             RuntimeError: If D-Bus not available or pairing fails
         """
         normalized_mac = self._normalize_mac(mac)
-        await self._async_get_adapter_paths()
+        await self._async_refresh_adapters()
 
         known_adapters = self._known_device_adapters(normalized_mac)
         if not known_adapters:
@@ -1775,7 +1838,7 @@ if __name__ == "__main__":
             )
         except RuntimeError:
             raise
-        except (DBusError, OSError) as exc:
+        except (DBusError, OSError, TimeoutError) as exc:
             _LOGGER.exception("D-Bus pairing failed")
             raise RuntimeError("D-Bus pairing failed") from exc
         else:
@@ -1787,8 +1850,17 @@ if __name__ == "__main__":
                     await agent_manager.call_unregister_agent(agent_path)
                     _LOGGER.debug("Agent unregistered")
             if bus is not None:
-                with contextlib.suppress(DBusError):
-                    bus.disconnect()
+                pairing_bus = bus
+
+                async def close_bus() -> None:
+                    # BlueZ stops discovery this connection may still hold
+                    # when it sees the disconnect, which must not overlap
+                    # another client's discovery call (see bluez_discovery)
+                    pairing_bus.disconnect()
+                    await asyncio.sleep(0.5)
+
+                with contextlib.suppress(Exception):
+                    await run_discovery_call(close_bus)
             self._active_pairing_agent = None
 
     async def connect_by_name(
@@ -1840,8 +1912,8 @@ if __name__ == "__main__":
         _LOGGER.info("Attempting to connect to device by MAC: %s", mac)
         normalized_mac = self._normalize_mac(mac)
 
+        await self._async_refresh_adapters()
         await self._async_ensure_adapter_powered()
-        await self._async_get_adapter_paths()
         if not self._known_device_adapters(normalized_mac):
             await self._async_get_device_adapter_path(normalized_mac)
 

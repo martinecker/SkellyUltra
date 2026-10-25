@@ -473,16 +473,23 @@ class SkellyUltraServer:
             if not pin:
                 return self._json_error(endpoint, "pin is required", 400)
 
-            if by_name:
-                _LOGGER.info("Received %s request for: %s", endpoint, device_name)
-                success, mac = await self.bt_manager.pair_and_trust_by_name(
-                    device_name, pin, timeout, adapter_path=adapter_path
-                )
-            else:
-                _LOGGER.info("Received %s request for: %s", endpoint, mac)
-                success = await self.bt_manager.pair_and_trust_by_mac(
-                    mac, pin, timeout, adapter_path=adapter_path
-                )
+            # Pairing discovers on a D-Bus connection of its own (or in a sudo
+            # subprocess), so keep the BLE scanner's discovery calls out of
+            # its way (see bluez_discovery)
+            try:
+                await self.ble_manager.pause_scanning()
+                if by_name:
+                    _LOGGER.info("Received %s request for: %s", endpoint, device_name)
+                    success, mac = await self.bt_manager.pair_and_trust_by_name(
+                        device_name, pin, timeout, adapter_path=adapter_path
+                    )
+                else:
+                    _LOGGER.info("Received %s request for: %s", endpoint, mac)
+                    success = await self.bt_manager.pair_and_trust_by_mac(
+                        mac, pin, timeout, adapter_path=adapter_path
+                    )
+            finally:
+                await self.ble_manager.resume_scanning()
 
             mapped_adapter = self.bt_manager.get_device_adapter_path(mac)
 

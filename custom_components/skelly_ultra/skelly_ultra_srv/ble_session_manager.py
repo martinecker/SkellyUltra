@@ -21,6 +21,8 @@ from dbus_fast import Message as FastMessage, MessageType as FastMessageType
 from dbus_next import BusType, Message, MessageType
 from dbus_next.aio import MessageBus
 
+from .bluez_discovery import run_discovery_call
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -117,8 +119,8 @@ async def _stop_bleak_discovery(timeout: float = 5.0) -> None:
     so a start we gave up on can stay active, and every retry on the same
     connection then fails with InProgress. Used after a failed scanner stop,
     and when the connection can't be reset because sessions depend on it.
-    BlueZ answers InProgress while a start is still pending, so that is
-    retried until the timeout. Best effort.
+    BlueZ answers InProgress while a request of that client is still pending
+    (see bluez_discovery), so that is retried until the timeout. Best effort.
     """
     instances = getattr(bluez_manager, "_global_instances", None) or {}
     manager = instances.get(asyncio.get_running_loop())
@@ -128,13 +130,14 @@ async def _stop_bleak_discovery(timeout: float = 5.0) -> None:
     try:
         async with asyncio.timeout(timeout):
             while True:
-                reply = await bus.call(
-                    FastMessage(
-                        destination="org.bluez",
-                        path=manager.get_default_adapter(),
-                        interface="org.bluez.Adapter1",
-                        member="StopDiscovery",
-                    )
+                message = FastMessage(
+                    destination="org.bluez",
+                    path=manager.get_default_adapter(),
+                    interface="org.bluez.Adapter1",
+                    member="StopDiscovery",
+                )
+                reply = await run_discovery_call(
+                    lambda message=message: bus.call(message), timeout
                 )
                 if (
                     reply is None
@@ -232,6 +235,7 @@ class BLESessionManager:
         self._scanner_started = False  # Whether self._scanner is scanning
         # Serializes starts (background loop and resume can race)
         self._scanner_start_lock = asyncio.Lock()
+        self._direct_scan_lock = asyncio.Lock()
         # Wakes the background scanner loop to (re)start the scanner
         self._scanner_wakeup = asyncio.Event()
         # Connects between client.connect() and their session being stored
@@ -340,8 +344,9 @@ class BLESessionManager:
                 return True
             scanner = self._scanner
             try:
-                async with asyncio.timeout(SCANNER_START_TIMEOUT):
-                    await scanner.start()
+                await run_discovery_call(
+                    scanner.start, SCANNER_START_TIMEOUT, run_if_abandoned=False
+                )
             except TimeoutError:
                 _LOGGER.warning(
                     "Background BLE scanner start hung for %.0fs, will retry",
@@ -364,8 +369,7 @@ class BLESessionManager:
             if self._scanner_paused or scanner is not self._scanner:
                 # Paused (or replaced) while starting: undo the start
                 try:
-                    async with asyncio.timeout(SCANNER_START_TIMEOUT):
-                        await scanner.stop()
+                    await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
                 except TimeoutError:
                     _LOGGER.warning("Background BLE scanner stop hung")
                     await self._recover_bluez_manager()
@@ -396,17 +400,24 @@ class BLESessionManager:
             self._new_scanner()
             await _stop_bleak_discovery()
             return
-        _reset_bleak_bluez_manager()
+
+        async def reset() -> None:
+            # BlueZ stops the connection's discovery once it sees the
+            # disconnect, which is a discovery request of its own
+            _reset_bleak_bluez_manager()
+            await asyncio.sleep(1.0)
+
+        await run_discovery_call(reset)
         # The old scanner was registered with the dropped manager
         self._new_scanner()
 
     async def _stop_scanner(self) -> None:
         """Stop the background scanner if it is scanning. Best effort.
 
-        StopDiscovery fails with InProgress while BlueZ is still starting
-        discovery (e.g. right after the scanner was restarted), and it can
-        hang like a start. That must not fail the connect that pauses the
-        scanner. bleak drops the scanner's stop handle before it calls
+        StopDiscovery fails with InProgress once BlueZ has lost track of an
+        earlier discovery request of bleak's connection (see bluez_discovery),
+        and it can hang like a start. That must not fail the connect that
+        pauses the scanner. bleak drops the scanner's stop handle before it calls
         StopDiscovery, so the scanner is replaced and the discovery request
         is withdrawn directly (or the BlueZ connection reset after a hang).
         """
@@ -414,8 +425,7 @@ class BLESessionManager:
             return
         self._scanner_started = False
         try:
-            async with asyncio.timeout(SCANNER_START_TIMEOUT):
-                await self._scanner.stop()
+            await run_discovery_call(self._scanner.stop, SCANNER_START_TIMEOUT)
         except asyncio.CancelledError:
             # The stop handle is gone either way, so don't reuse this scanner
             self._new_scanner()
@@ -666,9 +676,52 @@ class BLESessionManager:
             return None
 
         _LOGGER.warning("Background scanner not running, scanning directly")
-        device = await BleakScanner.find_device_by_filter(
-            lambda d, _adv: matches(d), timeout=timeout
-        )
+
+        # Start and stop separately, so the discovery lock isn't held while
+        # scanning (find_device_by_filter's stop can't be bounded from here)
+        found: list[BLEDevice] = []
+        seen = asyncio.Event()
+
+        def on_detection(d: BLEDevice, _adv: AdvertisementData) -> None:
+            if not found and matches(d):
+                found.append(d)
+                seen.set()
+
+        # One direct scan at a time: they share bleak's D-Bus connection,
+        # where a second StartDiscovery fails with InProgress and its
+        # recovery would end the first scan. Waiting counts against timeout.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        async with self._direct_scan_lock:
+            device = find_cached()
+            if device:
+                return device
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                return None
+            scanner = BleakScanner(detection_callback=on_detection)
+            try:
+                await run_discovery_call(
+                    scanner.start, SCANNER_START_TIMEOUT, run_if_abandoned=False
+                )
+            except TimeoutError:
+                # Same cleanup as for a hung background scanner start
+                await self._recover_bluez_manager()
+                raise
+            except BleakDBusError as exc:
+                if exc.dbus_error == "org.bluez.Error.InProgress":
+                    await self._recover_bluez_manager()
+                raise
+            try:
+                with contextlib.suppress(TimeoutError):
+                    async with asyncio.timeout(remaining):
+                        await seen.wait()
+            finally:
+                try:
+                    await run_discovery_call(scanner.stop, SCANNER_START_TIMEOUT)
+                except Exception:  # noqa: BLE001 - best effort
+                    _LOGGER.debug("Stopping the direct BLE scan failed", exc_info=True)
+        device = found[0] if found else None
         if device:
             # Cache with unknown RSSI since the scan result has none
             self._device_cache[device.address] = CachedDevice(
