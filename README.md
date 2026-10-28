@@ -20,6 +20,7 @@ There is a companion project that provides a fully web browser-based controller 
   - [📦 Available Entities](#-available-entities)
   - [🔊 Playing Audio](#-playing-audio)
   - [🤖 Automation Examples](#-automation-examples)
+  - [🎭 Perform: Lines with a Matching Mood](#-perform-lines-with-a-matching-mood)
   - [📁 Using the Internal Files Media Player](#-using-the-internal-files-media-player)
   - [🎵 Playing Files Stored on Device (via Services)](#-playing-files-stored-on-device-via-services)
   - [📤 Uploading Audio Files to Device](#-uploading-audio-files-to-device)
@@ -36,7 +37,7 @@ Both devices share these features:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect per light channel)
   - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
-- 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches)
+- 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches), Clear Perform History
 - 🎚️ **Number entities**: Volume control, effect speed per light channel
 - 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
 - 🎵 **Media Player entities**:
@@ -49,6 +50,7 @@ Both devices share these features:
     - File metadata available as entity attributes
     - Select files by name
 - ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
+- 🎭 **Perform action**: The device says a literal or AI-written line (optionally reacting to a camera snapshot) with eyes, lights and movement to match a mood, plus a ready-made blueprint
 
 Ultra Skelly only:
 
@@ -422,6 +424,86 @@ automation:
 - The integration automatically handles connecting the Bluetooth speaker
 - Pairing can be done automatically if the REST server can get elevated root privileges and otherwise must be done manually via `bluetoothctl` (only needed once)
 - First connection after enabling Live Mode may take 10-30 seconds
+
+### 🎭 Perform: Lines with a Matching Mood
+
+The `skelly_ultra.perform` action makes the device say one line in live mode and sets its eyes, lights and movement to match a mood while it speaks. The line is either a literal `message` or written by an [AI Task](https://www.home-assistant.io/integrations/ai_task/) entity from your `prompt`, which can also look at a camera snapshot. Speech comes from any TTS entity you choose (ElevenLabs, Piper, a cloud voice, ...).
+
+What it does, in order:
+
+1. Turns on Live Mode if it is off (and leaves it on), waiting up to `live_mode_timeout` seconds for the speaker. Meanwhile the AI writes the line.
+2. Renders the line with the TTS entity.
+3. Applies the mood's eyes and lights and sends the movement.
+4. Plays the line and waits until it has finished (with `wait_until_done: false`, the action returns here and the rest runs in the background).
+5. Puts the eyes and lights back the way they were (unless `restore: false`).
+
+If a perform is already running on the same device, a second call does nothing and returns `status: busy`.
+
+#### Import the Blueprint
+
+The bundled blueprint handles the *when*: it runs `perform` when a motion sensor, doorbell or event entity fires, with a cooldown and, if you turn them on, only within active hours. Optionally pick one or more buttons (`input_button` or `button` entities) that make the device perform right away, skipping the trigger, active hours and cooldown. *Movement and restore* exposes the action's `movement`, `restore`, `restore_movement` and `live_mode_timeout` fields with the same defaults. The blueprint calls `perform` with `wait_until_done: false`, so the notification actions run while the device speaks.
+
+Under *Notifications*, add any actions to run as the device starts speaking, such as sending the line to phones. `performance.line`, `performance.mood` and `performance.person_present` are available in their templates:
+
+```yaml
+action: notify.adult_phones
+data:
+  title: Door Skelly Talks
+  message: "{{ performance.line }}"
+```
+
+[![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmartinecker%2FSkellyUltra%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fskelly_ultra%2Fperform.yaml)
+
+#### Example
+
+```yaml
+action: skelly_ultra.perform
+data:
+  device_id: 1234567890abcdef
+  prompt: >-
+    You are a cheeky skeleton guarding the front door on Halloween.
+    Greet whoever is there in one short sentence.
+  camera_entity: camera.front_door
+  tts_entity: tts.elevenlabs
+response_variable: performance
+```
+
+The response has `status` (`ok` or `busy`), `line`, `mood`, `person_present` (only with a camera, `null` otherwise; it is for information and never stops the device from speaking) and `history` (the recent AI lines).
+
+#### Fields
+
+| Field | Description |
+|---|---|
+| `device_id` / `entity_id` | The device, as for the other actions |
+| `message` | A literal line. Skips the AI. Give either `message` or `prompt` |
+| `prompt` | Instructions for the AI, sent as is. Keeping lines short and family friendly is up to the prompt |
+| `camera_entity` | Optional camera whose snapshot goes with the prompt |
+| `camera_wait` | With a camera, seconds to wait for it to publish a new image before it goes to the AI (default 1). Snapshot cameras such as ring-mqtt publish the image of what moved a moment after the motion event; without a new image in time the current one is used. Only helps cameras that update their entity with each new image (such as ring-mqtt); use 0 for others |
+| `ai_task_entity` | Optional; defaults to the preferred AI Task entity |
+| `tts_entity` | Required TTS entity |
+| `tts_options` | Optional TTS options, such as `voice` |
+| `mood` | `auto` (the AI picks; default with a prompt), `none` (leave the look alone; default with a message), or a mood name |
+| `movement` | `mood` (default, the mood's movement), `none`, or a list of body parts such as `[head, arm]` |
+| `restore` | Restore eyes and lights afterwards (default `true`) |
+| `restore_movement` | Send the previous movement setting back afterwards (default `false`). This makes the device move once more; when off, the movement switches show the movement perform used |
+| `live_mode_timeout` | Seconds to wait for Live Mode (default 30) |
+| `wait_until_done` | Return only after the line has finished and the look is restored (default `true`). When `false`, the action returns as soon as the line starts playing, with the same response, so following actions such as notifications run while the device speaks; a second perform stays busy until it ends |
+
+#### Moods
+
+| Mood | Eyes | Lights | Movement |
+|---|---|---|---|
+| `friendly` | Green Eyeball | Warm white (Ultra Skelly head light green), steady | Subtle |
+| `spooky` | Color Spiral | Purple, slow pulse | Full |
+| `menacing` | Red Eyeball | Red, fast flashing | Full |
+| `playful` | Fireworks | Color cycle, fast pulse | Full |
+| `mysterious` | Gray Eyeball | Blue, slow pulse | Subtle |
+
+Subtle movement is the head on the Skelly and head and eyes on Lethal Lily; full movement is all parts (the 12ft Skelly only moves its head). Lethal Lily has no eye icons, so its eyes are left alone.
+
+#### Line History
+
+The last 10 AI lines per device are kept (also across restarts) and added to the prompt with a request not to repeat them. Press the device's **Clear Perform History** button to start fresh. Literal messages aren't recorded.
 
 ### 📁 Using the Internal Files Media Player
 

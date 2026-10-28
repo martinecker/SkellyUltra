@@ -115,6 +115,72 @@
           "description": "The name of the file to delete (e.g., 'announcement.mp3'). The service will look up the corresponding file_index and cluster. Mutually exclusive with file_index and cluster."
         }
       }
+    },
+    "perform": {
+      "name": "Perform",
+      "description": "Make the device say a line in live mode, with eyes, lights and movement to match a mood. The line is a literal message or written by an AI Task entity from a prompt, optionally looking at a camera snapshot.",
+      "fields": {
+        "device_id": {
+          "name": "Device",
+          "description": "The device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
+        "message": {
+          "name": "Message",
+          "description": "A literal line to say. Skips the AI. Give either message or prompt."
+        },
+        "prompt": {
+          "name": "Prompt",
+          "description": "Instructions for the AI to write the line, sent as is. The last 10 AI lines are added with a request not to repeat them. Give either message or prompt."
+        },
+        "camera_entity": {
+          "name": "Camera",
+          "description": "A camera whose snapshot is attached to the AI request. Needs a prompt."
+        },
+        "camera_wait": {
+          "name": "Camera wait",
+          "description": "With a camera, how long to wait for it to publish a new image before sending it to the AI, since snapshot cameras publish the image of what moved a moment after the motion event. 0 sends the current image right away. Only helps cameras that update their entity with each new image (such as ring-mqtt); use 0 for others."
+        },
+        "ai_task_entity": {
+          "name": "AI Task entity",
+          "description": "The AI Task entity that writes the line. Defaults to the preferred AI Task entity."
+        },
+        "tts_entity": {
+          "name": "Text-to-speech entity",
+          "description": "The TTS entity that speaks the line."
+        },
+        "tts_options": {
+          "name": "TTS options",
+          "description": "Options for the TTS entity, such as voice."
+        },
+        "mood": {
+          "name": "Mood",
+          "description": "auto lets the AI pick (needs a prompt), none leaves eyes, lights and movement as they are. Defaults to auto with a prompt and none with a message."
+        },
+        "movement": {
+          "name": "Movement",
+          "description": "mood uses the mood's movement, none sends no movement, or pick the body parts to move."
+        },
+        "restore": {
+          "name": "Restore eyes and lights",
+          "description": "Put the eyes and lights back the way they were after the line."
+        },
+        "restore_movement": {
+          "name": "Restore movement",
+          "description": "Send the previous movement setting back after the line. This makes the device move once more."
+        },
+        "live_mode_timeout": {
+          "name": "Live mode timeout",
+          "description": "How long to wait for live mode to connect before failing."
+        },
+        "wait_until_done": {
+          "name": "Wait until done",
+          "description": "Return only after the line has finished and the look is restored. When off, the action returns as soon as the line starts playing, so following actions run while the device speaks."
+        }
+      }
     }
   }
 }

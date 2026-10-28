@@ -22,9 +22,7 @@ def _persist_entry_option(
     hass: HomeAssistant, entry: ConfigEntry, key: str, value: object
 ) -> None:
     """Merge one key into a config entry's options and persist it."""
-    hass.config_entries.async_update_entry(
-        entry, options={**entry.options, key: value}
-    )
+    hass.config_entries.async_update_entry(entry, options={**entry.options, key: value})
 
 
 async def async_setup_entry(
@@ -248,12 +246,17 @@ class SkellyLiveModeSwitch(CoordinatorEntity, SwitchEntity):
         if self.adapter:
             self.adapter.register_live_mode_callback(self._handle_live_mode_change)
             self.adapter.set_live_mode_preference(self._desired_live_mode_on)
+        # skelly_ultra.perform turns live mode on through this switch
+        self.hass.data[DOMAIN][self._entry.entry_id]["live_mode_switch"] = self
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister adapter callbacks when entity is removed."""
         if self.adapter:
             self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
+        if entry_data.get("live_mode_switch") is self:
+            entry_data.pop("live_mode_switch")
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs) -> None:

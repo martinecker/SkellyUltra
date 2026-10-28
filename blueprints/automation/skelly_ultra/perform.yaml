@@ -1,0 +1,272 @@
+blueprint:
+  name: Skelly performs when triggered
+  description: >-
+    When a motion sensor, doorbell or other trigger fires, the Skelly says a line
+    written by AI, with eyes, lights and movement to match. Optionally the AI looks
+    at a camera snapshot first. Uses the skelly_ultra.perform action, which turns
+    live mode on if needed.
+  domain: automation
+  source_url: https://github.com/martinecker/SkellyUltra/blob/main/blueprints/automation/skelly_ultra/perform.yaml
+  input:
+    trigger_entity:
+      name: Trigger
+      description: >-
+        A binary sensor (fires when it turns on, such as motion or a doorbell
+        button) or an event entity (fires on each event, such as a doorbell press).
+      selector:
+        entity:
+          domain:
+            - binary_sensor
+            - event
+    force_entity:
+      name: Perform now button (optional)
+      description: >-
+        Buttons that make the Skelly perform right away, ignoring the trigger,
+        active hours and cooldown. Pressing one while a performance is still
+        running does nothing.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - input_button
+            - button
+    skelly:
+      name: Skelly
+      description: The Skelly that performs.
+      selector:
+        device:
+          integration: skelly_ultra
+    prompt:
+      name: Prompt
+      description: >-
+        Instructions for the AI. Say who the Skelly is, who it talks to and how long
+        the line should be. With a camera, you can ask it to react to what it sees.
+      default: >-
+        You are a spooky but friendly skeleton guarding a house on Halloween night.
+        Greet the trick-or-treaters at the door in one short, funny sentence.
+      selector:
+        text:
+          multiline: true
+    camera:
+      name: Camera (optional)
+      description: A camera whose snapshot the AI looks at before writing the line.
+      default: ""
+      selector:
+        entity:
+          domain: camera
+    ai_task_entity:
+      name: AI Task entity (optional)
+      description: Leave empty to use the preferred AI Task entity.
+      default: ""
+      selector:
+        entity:
+          domain: ai_task
+    tts_entity:
+      name: Text-to-speech entity
+      description: The TTS entity that gives the Skelly its voice.
+      selector:
+        entity:
+          domain: tts
+    tts_options:
+      name: TTS options (optional)
+      description: >-
+        Options for the TTS entity, such as the voice. For ElevenLabs, for example
+        voice (a voice ID) and model (such as eleven_flash_v2_5).
+      default: {}
+      selector:
+        object:
+    mood:
+      name: Mood
+      description: auto lets the AI pick a mood that fits the line.
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - none
+            - friendly
+            - spooky
+            - menacing
+            - playful
+            - mysterious
+    look_and_movement:
+      name: Movement and restore (optional)
+      description: Which parts move, and what happens after the line.
+      collapsed: true
+      input:
+        movement:
+          name: Movement
+          description: >-
+            Which body parts move. mood uses the mood's movement, none sends no
+            movement, or pick the parts to move (not together with mood or none).
+            Parts the device doesn't have are an error.
+          default:
+            - mood
+          selector:
+            select:
+              multiple: true
+              options:
+                - mood
+                - none
+                - all
+                - head
+                - arm
+                - torso
+                - wrist
+                - elbow
+                - eyes
+        restore:
+          name: Restore eyes and lights
+          description: Put the eyes and lights back the way they were after the line.
+          default: true
+          selector:
+            boolean:
+        restore_movement:
+          name: Restore movement
+          description: >-
+            Send the previous movement setting back after the line. This makes the
+            Skelly move once more.
+          default: false
+          selector:
+            boolean:
+        live_mode_timeout:
+          name: Live mode timeout
+          description: How long to wait for live mode to connect before failing.
+          default: 30
+          selector:
+            number:
+              min: 1
+              max: 300
+              step: 1
+              unit_of_measurement: s
+              mode: box
+    cooldown:
+      name: Cooldown
+      description: Minimum time between two performances.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 5
+          unit_of_measurement: s
+          mode: box
+    active_hours:
+      name: Active hours (optional)
+      description: >-
+        Turn on to limit performances to a time window. Off means the trigger
+        works at any time of day.
+      collapsed: true
+      input:
+        limit_active_hours:
+          name: Only perform during active hours
+          default: false
+          selector:
+            boolean:
+        active_from:
+          name: Active from
+          description: Only perform after this time of day.
+          default: "17:00:00"
+          selector:
+            time:
+        active_until:
+          name: Active until
+          description: Only perform before this time of day. Can be past midnight.
+          default: "23:00:00"
+          selector:
+            time:
+    notifications:
+      name: Notifications (optional)
+      description: >-
+        Actions to run as the Skelly starts speaking, such as sending the line to
+        phones.
+      collapsed: true
+      input:
+        after_perform:
+          name: Actions after performing
+          description: >-
+            Any number of actions, run as the Skelly starts speaking. In templates,
+            {{ performance.line }} is the spoken line, {{ performance.mood }} the
+            mood and {{ performance.person_present }} whether the AI saw a person
+            on the camera. For example, the action notify.adult_phones with title
+            Door Skelly Talks and message {{ performance.line }}.
+          default: []
+          selector:
+            action:
+
+mode: single
+max_exceeded: silent
+
+variables:
+  cooldown: !input cooldown
+  limit_active_hours: !input limit_active_hours
+
+triggers:
+  - trigger: state
+    id: sensor
+    entity_id: !input trigger_entity
+  - trigger: state
+    id: force
+    entity_id: !input force_entity
+
+conditions:
+  - condition: or
+    conditions:
+      # A button press (its state becomes the press time) skips all other checks.
+      - condition: template
+        value_template: >-
+          {% set new = trigger.to_state %}
+          {% set old = trigger.from_state %}
+          {{ trigger.id == 'force' and new is not none and old is not none
+             and new.state not in ['unavailable', 'unknown']
+             and old.state != 'unavailable' and new.state != old.state }}
+      - condition: and
+        conditions:
+          # A binary sensor fires when it turns on, an event entity on each new event.
+          - condition: template
+            value_template: >-
+              {% set new = trigger.to_state %}
+              {% set old = trigger.from_state %}
+              {% if trigger.id != 'sensor' or new is none or old is none %}
+                false
+              {% elif new.domain == 'binary_sensor' %}
+                {{ new.state == 'on' and old.state == 'off' }}
+              {% else %}
+                {{ new.state not in ['unavailable', 'unknown'] and old.state != 'unavailable'
+                   and new.state != old.state }}
+              {% endif %}
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ not limit_active_hours }}"
+              - condition: time
+                after: !input active_from
+                before: !input active_until
+          - condition: template
+            value_template: >-
+              {{ this.attributes.last_triggered is none
+                 or (now() - this.attributes.last_triggered).total_seconds() >= cooldown }}
+
+actions:
+  - action: skelly_ultra.perform
+    data:
+      device_id: !input skelly
+      prompt: !input prompt
+      camera_entity: !input camera
+      ai_task_entity: !input ai_task_entity
+      tts_entity: !input tts_entity
+      tts_options: !input tts_options
+      mood: !input mood
+      movement: !input movement
+      restore: !input restore
+      restore_movement: !input restore_movement
+      live_mode_timeout: !input live_mode_timeout
+      # Return once the line starts, so the actions below run while it speaks.
+      wait_until_done: false
+    response_variable: performance
+  # Busy means another performance was already running and nothing was said.
+  - if:
+      - condition: template
+        value_template: "{{ performance.status == 'ok' }}"
+    then: !input after_perform

@@ -6,6 +6,7 @@ import logging
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
@@ -13,6 +14,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
 from .helpers import get_device_info
+from .perform import PerformManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -26,7 +28,12 @@ async def async_setup_entry(
     device_info = get_device_info(hass, entry)
 
     async_add_entities(
-        [SkellyTriggerMovementButton(coordinator, entry.entry_id, device_info)]
+        [
+            SkellyTriggerMovementButton(coordinator, entry.entry_id, device_info),
+            SkellyClearPerformHistoryButton(
+                data["perform"], entry.entry_id, device_info
+            ),
+        ]
     )
 
 
@@ -75,3 +82,28 @@ class SkellyTriggerMovementButton(CoordinatorEntity, ButtonEntity):
                 await self.coordinator.adapter.client.set_movement_action(action)
             except Exception:
                 _LOGGER.exception("Failed to trigger movement")
+
+
+class SkellyClearPerformHistoryButton(ButtonEntity):
+    """Button that forgets the AI lines skelly_ultra.perform told not to repeat."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:history"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        manager: PerformManager,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the clear perform history button."""
+        self._manager = manager
+        self._attr_name = "Clear Perform History"
+        self._attr_unique_id = f"{entry_id}_clear_perform_history"
+        self._attr_device_info = device_info
+
+    async def async_press(self) -> None:
+        """Clear the perform line history."""
+        await self._manager.async_clear()
+        _LOGGER.info("Cleared perform history")

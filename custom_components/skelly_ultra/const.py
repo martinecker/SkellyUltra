@@ -26,6 +26,22 @@ class LightDef(TypedDict):
     channel: int
 
 
+class MoodDef(TypedDict):
+    """A perform mood in device-neutral terms; each device profile maps it."""
+
+    # Eye icon name: an eye_icons label without its leading number
+    eye_icon: str
+    # RGB per light channel in profile order, repeating the last one as needed
+    colors: list[tuple[int, int, int]]
+    color_cycle: bool
+    # Key into the profile's mood_light_styles
+    light_style: str
+    # Key into MOOD_LIGHT_SPEEDS, or None to leave the speed as it is
+    light_speed: str | None
+    # Key into the profile's mood_movements
+    movement: str
+
+
 class DeviceProfile(TypedDict):
     display_name: str
     default_name: str
@@ -38,6 +54,10 @@ class DeviceProfile(TypedDict):
     movements: list[MovementDef]
     lights: list[LightDef]
     light_modes: list[str]
+    # Mood light style ("steady", "pulse", "flash") -> light_modes entry
+    mood_light_styles: dict[str, str]
+    # Mood movement level ("subtle", "full") -> movement parts
+    mood_movements: dict[str, list[str]]
 
 
 # Device profiles. Each profile drives entity creation at setup time.
@@ -80,6 +100,8 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             {"label": "Head Light", "channel": 1},
         ],
         "light_modes": ["Static", "Strobe", "Pulse"],
+        "mood_light_styles": {"steady": "Static", "pulse": "Pulse", "flash": "Strobe"},
+        "mood_movements": {"subtle": ["head"], "full": ["all"]},
     },
     DEVICE_TYPE_SKELLY_12FT: {
         "display_name": "12ft Skelly",
@@ -116,6 +138,8 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             {"label": "Torso Light", "channel": 0},
         ],
         "light_modes": ["Static", "Strobe", "Pulse"],
+        "mood_light_styles": {"steady": "Static", "pulse": "Pulse", "flash": "Strobe"},
+        "mood_movements": {"subtle": ["head"], "full": ["head"]},
     },
     DEVICE_TYPE_LILY: {
         "display_name": "Lethal Lily",
@@ -135,8 +159,62 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             {"label": "Lantern", "channel": 0},
         ],
         "light_modes": ["Flickering", "Pulsing", "Chasing"],
+        "mood_light_styles": {
+            "steady": "Flickering",
+            "pulse": "Pulsing",
+            "flash": "Chasing",
+        },
+        "mood_movements": {"subtle": ["head", "eyes"], "full": ["all"]},
     },
 }
+
+# Moods for the skelly_ultra.perform action. The list is fixed and owned by
+# the integration; DEVICE_PROFILES translate each one to what a device can do.
+MOODS: dict[str, MoodDef] = {
+    "friendly": {
+        "eye_icon": "Green Eyeball",
+        "colors": [(255, 160, 60), (0, 255, 0)],
+        "color_cycle": False,
+        "light_style": "steady",
+        "light_speed": None,
+        "movement": "subtle",
+    },
+    "spooky": {
+        "eye_icon": "Color Spiral",
+        "colors": [(160, 0, 255)],
+        "color_cycle": False,
+        "light_style": "pulse",
+        "light_speed": "slow",
+        "movement": "full",
+    },
+    "menacing": {
+        "eye_icon": "Red Eyeball",
+        "colors": [(255, 0, 0)],
+        "color_cycle": False,
+        "light_style": "flash",
+        "light_speed": "fast",
+        "movement": "full",
+    },
+    "playful": {
+        "eye_icon": "Fireworks",
+        "colors": [(255, 0, 255)],
+        "color_cycle": True,
+        "light_style": "pulse",
+        "light_speed": "fast",
+        "movement": "full",
+    },
+    "mysterious": {
+        "eye_icon": "Gray Eyeball",
+        "colors": [(0, 60, 255)],
+        "color_cycle": False,
+        "light_style": "pulse",
+        "light_speed": "slow",
+        "movement": "subtle",
+    },
+}
+
+# Mood light speeds in device units (0 = fastest, 254 = slowest)
+MOOD_LIGHT_SPEEDS: dict[str, int] = {"slow": 200, "fast": 40}
 
 # Flat list of all BLE name substrings to match during scan filtering (lowercase).
 # Derived from DEVICE_PROFILES so it stays in sync automatically.

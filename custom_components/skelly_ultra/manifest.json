@@ -1,6 +1,7 @@
 {
   "domain": "skelly_ultra",
   "name": "Skelly Ultra",
+  "after_dependencies": ["tts"],
   "codeowners": ["@martinecker"],
   "config_flow": true,
   "dependencies": ["bluetooth_adapters"],
@@ -8,5 +9,5 @@
   "iot_class": "local_polling",
   "issue_tracker": "https://github.com/martinecker/SkellyUltra/issues",
   "requirements": ["bleak>=0.20", "pydub>=0.25.1"],
-  "version": "1.6.7"
+  "version": "1.7.0"
 }

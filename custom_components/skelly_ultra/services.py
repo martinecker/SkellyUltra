@@ -12,7 +12,12 @@ from typing import Any
 
 import voluptuous as vol
 
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+)
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import (
     config_validation as cv,
@@ -23,6 +28,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
 from .helpers import get_device_profile
+from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 from .skelly_ultra_pkg.client import ConnectionLostError
@@ -681,32 +687,82 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
         raise HomeAssistantError(f"Failed to delete file: {exc}") from exc
 
 
-# (service name, handler, schema) - drives both register_services and
+async def async_perform_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> ServiceResponse:
+    """Speak a line on the Skelly with a matching mood (see perform.py).
+
+    The service accepts either `device_id` or `entity_id`. If neither is
+    provided and there is exactly one configured entry for this
+    integration, that entry will be used.
+    """
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
+    result = await async_perform(hass, adapter, entry_id, dict(call.data))
+    return result if call.return_response else None
+
+
+# (service name, handler, schema, supports_response) - drives both register_services and
 # unregister_services so the two can't drift out of sync with each other.
-_SERVICES: tuple[tuple[str, Any, vol.Schema], ...] = (
-    ("enable_classic_bt", async_enable_classic_bt_service, SERVICE_ENABLE_CLASSIC_BT),
-    ("play_file", async_play_file_service, SERVICE_FILE_CONTROL),
-    ("stop_file", async_stop_file_service, SERVICE_FILE_CONTROL),
+_SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
+    (
+        "enable_classic_bt",
+        async_enable_classic_bt_service,
+        SERVICE_ENABLE_CLASSIC_BT,
+        SupportsResponse.NONE,
+    ),
+    (
+        "play_file",
+        async_play_file_service,
+        SERVICE_FILE_CONTROL,
+        SupportsResponse.NONE,
+    ),
+    (
+        "stop_file",
+        async_stop_file_service,
+        SERVICE_FILE_CONTROL,
+        SupportsResponse.NONE,
+    ),
     (
         "cancel_file_transfer",
         async_cancel_file_transfer_service,
         SERVICE_CANCEL_FILE_TRANSFER,
+        SupportsResponse.NONE,
     ),
-    ("send_file", async_send_file_service, SERVICE_SEND_FILE),
-    ("delete_file", async_delete_file_service, SERVICE_DELETE_FILE),
+    (
+        "send_file",
+        async_send_file_service,
+        SERVICE_SEND_FILE,
+        SupportsResponse.NONE,
+    ),
+    (
+        "delete_file",
+        async_delete_file_service,
+        SERVICE_DELETE_FILE,
+        SupportsResponse.NONE,
+    ),
+    (
+        "perform",
+        async_perform_service,
+        SERVICE_PERFORM,
+        SupportsResponse.OPTIONAL
+    ),
 )
 
 
 def register_services(hass: HomeAssistant) -> None:
     """Register all Skelly Ultra services."""
-    for name, handler, schema in _SERVICES:
+    for name, handler, schema, supports_response in _SERVICES:
         hass.services.async_register(
-            DOMAIN, name, functools.partial(handler, hass), schema=schema
+            DOMAIN,
+            name,
+            functools.partial(handler, hass),
+            schema=schema,
+            supports_response=supports_response,
         )
 
 
 def unregister_services(hass: HomeAssistant) -> None:
     """Unregister all Skelly Ultra services."""
-    for name, _handler, _schema in _SERVICES:
+    for name, _handler, _schema, _supports_response in _SERVICES:
         if hass.services.has_service(DOMAIN, name):
             hass.services.async_remove(DOMAIN, name)

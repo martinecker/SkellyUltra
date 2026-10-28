@@ -23,6 +23,7 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -184,6 +185,7 @@ class SkellyLiveMediaPlayer(
         self._is_playing = False
         self._current_media_title: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        self._monitor_task: asyncio.Task | None = None
 
         # Device grouping
         self._attr_device_info = device_info
@@ -390,6 +392,7 @@ class SkellyLiveMediaPlayer(
             task = asyncio.create_task(self._monitor_playback_status())
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
+            self._monitor_task = task
 
         except AudioProcessingError as err:
             _LOGGER.error("Failed to process audio file: %s", err)
@@ -413,6 +416,27 @@ class SkellyLiveMediaPlayer(
                         temp_file.name,
                         cleanup_err,
                     )
+
+    async def async_start_playback(self, media_id: str) -> asyncio.Task:
+        """Start playing media and return a task that ends with the playback.
+
+        Used by skelly_ultra.perform. Unlike async_play_media, which only logs
+        its errors, this raises HomeAssistantError if playback didn't start.
+        Await the task with asyncio.shield: cancelling it would leave the
+        state stuck on playing.
+        """
+        self._monitor_task = None
+        await self.async_play_media(MediaType.MUSIC, media_id)
+        task = self._monitor_task
+        if task is None or not self._is_playing:
+            raise HomeAssistantError(
+                "Live mode playback failed to start, see the log for details"
+            )
+        return task
+
+    async def async_play_and_wait(self, media_id: str) -> None:
+        """Play media and return once playback has finished."""
+        await asyncio.shield(await self.async_start_playback(media_id))
 
     async def _monitor_playback_status(self) -> None:
         """Monitor playback status via REST server and update state when done."""
@@ -473,6 +497,9 @@ class SkellyLiveMediaPlayer(
         await self.async_media_stop()
         # Unregister live mode callback
         self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
+        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
+        if entry_data.get("live_media_player") is self:
+            entry_data.pop("live_media_player")
         await super().async_will_remove_from_hass()
 
     async def async_added_to_hass(self) -> None:
@@ -480,6 +507,9 @@ class SkellyLiveMediaPlayer(
         await super().async_added_to_hass()
         # Register for live mode connection state changes
         self.adapter.register_live_mode_callback(self._handle_live_mode_change)
+        # skelly_ultra.perform plays through this entity. Registered here, not
+        # at setup, so a disabled entity (never added) isn't used.
+        self.hass.data[DOMAIN][self._entry_id]["live_media_player"] = self
 
     def _handle_live_mode_change(self) -> None:
         """Handle live mode connection state change."""

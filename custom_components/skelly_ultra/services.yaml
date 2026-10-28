@@ -136,3 +136,137 @@ delete_file:
       example: "announcement.mp3"
       selector:
         text:
+
+perform:
+  name: Perform
+  description: Make the Skelly say a line in live mode, with eyes, lights and movement to match a mood. The line is either a literal message or written by an AI Task entity from a prompt (optionally looking at a camera snapshot). Turns live mode on if it is off and leaves it on. Returns status, line, mood, person_present and history; if a perform is already running on this Skelly, returns status busy and does nothing.
+  fields:
+    device_id:
+      name: Device
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+      selector:
+        device:
+          integration: skelly_ultra
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "media_player.skelly_ultra_live_mode_speaker"
+      selector:
+        entity:
+          integration: skelly_ultra
+    message:
+      name: Message
+      description: A literal line to say. Skips the AI. Give either message or prompt.
+      example: "Welcome, mortal!"
+      selector:
+        text:
+          multiline: true
+    prompt:
+      name: Prompt
+      description: Instructions for the AI to write the line, sent as is. The last 10 AI lines for this Skelly are added with a request not to repeat them. Give either message or prompt.
+      example: "You are a cheeky skeleton guarding the front door. Greet whoever is there in one short sentence."
+      selector:
+        text:
+          multiline: true
+    camera_entity:
+      name: Camera
+      description: A camera whose snapshot is attached to the AI request. Needs a prompt. The response then also says whether a person was seen (person_present); the Skelly speaks either way.
+      example: "camera.front_door"
+      selector:
+        entity:
+          domain: camera
+    camera_wait:
+      name: Camera wait
+      description: With a camera, how long to wait for it to publish a new image before sending it to the AI. Snapshot cameras such as ring-mqtt publish the image of what triggered the motion a moment after the motion event, so sending the image right away would show the AI the previous one. Without a new image in time, the current one is used. 0 sends the current image right away. This only helps cameras that update their entity with each new image (such as ring-mqtt); for other cameras set 0 to skip the wait.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
+    ai_task_entity:
+      name: AI Task entity
+      description: The AI Task entity that writes the line. Defaults to the preferred AI Task entity set in Home Assistant.
+      example: "ai_task.openai"
+      selector:
+        entity:
+          domain: ai_task
+    tts_entity:
+      name: Text-to-speech entity
+      description: The TTS entity that speaks the line.
+      required: true
+      example: "tts.elevenlabs"
+      selector:
+        entity:
+          domain: tts
+    tts_options:
+      name: TTS options
+      description: Options for the TTS entity, such as voice.
+      example: '{"voice": "Rachel"}'
+      selector:
+        object:
+    mood:
+      name: Mood
+      description: The look for the line. auto lets the AI pick (needs a prompt), none leaves eyes, lights and movement as they are. Defaults to auto with a prompt and none with a message.
+      example: "spooky"
+      selector:
+        select:
+          options:
+            - auto
+            - none
+            - friendly
+            - spooky
+            - menacing
+            - playful
+            - mysterious
+    movement:
+      name: Movement
+      description: Which body parts move. mood uses the mood's movement, none sends no movement, or pick the parts to move (also works with mood none). Parts the device doesn't have are an error.
+      default:
+        - mood
+      example: "head"
+      selector:
+        select:
+          multiple: true
+          options:
+            - mood
+            - none
+            - all
+            - head
+            - arm
+            - torso
+            - wrist
+            - elbow
+            - eyes
+    restore:
+      name: Restore eyes and lights
+      description: Put the eyes and lights back the way they were after the line.
+      default: true
+      selector:
+        boolean:
+    restore_movement:
+      name: Restore movement
+      description: Send the previous movement setting back after the line. This makes the Skelly move once more, so it is off by default and the movement switches then show the movement perform used.
+      default: false
+      selector:
+        boolean:
+    live_mode_timeout:
+      name: Live mode timeout
+      description: How long to wait for live mode to connect before failing.
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 300
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    wait_until_done:
+      name: Wait until done
+      description: Return only after the line has finished and the look is restored. When off, the action returns as soon as the line starts playing (with the same response), so following actions such as notifications run while the Skelly speaks; the rest continues in the background and a second perform stays busy until it ends.
+      default: true
+      selector:
+        boolean:

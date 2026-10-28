@@ -15,6 +15,7 @@ from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
 from .coordinator import SkellyCoordinator
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
+from .perform import PerformManager, async_remove_perform_history
 from .services import register_services, unregister_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -117,12 +118,16 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         except Exception:
             _LOGGER.exception("Initial data refresh failed, will retry on next update")
 
+    perform_manager = PerformManager(hass, entry.entry_id)
+    await perform_manager.async_load()
+
     # Start initialization in background - don't block setup
     hass.async_create_task(_initialize_device())
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "adapter": adapter,
         "coordinator": coordinator,
+        "perform": perform_manager,
     }
 
     _LOGGER.info("Skelly Ultra integration setup complete for entry %s", entry.entry_id)
@@ -169,3 +174,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         unregister_services(hass)
 
     return True
+
+
+async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Delete data stored for a removed config entry."""
+    await async_remove_perform_history(hass, entry.entry_id)
