@@ -26,8 +26,10 @@ from .const import DOMAIN
 from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg.client import ConnectionLostError
 from .uploads import (
+    FILE_TRANSFERS_KEY,
     async_resolve_audio_source,
     async_upload_audio,
+    async_upload_tts,
     normalize_target_filename,
     remove_temp_files,
     transfer_failed,
@@ -155,6 +157,18 @@ SERVICE_SEND_FILE = vol.Schema(
     }
 )
 
+SERVICE_SEND_FILE_FROM_TTS = vol.Schema(
+    {
+        vol.Optional("device_id"): cv.string,
+        vol.Optional("entity_id"): cv.entity_id,
+        vol.Required("tts_entity"): cv.string,
+        vol.Required("message"): vol.All(cv.string, vol.Strip, vol.Length(min=1)),
+        vol.Optional("target_filename"): vol.Any(None, cv.string),
+        vol.Optional("language"): vol.Any(None, cv.string),
+        vol.Optional("tts_options"): vol.Any(None, dict),
+    }
+)
+
 SERVICE_DELETE_FILE = vol.Schema(
     vol.All(
         {
@@ -246,10 +260,7 @@ async def async_cancel_file_transfer_service(
     adapter, entry_id = result
 
     # Check if there's an active transfer for this entry
-    if "file_transfers" not in hass.data[DOMAIN]:
-        raise HomeAssistantError("No file transfers in progress")
-
-    transfer_manager = hass.data[DOMAIN]["file_transfers"].get(entry_id)
+    transfer_manager = hass.data.get(FILE_TRANSFERS_KEY, {}).get(entry_id)
     if not transfer_manager:
         raise HomeAssistantError(
             f"No file transfer in progress for this device (entry {entry_id})"
@@ -263,7 +274,25 @@ async def async_cancel_file_transfer_service(
     _LOGGER.info("File transfer cancellation requested for entry %s", entry_id)
 
 
-async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
+def _uploaded_file_response(
+    hass: HomeAssistant, entry_id: str, filename: str
+) -> ServiceResponse:
+    """Build the response for an upload action: filename and file index.
+
+    The file list was refreshed after the upload, so the new file's index
+    is known unless the refresh failed, in which case it is None.
+    """
+    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+    file_index = next(
+        (f.file_index for f in coordinator.file_list if f.name == filename),
+        None,
+    )
+    return {"filename": filename, "file_index": file_index}
+
+
+async def async_send_file_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> ServiceResponse:
     """Send audio file to device.
 
     Downloads/processes the file and uploads it to the device.
@@ -271,6 +300,10 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     - Local file path
     - HTTP/HTTPS URL (will be downloaded)
     - Home Assistant media URL (/media/...)
+
+    Returns the filename and file index on the device, so automations can
+    play it next (file_index is None if the file list couldn't be
+    refreshed).
 
     The service accepts either `device_id` or `entity_id`. If neither is
     provided and there is exactly one configured entry for this
@@ -293,9 +326,49 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
         except Exception as exc:
             raise transfer_failed(hass, entry_id, exc) from exc
 
-        await async_upload_audio(hass, adapter, entry_id, local_file, target_filename)
+        filename = await async_upload_audio(
+            hass, adapter, entry_id, local_file, target_filename
+        )
     finally:
         remove_temp_files(temp_files)
+
+    return (
+        _uploaded_file_response(hass, entry_id, filename)
+        if call.return_response
+        else None
+    )
+
+
+async def async_send_file_from_tts_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> ServiceResponse:
+    """Speak a message with a TTS entity and upload it to the device.
+
+    Without target_filename, the filename is built from the message. Returns
+    the filename and file index on the device, so automations can play it
+    next (file_index is None if the file list couldn't be refreshed).
+
+    The service accepts either `device_id` or `entity_id`. If neither is
+    provided and there is exactly one configured entry for this
+    integration, that entry will be used.
+    """
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
+
+    filename = await async_upload_tts(
+        hass,
+        adapter,
+        entry_id,
+        tts_entity=call.data["tts_entity"],
+        message=call.data["message"],
+        target_filename=call.data.get("target_filename") or None,
+        language=call.data.get("language") or None,
+        options=call.data.get("tts_options") or None,
+    )
+    return (
+        _uploaded_file_response(hass, entry_id, filename)
+        if call.return_response
+        else None
+    )
 
 
 async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
@@ -486,7 +559,13 @@ _SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
         "send_file",
         async_send_file_service,
         SERVICE_SEND_FILE,
-        SupportsResponse.NONE,
+        SupportsResponse.OPTIONAL,
+    ),
+    (
+        "send_file_from_tts",
+        async_send_file_from_tts_service,
+        SERVICE_SEND_FILE_FROM_TTS,
+        SupportsResponse.OPTIONAL,
     ),
     (
         "delete_file",

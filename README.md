@@ -678,6 +678,43 @@ data:
 - Supported input formats: MP3, WAV, FLAC, OGG, M4A, and many others
 - Upload progress is displayed in Home Assistant logs
 - Large files may take several minutes to upload over BLE
+- The service returns the filename and file index on the device (use `response_variable`), so a following `play_file` can play the new file right away; see the example under Send File from TTS below
+- `file_path` also accepts text-to-speech media source IDs, such as `media-source://tts/tts.piper?message={{ "Boo!" | urlencode }}&cache=false`, but the Send File from TTS service below is easier to use
+
+#### Send File from TTS Service
+
+Speak a message with any text-to-speech entity (ElevenLabs, OpenAI, Piper, Google, Home Assistant Cloud, ...) and upload the result to the device as a file. The generated audio is not stored in Home Assistant's TTS cache.
+
+```yaml
+service: skelly_ultra.send_file_from_tts
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  tts_entity: tts.elevenlabs
+  message: "Welcome, mortal. Come closer."
+  target_filename: "welcome"  # Optional, .mp3 added automatically
+  language: "en"  # Optional
+  tts_options:  # Optional, engine-specific (ElevenLabs takes a voice ID)
+    voice: "21m00Tcm4TlvDq8ikWAM"
+```
+
+The service returns the filename and file index on the device, so an automation can play it right away:
+
+```yaml
+- action: skelly_ultra.send_file_from_tts
+  data:
+    tts_entity: tts.piper
+    message: "Happy Halloween!"
+  response_variable: upload
+- action: skelly_ultra.play_file
+  data:
+    file_index: "{{ upload.file_index }}"
+```
+
+**Notes**:
+- `file_index` is empty if the file list couldn't be refreshed after the upload (for example while the device is playing); guard the `play_file` step with a condition like `{{ upload.file_index is not none }}` if that can happen
+- Without `target_filename`, the name is built from the message (for example `happy_halloween.mp3`), shortened to fit the device's filename length limit
+- An explicit `target_filename` that is too long is rejected, the same as for Send File
+- Using a filename that already exists on the device replaces that file and keeps its eye, light and movement settings
 
 #### Cancel File Transfer Service
 

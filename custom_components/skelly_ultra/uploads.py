@@ -22,7 +22,7 @@ from typing import Any
 
 import aiohttp
 
-from homeassistant.components import media_source
+from homeassistant.components import media_source, tts
 from homeassistant.components.media_player.browse_media import (
     async_process_play_media_url,
 )
@@ -33,7 +33,7 @@ from homeassistant.components.media_source.const import (
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
-from homeassistant.util import raise_if_invalid_path
+from homeassistant.util import raise_if_invalid_path, slugify
 
 from .const import DOMAIN
 from .helpers import get_device_profile
@@ -52,6 +52,15 @@ _LOGGER = logging.getLogger(__name__)
 # unacknowledged writes the device can drop when sent back-to-back (matches
 # APPLY_ALL_COMMAND_DELAY_MS in the web controller).
 RESTORE_COMMAND_DELAY = 0.04
+
+# hass.data key for the active FileTransferManager of each entry, so that
+# cancel_file_transfer can find it. Kept out of hass.data[DOMAIN], which must
+# only hold per-entry dicts (the single-device fallback in
+# get_adapter_from_service_call counts its keys).
+FILE_TRANSFERS_KEY = f"{DOMAIN}_file_transfers"
+
+# Filename stem used when a TTS message has nothing to build a name from
+DEFAULT_TTS_FILENAME_STEM = "tts"
 
 
 def normalize_target_filename(target_filename: str) -> str:
@@ -138,21 +147,46 @@ async def _async_download_to_temp_file(
     return temp_path
 
 
+async def _async_tts_media_to_temp_file(
+    hass: HomeAssistant, media_id: str, temp_files: list[Path], engine: str
+) -> Path:
+    """Generate the audio for a TTS media source ID into a new temp file.
+
+    The audio is fetched straight from the TTS manager, not over HTTP, so
+    this works without a configured HA URL.
+    """
+    try:
+        extension, data = await tts.async_get_media_source_audio(hass, media_id)
+    except Exception as err:
+        raise HomeAssistantError(f"Text-to-speech with {engine} failed: {err}") from err
+
+    def write() -> Path:
+        temp_fd, temp_name = tempfile.mkstemp(
+            prefix="skelly_tts_", suffix=f".{extension}"
+        )
+        temp_path = Path(temp_name)
+        temp_files.append(temp_path)
+        with os.fdopen(temp_fd, "wb") as file:
+            file.write(data)
+        return temp_path
+
+    return await hass.async_add_executor_job(write)
+
+
 async def _async_resolve_media_source_id(
     hass: HomeAssistant, source: str, temp_files: list[Path]
 ) -> Path:
     """Resolve a media-source:// ID to a local file.
 
     Local media (including files uploaded through the HA media browser)
-    resolves to a filesystem path, which is used directly. Any other media
-    source resolves to a URL, which is signed and downloaded to a temp file.
+    resolves to a filesystem path, which is used directly. Text-to-speech
+    IDs are generated into a temp file. Any other media source resolves to
+    a URL, which is signed and downloaded to a temp file.
     """
     match = MEDIA_SOURCE_URI_SCHEME_REGEX.match(source)
     if match and match["domain"] == "tts":
-        raise HomeAssistantError(
-            "Text-to-speech media can't be uploaded with send_file. "
-            "Use the send_file_from_tts action instead."
-        )
+        engine = (match["identifier"] or "").partition("?")[0] or "text-to-speech"
+        return await _async_tts_media_to_temp_file(hass, source, temp_files, engine)
 
     try:
         media = await media_source.async_resolve_media(hass, source, None)
@@ -230,7 +264,7 @@ async def async_resolve_audio_source(
     - Local file path
     - HTTP/HTTPS URL (downloaded to a temp file)
     - Home Assistant media URL (/media/<dir_id>/...)
-    - Media source ID (media-source://...), except text-to-speech IDs
+    - Media source ID (media-source://...), including text-to-speech IDs
 
     Any temp file created here is appended to `temp_files`. The caller owns
     that list and must pass it to remove_temp_files once the upload is done,
@@ -331,13 +365,13 @@ async def async_upload_audio(
     # Get the transfer progress sensor for this entry
     transfer_sensor = _get_transfer_sensor(hass, entry_id)
 
-    # Create file transfer manager
+    # Create file transfer manager. It is registered for cancellation only
+    # once this upload holds the action lock (see below), so a second upload
+    # waiting for the lock can't take the place of the one transferring.
     transfer_manager = FileTransferManager()
-
-    # Store in hass.data for potential cancellation
-    if "file_transfers" not in hass.data[DOMAIN]:
-        hass.data[DOMAIN]["file_transfers"] = {}
-    hass.data[DOMAIN]["file_transfers"][entry_id] = transfer_manager
+    transfers: dict[str, FileTransferManager] = hass.data.setdefault(
+        FILE_TRANSFERS_KEY, {}
+    )
 
     temp_files: list[Path] = []
 
@@ -385,6 +419,9 @@ async def async_upload_audio(
         # Acquire lock to prevent concurrent coordinator updates during file transfer
         _LOGGER.debug("Acquiring lock for file transfer")
         async with coordinator.action_lock:
+            # Store in hass.data for potential cancellation
+            transfers[entry_id] = transfer_manager
+
             # Upload to device
             _LOGGER.info(
                 "Uploading file to entry %s as %s",
@@ -458,12 +495,78 @@ async def async_upload_audio(
     finally:
         remove_temp_files(temp_files)
 
-        # Remove from tracking
-        if "file_transfers" in hass.data[DOMAIN]:
-            hass.data[DOMAIN]["file_transfers"].pop(entry_id, None)
+        # Remove from tracking, unless another upload has taken over
+        if transfers.get(entry_id) is transfer_manager:
+            del transfers[entry_id]
 
     # Refresh the file list via coordinator
     _LOGGER.debug("Refreshing file list after successful upload")
     await coordinator.async_refresh_file_list()
 
     return target_filename
+
+
+def tts_filename_from_message(message: str) -> str:
+    """Build a device filename from a TTS message.
+
+    The message is slugified (words joined by "_") and the stem is cut so
+    that "<stem>.mp3" fits MAX_FILENAME_LENGTH. Falls back to "tts.mp3" if
+    nothing is left.
+    """
+    max_stem = MAX_FILENAME_LENGTH - len(".mp3")
+    slug = slugify(message, separator="_")
+    # HA's slugify returns "unknown" when nothing in the text can be
+    # transliterated (punctuation only, some scripts)
+    if slug == "unknown" and "unknown" not in message.lower():
+        slug = ""
+    stem = slug[:max_stem].rstrip("_")
+    return f"{stem or DEFAULT_TTS_FILENAME_STEM}.mp3"
+
+
+async def async_upload_tts(
+    hass: HomeAssistant,
+    adapter: Any,
+    entry_id: str,
+    *,
+    tts_entity: str,
+    message: str,
+    target_filename: str | None = None,
+    language: str | None = None,
+    options: dict[str, Any] | None = None,
+) -> str:
+    """Speak a message with a TTS entity and upload it as a device file.
+
+    The audio is never cached by HA's TTS cache. Returns the filename stored
+    on the device.
+    """
+    if target_filename:
+        # Fail before generating any audio if the name is too long
+        target_filename = normalize_target_filename(target_filename)
+    else:
+        target_filename = tts_filename_from_message(message)
+
+    # Raises HomeAssistantError for an unknown engine or invalid language or
+    # options, which is clear enough to pass through as is.
+    media_id = tts.generate_media_source_id(
+        hass,
+        message,
+        engine=tts_entity,
+        language=language,
+        options=options,
+        cache=False,
+    )
+
+    temp_files: list[Path] = []
+    try:
+        try:
+            local_file = await _async_tts_media_to_temp_file(
+                hass, media_id, temp_files, tts_entity
+            )
+        except Exception as exc:
+            raise transfer_failed(hass, entry_id, exc) from exc
+
+        return await async_upload_audio(
+            hass, adapter, entry_id, local_file, target_filename
+        )
+    finally:
+        remove_temp_files(temp_files)
