@@ -66,6 +66,7 @@ GitHub Actions runs the same tests on every push (`.github/workflows/tests.yaml`
 | `test_entities.py` | Lights, eyes, movement, volume, sensors; entities per device model |
 | `test_playback.py` | Playing files on the device; no polling while a file plays |
 | `test_files.py` | Upload, delete, `edit_file`, `set_file_order` |
+| `test_websocket.py` | The `skelly_ultra/files/*` websocket commands for a file manager UI |
 | `test_live_mode.py` | Live mode, `perform`, `send_file_from_tts` |
 | `test_config_flow.py` | Adding a Skelly in the UI |
 | `test_audio_sources.py` | What `send_file` accepts as `file_path`; TTS filenames |

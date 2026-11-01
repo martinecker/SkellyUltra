@@ -814,6 +814,57 @@ file_order:
 - The device must be connected and not playing a file, since the file list can't be read during playback
 - The **File Order** sensor is updated with the new order
 
+#### Websocket API for a File Manager UI
+
+For a dashboard card or panel, two websocket commands return everything needed to show and edit the files on a device. They only read; changes go through the actions above (`send_file`, `edit_file`, `set_file_order`, `delete_file`).
+
+- `skelly_ultra/files/list`: returns the payload once. Pass `refresh: true` to read the file list from the device first (skipped while it's disconnected or playing a file).
+- `skelly_ultra/files/subscribe`: sends the payload right away and again whenever it changes (file list, play order, free storage, availability, upload progress).
+
+Both take `entry_id` or `device_id`, or neither if you have only one Skelly.
+
+```js
+const files = await hass.callWS({ type: "skelly_ultra/files/list", refresh: true });
+const unsub = await hass.connection.subscribeMessage(
+  (payload) => render(payload),
+  { type: "skelly_ultra/files/subscribe" }
+);
+```
+
+The payload:
+
+```yaml
+entry_id: 01J...
+unloaded: false
+available: true
+capacity: {free_kb: 4000, file_count_reported: 3}
+file_order: [3, 1]  # file indices of the enabled files, in play order
+files:
+  - name: hello.mp3
+    file_index: 1
+    cluster: 1010
+    enabled: true
+    movements: [head, torso]  # as edit_file takes them
+    movement_bits: 5
+    eye_icon: 7  # null on Lethal Lily
+    lights:  # as edit_file takes them; effect_speed 0 slowest to 254 fastest
+      - {channel: 0, brightness: 255, effect_mode: 1, effect_speed: 254, rgb: [255, 0, 0], color_cycle: false}
+transfer: {status: uploading, in_progress: true, progress: 42, filename: boo.mp3, error: null}
+device_profile:
+  type: ultra_skelly
+  display_name: Ultra Skelly
+  movements: [all, head, arm, torso]
+  lights: [{channel: 0, label: Torso Light}, {channel: 1, label: Head Light}]
+  light_modes: [Static, Strobe, Pulse]  # effect_mode 1, 2, 3
+  eye_icons:  # empty on Lethal Lily
+    - {value: 1, label: 1 Blue Eyeball, url: /skelly_ultra/eye_icons/skelly/eye_icon_1.png}
+  max_effect_speed: 254
+```
+
+`transfer.status` is `idle`, `uploading`, `complete`, `cancelled` or `error`. The device only reports its free storage, not its total size. `movements` lists only the parts the device profile knows; `movement_bits` is the raw value.
+
+When the integration is reloaded or removed, a subscription gets one last event with `unloaded: true` and then ends. Subscribe again to follow the reloaded device.
+
 #### Automation Example: Play Different Files Based on Time
 
 ```yaml

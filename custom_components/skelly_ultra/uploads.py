@@ -90,17 +90,23 @@ def _get_transfer_sensor(hass: HomeAssistant, entry_id: str) -> Any | None:
 
 
 def transfer_failed(
-    hass: HomeAssistant, entry_id: str, exc: Exception
+    hass: HomeAssistant,
+    entry_id: str,
+    exc: Exception,
+    own_transfer: FileTransferManager | None = None,
 ) -> HomeAssistantError:
     """Report an unexpected upload failure and return the error to raise.
 
     Call this from inside an `except` block (it logs the active traceback),
     then `raise transfer_failed(...) from exc`. Shows the error on the
-    entry's transfer progress sensor.
+    entry's transfer progress sensor, unless another upload is transferring
+    (one other than `own_transfer`, the failing upload's own manager), so
+    a failure before the transfer doesn't overwrite that upload's progress.
     """
     _LOGGER.exception("Unexpected error during file transfer")
     transfer_sensor = _get_transfer_sensor(hass, entry_id)
-    if transfer_sensor:
+    active = hass.data.get(FILE_TRANSFERS_KEY, {}).get(entry_id)
+    if transfer_sensor and (active is None or active is own_transfer):
         transfer_sensor.set_error(str(exc))
     return HomeAssistantError(f"File transfer failed: {exc}")
 
@@ -324,7 +330,7 @@ async def async_upload_audio(
     def progress_callback(sent_chunks: int, total_chunks: int) -> None:
         """Update progress sensor."""
         if transfer_sensor:
-            transfer_sensor.update_progress(sent_chunks, total_chunks)
+            transfer_sensor.update_progress(sent_chunks, total_chunks, target_filename)
 
     try:
         # Get coordinator early to check for bitrate override
@@ -366,6 +372,8 @@ async def async_upload_audio(
         async with coordinator.action_lock:
             # Store in hass.data for potential cancellation
             transfers[entry_id] = transfer_manager
+            if transfer_sensor:
+                transfer_sensor.set_started(target_filename)
 
             # Upload to device
             _LOGGER.info(
@@ -436,7 +444,7 @@ async def async_upload_audio(
             transfer_sensor.set_error(str(exc))
         raise HomeAssistantError(f"File transfer failed: {exc}") from exc
     except Exception as exc:
-        raise transfer_failed(hass, entry_id, exc) from exc
+        raise transfer_failed(hass, entry_id, exc, transfer_manager) from exc
     finally:
         remove_temp_files(temp_files)
 

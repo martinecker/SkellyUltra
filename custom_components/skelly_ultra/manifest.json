@@ -1,6 +1,7 @@
 {
   "domain": "skelly_ultra",
   "name": "Skelly Ultra",
+  "after_dependencies": ["http"],
   "categories": ["media_entertainment.speakers_audio", "lighting"],
   "codeowners": ["@martinecker"],
   "config_flow": true,

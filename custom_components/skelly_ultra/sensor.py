@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 import logging
+import time
+from typing import Any
 
 from homeassistant.components.sensor import (
     SensorDeviceClass,
@@ -19,14 +21,19 @@ from homeassistant.const import (
 )
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info
+from .helpers import files_updated_signal, get_device_info
 
 _LOGGER = logging.getLogger(__name__)
+
+# Most often the transfer progress is signalled to file list subscribers
+# (about 4 times a second)
+TRANSFER_SIGNAL_INTERVAL = 0.25
 
 
 async def async_setup_entry(
@@ -391,8 +398,23 @@ class SkellyPinCodeSensor(CoordinatorEntity, SensorEntity):
         return self.coordinator.data.get("pin_code")
 
 
+def idle_transfer_state() -> dict[str, Any]:
+    """Return the transfer state of an entry with no transfer."""
+    return {
+        "status": "idle",
+        "in_progress": False,
+        "progress": 0,
+        "filename": None,
+        "error": None,
+    }
+
+
 class SkellyFileTransferProgressSensor(SensorEntity):
-    """Sensor showing file transfer progress, errors, and cancellation status."""
+    """Sensor showing file transfer progress, errors, and cancellation status.
+
+    Also keeps the transfer state for the files websocket API (see
+    transfer_state), and signals files_updated_signal when it changes.
+    """
 
     _attr_has_entity_name = True
     _attr_should_poll = False
@@ -410,23 +432,85 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         self._attr_native_value = "Idle"
         self._cancel_timer = None
         self._attr_device_info = device_info
+        self._entry_id = entry_id
+        self._transfer = idle_transfer_state()
+        self._last_progress_signal = 0.0
+
+    @property
+    def transfer_state(self) -> dict[str, Any]:
+        """Return the transfer state: status, in_progress, progress, filename, error."""
+        return dict(self._transfer)
 
     @callback
-    def update_progress(self, sent_chunks: int, total_chunks: int) -> None:
+    def _set_transfer(self, *, signal: bool = True, **changes: Any) -> None:
+        """Update the transfer state and tell file list subscribers."""
+        self._transfer.update(changes)
+        if signal:
+            async_dispatcher_send(self.hass, files_updated_signal(self._entry_id))
+
+    @callback
+    def set_started(self, filename: str) -> None:
+        """Show that an upload of filename is starting."""
+        self._cancel_idle_timer()
+        self._attr_native_value = "Uploading: 0%"
+        self.async_write_ha_state()
+        self._last_progress_signal = time.monotonic()
+        self._set_transfer(
+            status="uploading",
+            in_progress=True,
+            progress=0,
+            filename=filename,
+            error=None,
+        )
+
+    @callback
+    def update_progress(
+        self, sent_chunks: int, total_chunks: int, filename: str | None = None
+    ) -> None:
         """Update progress during file transfer."""
         if total_chunks == 0:
             percentage = 0
         else:
             percentage = int((sent_chunks / total_chunks) * 100)
 
+        self._cancel_idle_timer()
         self._attr_native_value = f"Uploading: {percentage}%"
         self.async_write_ha_state()
+
+        # Throttle the signal, but always send the start and the end
+        now = time.monotonic()
+        starting = not self._transfer["in_progress"]
+        changed = percentage != self._transfer["progress"]
+        signal = starting or (
+            changed
+            and (
+                percentage == 100
+                or now - self._last_progress_signal >= TRANSFER_SIGNAL_INTERVAL
+            )
+        )
+        if signal:
+            self._last_progress_signal = now
+        self._set_transfer(
+            signal=signal,
+            status="uploading",
+            in_progress=True,
+            progress=percentage,
+            filename=filename if filename is not None else self._transfer["filename"],
+            error=None,
+        )
 
     @callback
     def set_error(self, error_message: str) -> None:
         """Set error message and schedule return to idle."""
         self._attr_native_value = f"Error: {error_message}"
         self.async_write_ha_state()
+        if self._transfer["in_progress"]:
+            self._set_transfer(status="error", in_progress=False, error=error_message)
+        else:
+            # Failed before any data was sent: don't show the last transfer's file
+            self._set_transfer(
+                **{**idle_transfer_state(), "status": "error", "error": error_message}
+            )
         self._schedule_idle_return()
 
     @callback
@@ -434,6 +518,10 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         """Set cancelled status and schedule return to idle."""
         self._attr_native_value = "Cancelled"
         self.async_write_ha_state()
+        if self._transfer["in_progress"]:
+            self._set_transfer(status="cancelled", in_progress=False, error=None)
+        else:
+            self._set_transfer(**{**idle_transfer_state(), "status": "cancelled"})
         self._schedule_idle_return()
 
     @callback
@@ -441,6 +529,9 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         """Set complete status and return to idle immediately."""
         self._attr_native_value = "Complete"
         self.async_write_ha_state()
+        self._set_transfer(
+            status="complete", in_progress=False, progress=100, error=None
+        )
         # Return to idle after a short delay
         self._schedule_idle_return(delay=5)
 
@@ -450,6 +541,7 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         self._cancel_idle_timer()
         self._attr_native_value = "Idle"
         self.async_write_ha_state()
+        self._set_transfer(**idle_transfer_state())
 
     def _schedule_idle_return(self, delay: int = 60) -> None:
         """Schedule return to idle state after delay (in seconds)."""

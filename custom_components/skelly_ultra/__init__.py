@@ -17,6 +17,7 @@ from .coordinator import SkellyCoordinator
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .perform import PerformManager, async_remove_perform_history
 from .services import register_services, unregister_services
+from .websocket_api import async_end_file_subscriptions, async_setup_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -136,6 +137,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if len(hass.data[DOMAIN]) == 1:
         register_services(hass)
 
+    # Websocket commands for a file manager UI (registered once per run)
+    await async_setup_websocket_api(hass)
+
     # Forward setup to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -148,6 +152,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return True
 
     data = hass.data[DOMAIN][entry.entry_id]
+
+    # Before anything is torn down, so no update reaches a subscriber mid-unload
+    async_end_file_subscriptions(hass, entry.entry_id)
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:

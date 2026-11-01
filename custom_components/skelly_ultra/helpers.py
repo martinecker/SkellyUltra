@@ -72,6 +72,28 @@ def movement_bits(profile: dict, parts: list[str]) -> int:
     return bits
 
 
+def movement_parts(profile: dict, bits: int) -> list[str]:
+    """Return the profile's movement parts set in a movement bitfield.
+
+    The inverse of movement_bits. A part with bit 255 ("all") is returned
+    alone, and only when the bitfield is exactly 255, as the movement
+    switches do.
+    """
+    movements = profile["movements"]
+    if bits == 255 and any(m["bit"] == 255 for m in movements):
+        return [m["part"] for m in movements if m["bit"] == 255]
+    return [m["part"] for m in movements if m["bit"] != 255 and bits & m["bit"]]
+
+
+def files_updated_signal(entry_id: str) -> str:
+    """Return the dispatcher signal sent when an entry's file state changes.
+
+    Sent by the file transfer progress sensor; the files websocket
+    subscription listens for it next to the coordinator's updates.
+    """
+    return f"{DOMAIN}_files_updated_{entry_id}"
+
+
 def get_eye_icon_path(profile: dict, eye_icon: int) -> Path | None:
     """Return the image path for a 1-based eye icon index, or None if out of range."""
     if not profile.get("eye_icon_folder") or not 1 <= eye_icon <= len(
