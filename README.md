@@ -971,5 +971,7 @@ See [tests/README.md](tests/README.md) for details.
 
 ## 📄 License
 
+Released under the [MIT License](LICENSE).
+
 This integration is provided as-is for use with Ultra Skelly, 12ft Skelly and Lethal Lily devices. Use it at your own risk. It might brick your Skelly.
 

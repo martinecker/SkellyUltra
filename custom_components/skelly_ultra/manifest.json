@@ -1,6 +1,7 @@
 {
   "domain": "skelly_ultra",
   "name": "Skelly Ultra",
+  "categories": ["media_entertainment.speakers_audio", "lighting"],
   "codeowners": ["@martinecker"],
   "config_flow": true,
   "dependencies": ["bluetooth_adapters", "media_source", "tts"],
