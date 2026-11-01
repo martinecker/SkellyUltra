@@ -441,7 +441,7 @@ If a perform is already running on the same device, a second call does nothing a
 
 #### Import the Blueprint
 
-The bundled blueprint handles the *when*: it runs `perform` when a motion sensor, doorbell or event entity fires, with a cooldown and, if you turn them on, only within active hours. Optionally pick one or more buttons (`input_button` or `button` entities) that make the device perform right away, skipping the trigger, active hours and cooldown. *Movement and restore* exposes the action's `movement`, `restore`, `restore_movement` and `live_mode_timeout` fields with the same defaults. The blueprint calls `perform` with `wait_until_done: false`, so the notification actions run while the device speaks.
+The bundled blueprint handles the *when*: it runs `perform` when any of one or more motion sensors, doorbells or event entities fires (binary sensors and event entities can be mixed), with a cooldown and, if you turn them on, only within active hours. Optionally pick one or more buttons (`input_button` or `button` entities) that make the device perform right away, skipping the trigger, active hours and cooldown. *Movement and restore* exposes the action's `movement`, `restore`, `restore_movement` and `live_mode_timeout` fields with the same defaults. The blueprint calls `perform` with `wait_until_done: false`, so the notification actions run while the device speaks.
 
 Under *Notifications*, add any actions to run as the device starts speaking, such as sending the line to phones. `performance.line`, `performance.mood` and `performance.person_present` are available in their templates:
 
@@ -755,6 +755,34 @@ data:
 - `filename` must match a file currently on the device — check the **File Order** sensor or the internal files media player to see what's stored
 - The service refreshes the device's file list before deleting (to resolve the file) and again afterward to confirm the change
 - Deletion is confirmed with the device before the service call returns; an error is raised if the device doesn't confirm within the timeout
+
+#### Edit File Service
+
+Change the movement, eye icon and lights a file uses while it plays. Give the file by `filename`, or by `file_index` and `cluster`. Anything you leave out keeps its current value, and only values that actually change are sent to the device.
+
+```yaml
+service: skelly_ultra.edit_file
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  filename: "welcome.mp3"
+  movements: [head, arm]  # Replaces the current set; [] turns movement off
+  eye_icon: 5  # 1-based, as in the Eye Icon select
+  lights:
+    - channel: 0  # Torso light
+      rgb: [255, 0, 0]
+      effect_mode: Pulse  # Mode name or 1-3
+      effect_speed: 200  # 0 slowest to 254 fastest, like the Effect Speed entities
+    - channel: 1  # Head light
+      brightness: 128
+      color_cycle: true
+```
+
+**Notes**:
+- Movement parts depend on the device: Ultra Skelly has `all`, `head`, `arm`, `torso`; 12ft Skelly has `head`; Lethal Lily has `all`, `wrist`, `elbow`, `head`, `eyes`
+- Light channels: Ultra Skelly has 0 (torso) and 1 (head); 12ft Skelly and Lethal Lily have 0. Light mode names are Static, Strobe, Pulse (Lethal Lily: Flickering, Pulsing, Chasing)
+- Eye icons aren't available on Lethal Lily
+- The file list is refreshed before the edit (to find the file) and after it, if anything changed or a write failed partway
+- The device must be connected and not playing a file, since the file list can't be read during playback
 
 #### Automation Example: Play Different Files Based on Time
 

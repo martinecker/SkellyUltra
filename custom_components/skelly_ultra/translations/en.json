@@ -150,6 +150,44 @@
         }
       }
     },
+    "edit_file": {
+      "name": "Edit file",
+      "description": "Change the movement, eye icon and lights a file on the device uses while it plays. Settings you leave out keep their current values.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
+        "filename": {
+          "name": "Filename",
+          "description": "The name of the file to edit (e.g., 'announcement.mp3'). Mutually exclusive with file_index and cluster."
+        },
+        "file_index": {
+          "name": "File index",
+          "description": "The index of the file, as reported in the file list. Must be used together with cluster. Mutually exclusive with filename."
+        },
+        "cluster": {
+          "name": "Cluster",
+          "description": "The cluster value of the file. Must be used together with file_index. Mutually exclusive with filename."
+        },
+        "movements": {
+          "name": "Movements",
+          "description": "The body parts that move while the file plays, replacing the current set. An empty list turns movement off."
+        },
+        "eye_icon": {
+          "name": "Eye icon",
+          "description": "The 1-based eye icon number, as in the Eye Icon select. Not available on Lethal Lily."
+        },
+        "lights": {
+          "name": "Lights",
+          "description": "A list of light channel settings: channel (required), and optionally brightness (0-255), effect_mode (mode name or 1-3), effect_speed (0 slowest to 254 fastest), rgb ([r, g, b]) and color_cycle. Anything left out keeps its current value."
+        }
+      }
+    },
     "perform": {
       "name": "Perform",
       "description": "Make the device say a line in live mode, with eyes, lights and movement to match a mood. The line is a literal message or written by an AI Task entity from a prompt, optionally looking at a camera snapshot.",

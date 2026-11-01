@@ -275,6 +275,14 @@ class SkellyCoordinator(DataUpdateCoordinator):
             self._async_merge_data({"file_count_received": 0})
 
     @property
+    def playback_active(self) -> bool:
+        """Return True while the device plays an internal file.
+
+        BLE polling and file list refreshes are held off during playback.
+        """
+        return self._playback_active
+
+    @property
     def file_list(self) -> list[Any]:
         """Return the current file list.
 

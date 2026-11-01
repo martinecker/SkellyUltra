@@ -13,7 +13,6 @@ file (for example, generated TTS audio) only need async_upload_audio.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import tempfile
@@ -36,8 +35,8 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import raise_if_invalid_path, slugify
 
 from .const import DOMAIN
+from .file_settings import async_restore_file_settings
 from .helpers import get_device_profile
-from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .skelly_ultra_pkg.file_transfer import (
@@ -47,11 +46,6 @@ from .skelly_ultra_pkg.file_transfer import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Delay between the per-file setting writes in _restore_file_settings. These are
-# unacknowledged writes the device can drop when sent back-to-back (matches
-# APPLY_ALL_COMMAND_DELAY_MS in the web controller).
-RESTORE_COMMAND_DELAY = 0.04
 
 # hass.data key for the active FileTransferManager of each entry, so that
 # cancel_file_transfer can find it. Kept out of hass.data[DOMAIN], which must
@@ -292,55 +286,6 @@ async def async_resolve_audio_source(
     return local_file
 
 
-async def _restore_file_settings(
-    client: Any,
-    profile: dict,
-    cluster: int,
-    filename: str,
-    existing_file: parser.FileInfoEvent,
-) -> None:
-    """Re-send a file's movement/eye/light settings after an overwrite.
-
-    The device resets a file's settings to default on every upload,
-    including an overwrite of an existing file, so callers must capture the
-    file's previous FileInfoEvent before uploading and pass it here right
-    after the transfer completes, using the pre-upload cluster.
-
-    Writes are paced by RESTORE_COMMAND_DELAY, since the device can drop
-    back-to-back writes.
-    """
-
-    async def paced(command) -> None:
-        await command
-        await asyncio.sleep(RESTORE_COMMAND_DELAY)
-
-    await paced(client.set_movement_action(existing_file.action, cluster, filename))
-
-    if profile.get("has_eye_image"):
-        await paced(client.set_eye_icon(existing_file.eye_icon, cluster, filename))
-
-    for light_def in profile.get("lights", []):
-        channel = light_def["channel"]
-        if channel >= len(existing_file.lights):
-            continue
-        light = existing_file.lights[channel]
-
-        await paced(
-            client.set_light_brightness(channel, light.brightness, cluster, filename)
-        )
-        await paced(
-            client.set_light_mode(channel, light.effect_type, cluster, filename)
-        )
-        if light.effect_type != 1:
-            await paced(
-                client.set_light_speed(channel, light.effect_speed, cluster, filename)
-            )
-        r, g, b = light.rgb
-        await paced(
-            client.set_light_rgb(channel, r, g, b, light.color_cycle, cluster, filename)
-        )
-
-
 async def async_upload_audio(
     hass: HomeAssistant,
     adapter: Any,
@@ -453,7 +398,7 @@ async def async_upload_audio(
             # after a file-list refresh) risks the writes getting dropped.
             if existing_file and profile:
                 try:
-                    await _restore_file_settings(
+                    await async_restore_file_settings(
                         adapter.client,
                         profile,
                         existing_file.cluster,

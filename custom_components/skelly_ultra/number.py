@@ -13,7 +13,13 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
-from .helpers import get_device_info, get_device_profile
+from .helpers import (
+    MAX_UI_EFFECT_SPEED,
+    device_speed_to_ui,
+    get_device_info,
+    get_device_profile,
+    ui_speed_to_device,
+)
 from .skelly_ultra_pkg.file_transfer import FileTransferManager
 
 
@@ -155,7 +161,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         self._attr_name = f"{label} Effect Speed"
         self._attr_unique_id = f"{entry_id}_effect_speed_{channel}"
         self._attr_native_min_value = 0
-        self._attr_native_max_value = 254
+        self._attr_native_max_value = MAX_UI_EFFECT_SPEED
         self._attr_native_step = 1
         self._attr_device_info = device_info
 
@@ -176,13 +182,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
                 device_speed = lights[self.channel].get("effect_speed")
                 if device_speed is not None:
                     try:
-                        speed_int = int(device_speed)
-                        # Device speed 255 is fastest (same as 0), map to UI 254
-                        if speed_int == 255:
-                            return 254
-                        # Invert: device 0 (fast) -> UI 254 (fast)
-                        #         device 254 (slow) -> UI 0 (slow)
-                        return 254 - speed_int
+                        return device_speed_to_ui(int(device_speed))
                     except (ValueError, TypeError):
                         return None
         return None
@@ -199,8 +199,7 @@ class SkellyEffectSpeedNumber(CoordinatorEntity, NumberEntity):
         value : float
             Effect speed from UI (0=slow to 254=fast)
         """
-        # Invert the value: UI 0 -> device 254, UI 254 -> device 0
-        device_speed = 254 - int(value)
+        device_speed = ui_speed_to_device(int(value))
 
         try:
             await self.coordinator.adapter.client.set_light_speed(

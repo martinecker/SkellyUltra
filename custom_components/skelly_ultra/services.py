@@ -23,6 +23,7 @@ from homeassistant.helpers import (
 )
 
 from .const import DOMAIN
+from .file_settings import async_edit_file
 from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg.client import ConnectionLostError
 from .uploads import (
@@ -167,6 +168,27 @@ SERVICE_SEND_FILE_FROM_TTS = vol.Schema(
         vol.Optional("language"): vol.Any(None, cv.string),
         vol.Optional("tts_options"): vol.Any(None, dict),
     }
+)
+
+SERVICE_EDIT_FILE = vol.Schema(
+    vol.All(
+        {
+            vol.Optional("device_id"): cv.string,
+            vol.Optional("entity_id"): cv.entity_id,
+            vol.Optional("filename"): cv.string,
+            vol.Optional("file_index"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+            vol.Optional("cluster"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+            vol.Optional("movements"): vol.Any(
+                None, vol.All(cv.ensure_list, [cv.string])
+            ),
+            # Range and type checked against the device profile in file_settings
+            vol.Optional("eye_icon"): vol.Any(None, int, float, str),
+            # Validated against the device profile in file_settings
+            vol.Optional("lights"): vol.Any(None, dict, list),
+        },
+        cv.has_at_least_one_key("filename", "file_index"),
+        cv.has_at_least_one_key("movements", "eye_icon", "lights"),
+    )
 )
 
 SERVICE_DELETE_FILE = vol.Schema(
@@ -371,6 +393,32 @@ async def async_send_file_from_tts_service(
     )
 
 
+async def async_edit_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
+    """Change a file's movement, eye and light settings on the device.
+
+    The file is given by filename, or by file_index and cluster (as for
+    delete_file). Settings left out keep their current values, and only
+    values that differ from the file's current ones are sent.
+
+    The service accepts either `device_id` or `entity_id`. If neither is
+    provided and there is exactly one configured entry for this
+    integration, that entry will be used.
+    """
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
+
+    try:
+        await async_edit_file(hass, adapter, entry_id, dict(call.data))
+    except HomeAssistantError:
+        raise
+    except ConnectionLostError:
+        raise HomeAssistantError(
+            "Lost connection to device while editing the file"
+        ) from None
+    except Exception as exc:
+        _LOGGER.exception("Failed to edit file")
+        raise HomeAssistantError(f"Failed to edit file: {exc}") from exc
+
+
 async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Delete a file from the device.
 
@@ -566,6 +614,12 @@ _SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
         async_send_file_from_tts_service,
         SERVICE_SEND_FILE_FROM_TTS,
         SupportsResponse.OPTIONAL,
+    ),
+    (
+        "edit_file",
+        async_edit_file_service,
+        SERVICE_EDIT_FILE,
+        SupportsResponse.NONE,
     ),
     (
         "delete_file",

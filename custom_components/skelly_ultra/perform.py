@@ -25,7 +25,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, MOOD_LIGHT_SPEEDS, MOODS
-from .helpers import get_device_profile
+from .helpers import get_device_profile, movement_bits
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -40,8 +40,8 @@ HISTORY_SIZE = 10
 HISTORY_STORAGE_VERSION = 1
 
 # Delay between device writes. They are unacknowledged and the device can
-# drop them when sent back-to-back (same as RESTORE_COMMAND_DELAY in
-# uploads.py).
+# drop them when sent back-to-back (same as FILE_SETTING_WRITE_DELAY in
+# file_settings.py).
 COMMAND_DELAY = 0.04
 
 # How often to check whether live mode has connected
@@ -148,21 +148,6 @@ def _eye_icon_index(profile: dict, name: str) -> int | None:
     return None
 
 
-def _movement_bits(profile: dict, parts: list[str]) -> int:
-    """Return the movement bitfield for a list of the profile's parts."""
-    bits_by_part = {m["part"]: m["bit"] for m in profile["movements"]}
-    unknown = [part for part in parts if part not in bits_by_part]
-    if unknown:
-        raise HomeAssistantError(
-            f"Unknown movement part(s) {', '.join(unknown)} for this device; "
-            f"use {', '.join(bits_by_part)}"
-        )
-    bits = 0
-    for part in parts:
-        bits |= bits_by_part[part]
-    return bits
-
-
 class _Perform:
     """One run of the perform action on one Skelly."""
 
@@ -197,7 +182,7 @@ class _Perform:
         movement: list[str] = data["movement"]
         # Check parts before anything is sent to the device
         parts_bits = (
-            _movement_bits(self.profile, movement)
+            movement_bits(self.profile, movement)
             if movement not in ([MOVEMENT_MOOD], [MOVEMENT_NONE])
             else None
         )
@@ -474,7 +459,7 @@ class _Perform:
         if parts_bits is not None:
             new_action: int | None = parts_bits
         elif movement == [MOVEMENT_MOOD] and mood_def:
-            new_action = _movement_bits(
+            new_action = movement_bits(
                 self.profile, self.profile["mood_movements"][mood_def["movement"]]
             )
         else:

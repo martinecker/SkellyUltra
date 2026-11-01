@@ -9,6 +9,7 @@ from typing import Any, cast
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
@@ -36,6 +37,39 @@ def get_device_profile(entry: ConfigEntry) -> dict:
     """Return the DEVICE_PROFILES entry for a config entry, defaulting to Skelly."""
     device_type = entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY)
     return DEVICE_PROFILES.get(device_type, DEVICE_PROFILES[DEVICE_TYPE_SKELLY])
+
+
+# Light effect speed scales. The UI scale (Effect Speed number entities and
+# edit_file) runs from 0 slowest to MAX_UI_EFFECT_SPEED fastest. The device
+# uses the inverse (0 fastest, 254 slowest) and also reports 255 for fastest.
+MAX_UI_EFFECT_SPEED = 254
+
+
+def ui_speed_to_device(speed: int) -> int:
+    """Convert an effect speed from the UI scale to the device's scale."""
+    return MAX_UI_EFFECT_SPEED - speed
+
+
+def device_speed_to_ui(speed: int) -> int:
+    """Convert an effect speed from the device's scale to the UI scale."""
+    if speed >= 255:  # also fastest, like 0
+        return MAX_UI_EFFECT_SPEED
+    return MAX_UI_EFFECT_SPEED - speed
+
+
+def movement_bits(profile: dict, parts: list[str]) -> int:
+    """Return the movement bitfield for a list of the profile's parts."""
+    bits_by_part = {m["part"]: m["bit"] for m in profile["movements"]}
+    unknown = [part for part in parts if part not in bits_by_part]
+    if unknown:
+        raise HomeAssistantError(
+            f"Unknown movement part(s) {', '.join(unknown)} for this device; "
+            f"use {', '.join(bits_by_part)}"
+        )
+    bits = 0
+    for part in parts:
+        bits |= bits_by_part[part]
+    return bits
 
 
 def get_eye_icon_path(profile: dict, eye_icon: int) -> Path | None:
