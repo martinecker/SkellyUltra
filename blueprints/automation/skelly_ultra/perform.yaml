@@ -9,12 +9,14 @@ blueprint:
   source_url: https://github.com/martinecker/SkellyUltra/blob/main/blueprints/automation/skelly_ultra/perform.yaml
   input:
     trigger_entity:
-      name: Trigger
+      name: Triggers
       description: >-
-        A binary sensor (fires when it turns on, such as motion or a doorbell
-        button) or an event entity (fires on each event, such as a doorbell press).
+        One or more motion sensors, doorbells or event entities; each triggers
+        on its own. A binary sensor fires when it turns on, an event entity on
+        each event (such as a doorbell press).
       selector:
         entity:
+          multiple: true
           domain:
             - binary_sensor
             - event
