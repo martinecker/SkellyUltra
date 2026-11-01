@@ -51,6 +51,7 @@ Both devices share these features:
     - File metadata available as entity attributes
     - Select files by name
 - ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
+- 📁 **File management**: Upload files from a path, URL or the media browser (`send_file`) or from any text-to-speech engine (`send_file_from_tts`); change a file's movement, eyes and lights (`edit_file`); choose which files play and in what order (`set_file_order`); delete files; plus a websocket API for a file manager UI
 - 🎭 **Perform action**: The device says a literal or AI-written line (optionally reacting to a camera snapshot) with eyes, lights and movement to match a mood, plus a ready-made blueprint
 
 Ultra Skelly only:

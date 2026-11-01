@@ -50,12 +50,30 @@
   "services": {
     "enable_classic_bt": {
       "name": "Enable classic Bluetooth",
-      "description": "Make the device expose a classic Bluetooth speaker to connect to for live mode."
+      "description": "Make the device expose a classic Bluetooth speaker to connect to for live mode.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        }
+      }
     },
     "play_file": {
       "name": "Play file",
       "description": "Play a file from the device's internal storage by file index.",
       "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
         "file_index": {
           "name": "File index",
           "description": "The 1-based index of the file to play (must be at least 1)."
@@ -66,6 +84,14 @@
       "name": "Stop file",
       "description": "Stop a file that is currently playing on the device by file index.",
       "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
         "file_index": {
           "name": "File index",
           "description": "The 1-based index of the file to stop (must be at least 1)."
@@ -74,12 +100,30 @@
     },
     "cancel_file_transfer": {
       "name": "Cancel file transfer",
-      "description": "Cancel an ongoing file upload to the device."
+      "description": "Cancel an ongoing file upload to the device.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        }
+      }
     },
     "send_file": {
       "name": "Send file",
       "description": "Upload an audio file to the device. The file will be automatically converted to 8kHz mono MP3 format if needed. Supports local files, HTTP/HTTPS URLs, Home Assistant media files (/media/...), and media source IDs (media-source://...). Returns the filename and file index on the device.",
       "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
         "file_path": {
           "name": "File path",
           "description": "Path to the audio file. Can be a local file path, HTTP/HTTPS URL, Home Assistant media path (/media/...), or media source ID (media-source://...), including text-to-speech media."

@@ -1,10 +1,14 @@
 """Live mode: the Skelly as a Bluetooth speaker, and the perform action."""
 
+import tempfile
+from pathlib import Path
+
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.skelly_ultra import perform as perform_module
+from custom_components.skelly_ultra import uploads
 from custom_components.skelly_ultra.const import DOMAIN
 
 from .conftest import advance, entity_id, wait_for
@@ -179,3 +183,28 @@ async def test_send_file_from_tts_voice_failure(
     with pytest.raises(HomeAssistantError, match="Text-to-speech"):
         await tts_upload(hass, message="hi")
     assert len(device.files) == 3
+
+
+async def test_send_file_from_tts_is_not_cached_and_cleans_up(
+    hass, setup_integration, device, tts_entity, tmp_path, monkeypatch
+):
+    """The audio isn't written to HA's TTS cache, and no temp files are left."""
+    temp_dir = tmp_path / "temp"
+    temp_dir.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(temp_dir))
+    converted = []
+    original = uploads.AudioProcessor.process_file
+
+    def spy(path, *args):
+        converted.append(path.name)
+        return original(path, *args)
+
+    monkeypatch.setattr(uploads.AudioProcessor, "process_file", staticmethod(spy))
+
+    await tts_upload(hass, message="Boo")
+
+    assert converted and all(name.endswith(".mp3") for name in converted), converted
+    assert list(temp_dir.iterdir()) == []
+    tts_cache = Path(hass.config.path("tts"))
+    assert not tts_cache.exists() or list(tts_cache.iterdir()) == [], "cache=False"
+    assert device.file("boo.mp3")

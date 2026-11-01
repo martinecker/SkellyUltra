@@ -6,9 +6,15 @@ import subprocess
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.skelly_ultra import file_order, file_settings
-from custom_components.skelly_ultra.const import DOMAIN
+from custom_components.skelly_ultra.const import (
+    CONF_DEVICE_TYPE,
+    DEVICE_TYPE_LILY,
+    DEVICE_TYPE_SKELLY_12FT,
+    DOMAIN,
+)
 
 from .conftest import entity_id
 from .device_sim import Light
@@ -189,6 +195,31 @@ async def test_edit_file_movements_by_part_name(hass, setup_integration, device)
     assert device.file("hello.mp3").action == 255
     await action(hass, "edit_file", filename="hello.mp3", movements=[])
     assert device.file("hello.mp3").action == 0
+
+
+@pytest.mark.parametrize(
+    ("device_type", "parts", "bits"),
+    [
+        (DEVICE_TYPE_SKELLY_12FT, ["head"], 0x02),
+        (DEVICE_TYPE_LILY, ["wrist", "eyes"], 0x21),
+        (DEVICE_TYPE_LILY, ["all"], 255),
+    ],
+)
+async def test_edit_file_movement_bits_follow_device_profile(
+    hass, mock_ble, device_type, parts, bits
+):
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"address": mock_ble.address, CONF_DEVICE_TYPE: device_type},
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    await action(hass, "edit_file", filename="hello.mp3", movements=parts)
+    assert mock_ble.file("hello.mp3").action == bits
+    # Parts of other models are refused
+    with pytest.raises(HomeAssistantError, match="Unknown movement"):
+        await action(hass, "edit_file", filename="hello.mp3", movements=["torso"])
 
 
 async def test_edit_file_sends_nothing_when_unchanged(hass, setup_integration, device):

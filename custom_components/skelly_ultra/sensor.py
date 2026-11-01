@@ -19,7 +19,7 @@ from homeassistant.const import (
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
 )
-from homeassistant.core import HomeAssistant, callback
+from homeassistant.core import HassJob, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
@@ -543,11 +543,18 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         self.async_write_ha_state()
         self._set_transfer(**idle_transfer_state())
 
+    async def async_will_remove_from_hass(self) -> None:
+        """Cancel the pending return to idle."""
+        await super().async_will_remove_from_hass()
+        self._cancel_idle_timer()
+
     def _schedule_idle_return(self, delay: int = 60) -> None:
         """Schedule return to idle state after delay (in seconds)."""
         self._cancel_idle_timer()
         self._cancel_timer = async_call_later(
-            self.hass, timedelta(seconds=delay), self._return_to_idle
+            self.hass,
+            timedelta(seconds=delay),
+            HassJob(self._return_to_idle, cancel_on_shutdown=True),
         )
 
     @callback

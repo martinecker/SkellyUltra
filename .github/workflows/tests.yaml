@@ -10,17 +10,30 @@ permissions:
 
 jobs:
   pytest:
+    name: pytest (HA ${{ matrix.home-assistant }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported release (hacs.json)
+          - home-assistant: "2025.8.0"
+            python-version: "3.13"
+            requirements: requirements_test_min.txt
+          # Latest release tested
+          - home-assistant: "2026.10.4"
+            python-version: "3.14"
+            requirements: requirements_test.txt
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: ${{ matrix.python-version }}
           cache: pip
-          cache-dependency-path: requirements_test.txt
+          cache-dependency-path: ${{ matrix.requirements }}
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y ffmpeg
       - name: Install test dependencies
-        run: pip install -r requirements_test.txt
+        run: pip install -r ${{ matrix.requirements }}
       - name: Run tests
         run: pytest

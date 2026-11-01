@@ -1,0 +1,22 @@
+# Test dependencies for the oldest Home Assistant release the integration
+# supports (hacs.json "homeassistant": 2025.8.0). Needs Python 3.13.
+# pytest-homeassistant-custom-component 0.13.269 = Home Assistant 2025.8.0.
+pytest-homeassistant-custom-component==0.13.269
+
+# Requirements of this integration (manifest.json) and of the HA components it
+# depends on or imports (bluetooth, usb, tts, ffmpeg), as pinned by that HA
+# release.
+bleak==1.0.1
+bleak-retry-connector==4.0.0
+bluetooth-adapters==2.0.0
+bluetooth-auto-recovery==1.5.2
+bluetooth-data-tools==1.28.2
+dbus-fast==2.44.3
+habluetooth==4.0.2
+aiousbwatcher==1.1.1
+pyserial==3.5
+mutagen==1.47.0
+ha-ffmpeg==3.2.2
+pydub>=0.25.1
+# aiohttp 3.12 in this release breaks with pycares 5
+pycares<5

@@ -159,6 +159,45 @@ automation:
           message: "Welcome to my haunted house!"
 ```
 
+### Manage Files on the Device
+
+Upload a file (a local path, a URL, or a `media-source://` ID from the media browser):
+```yaml
+action: skelly_ultra.send_file
+data:
+  file_path: /media/sounds/scream.mp3
+  target_filename: scream.mp3
+```
+
+Have any text-to-speech engine record a line and store it on the device (no Live Mode needed to play it later):
+```yaml
+action: skelly_ultra.send_file_from_tts
+data:
+  tts_entity: tts.piper
+  message: "Welcome to my haunted house!"
+response_variable: uploaded  # {filename, file_index}, ready for play_file
+```
+
+Set what a file does while it plays, and which files play in what order:
+```yaml
+action: skelly_ultra.edit_file
+data:
+  filename: scream.mp3
+  movements: [head, arm]
+  eye_icon: 5
+  lights:
+    - channel: 0
+      rgb: [255, 0, 0]
+      effect_mode: Pulse
+```
+```yaml
+action: skelly_ultra.set_file_order
+data:
+  filenames: [welcome_to_my_haunted_house.mp3, scream.mp3]  # others are disabled
+```
+
+See the [README](README.md) for all fields.
+
 ## 🆘 Troubleshooting
 
 ### Can't find integration after installing?

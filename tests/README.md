@@ -24,14 +24,14 @@ reminder to remove the marker.
 ## Running them
 
 Home Assistant doesn't run on Windows, so on Windows use WSL2 (Ubuntu).
-You need Python 3.13 and ffmpeg (a few upload and perform tests are skipped
+You need Python 3.14 and ffmpeg (a few upload and perform tests are skipped
 without it).
 
 One-time setup, from the repository root:
 
 ```bash
-sudo apt install python3.13 python3.13-venv ffmpeg   # or use uv / deadsnakes
-python3.13 -m venv .venv
+sudo apt install python3.14 python3.14-venv ffmpeg   # or use uv / deadsnakes
+python3.14 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements_test.txt
 ```
@@ -51,11 +51,22 @@ From Windows you can reach the repository in WSL as
 a copy inside the WSL file system.
 
 `requirements_test.txt` pins `pytest-homeassistant-custom-component`, which
-pins one Home Assistant release. To test against a newer Home Assistant,
-bump it (and the component requirements below it, from that release's
-`homeassistant/components/<name>/manifest.json`).
+pins one Home Assistant release: the latest one tested. To test against a
+newer Home Assistant, bump it (and the component requirements below it, from
+that release's `homeassistant/components/<name>/manifest.json`).
 
-GitHub Actions runs the same tests on every push (`.github/workflows/tests.yaml`).
+`requirements_test_min.txt` does the same for the oldest release the
+integration supports (`homeassistant` in `hacs.json`, 2025.8.0), which needs
+Python 3.13. To run against it, make a second venv:
+
+```bash
+python3.13 -m venv .venv-min
+.venv-min/bin/pip install -r requirements_test_min.txt
+.venv-min/bin/pytest
+```
+
+GitHub Actions runs the tests against both on every push
+(`.github/workflows/tests.yaml`).
 
 ## Files
 
