@@ -307,7 +307,23 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         Waits 2 seconds before actually refreshing to allow multiple rapid
         changes to be sent to the device, then polls the final state.
+
+        With force_immediate, refreshes right away and skips both our 3s
+        debounce and the base class debouncer (10s cooldown). It's used where
+        the refresh must not be dropped or held back: the Connected switch
+        (turning it back on within 3s of turning it off) and the re-poll after
+        a poll raced an optimistic update. Polls are serialized by action_lock.
         """
+        if force_immediate:
+            if self._playback_active:
+                self._logger.debug(
+                    "Skipping coordinator refresh - internal file playback in progress"
+                )
+                return
+            self._logger.debug("Refreshing coordinator immediately")
+            await self.async_refresh()
+            return
+
         now = time.monotonic()
         time_since_last = now - self._last_refresh_request
 
@@ -321,21 +337,17 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         self._last_refresh_request = now
 
-        if force_immediate:
-            self._logger.debug("Requesting immediate coordinator refresh")
-        else:
-            self._logger.debug(
-                "Delaying coordinator refresh by 2s to allow changes to settle"
-            )
+        self._logger.debug(
+            "Delaying coordinator refresh by 2s to allow changes to settle"
+        )
 
-            # Wait 2 seconds to give the device time to process the change
-            # and allow any rapid consecutive changes to complete
-            await asyncio.sleep(2.0)
+        # Wait 2 seconds to give the device time to process the change
+        # and allow any rapid consecutive changes to complete
+        await asyncio.sleep(2.0)
 
-            self._logger.debug("Requesting coordinator refresh after delay")
+        self._logger.debug("Requesting coordinator refresh after delay")
 
-        # Playback may have started during the debounce sleep; suppressing here
-        # covers both the immediate and delayed paths.
+        # Playback may have started during the settle delay
         if self._playback_active:
             self._logger.debug(
                 "Skipping coordinator refresh - internal file playback in progress"

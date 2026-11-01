@@ -5,7 +5,6 @@ itself). These tests check what a user sees: entities go unavailable right
 away, come back on their own, and commands still work after a drop.
 """
 
-import pytest
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import ATTR_ENTITY_ID, STATE_UNAVAILABLE, STATE_UNKNOWN
 
@@ -137,23 +136,66 @@ async def test_unresponsive_device_marks_entities_unavailable(
     assert volume_state(hass, entry) == "50"
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known issue: the coordinator ignores refresh requests within 3s of "
-    "the last one, so turning Connected back on right after turning it off "
-    "leaves entities unavailable until the next 30s poll.",
-)
 async def test_connected_switch_quick_off_on(hass, setup_integration, device):
+    """Turning Connected back on right after turning it off brings the
+    entities back at once, showing the device's current state."""
     entry = setup_integration
     switch = entity_id(hass, entry, "switch", "connected")
     await hass.services.async_call(
         "switch", "turn_off", {ATTR_ENTITY_ID: switch}, blocking=True
     )
+    device.volume = 35  # changed in the phone app while HA was off
     await hass.services.async_call(
         "switch", "turn_on", {ATTR_ENTITY_ID: switch}, blocking=True
     )
     await advance(hass, 1)
-    assert volume_state(hass, entry) == "50"
+    assert volume_state(hass, entry) == "35"
+
+
+async def test_change_during_poll_shows_device_value(hass, setup_integration, device):
+    """A change sent while a poll is running is checked against the device
+    right after that poll, not only at the next scheduled one.
+
+    Here the Skelly doesn't apply the second volume change, so HA must go
+    back to what the device really has.
+    """
+    entry = setup_integration
+    volume = entity_id(hass, entry, "number", "volume_number")
+    await advance(hass, 5)
+
+    async def set_volume(value):
+        await hass.services.async_call(
+            "number",
+            "set_value",
+            {ATTR_ENTITY_ID: volume, "value": value},
+            blocking=True,
+        )
+
+    params_query = device._cmd_AAE0
+    volume_write = device._cmd_AAFA
+    armed = False
+
+    def params_query_with_change(p):
+        # While the poll after the first change runs, change the volume again,
+        # and have the device drop that write.
+        nonlocal armed
+        params_query(p)
+        if armed:
+            armed = False
+            device._cmd_AAFA = lambda p: None
+            hass.async_create_task(set_volume(80))
+
+    device._cmd_AAE0 = params_query_with_change
+
+    armed = True
+    await set_volume(70)  # returns after its refresh (2s settle delay) polled
+    await advance(hass, 0)
+    assert not armed  # the second change was sent during that poll
+    device._cmd_AAFA = volume_write
+    await advance(hass, 1)
+
+    assert device.volume == 70
+    assert volume_state(hass, entry) == "70"
 
 
 async def test_device_state_wins_after_reconnect(hass, setup_integration, device):
