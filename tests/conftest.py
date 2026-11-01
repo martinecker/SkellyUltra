@@ -44,6 +44,17 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 
 
 @pytest.fixture(autouse=True)
+def no_real_bluetooth(mock_bleak_scanner_start, mock_bluetooth_adapters):
+    """Keep HA's bluetooth integration off the machine's real Bluetooth stack.
+
+    Where the kernel supports Bluetooth sockets (e.g. GitHub's runners), its
+    setup opens the BlueZ management socket, which the test plugin blocks, so
+    bluetooth and with it skelly_ultra would fail to set up.
+    """
+    return
+
+
+@pytest.fixture(autouse=True)
 def own_config_dir(hass: HomeAssistant, tmp_path):
     """Give each test its own config dir, so files (e.g. TTS cache) don't leak."""
     hass.config.config_dir = str(tmp_path)
