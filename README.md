@@ -25,6 +25,7 @@ There is a companion project that provides a fully web browser-based controller 
   - [🎵 Playing Files Stored on Device (via Services)](#-playing-files-stored-on-device-via-services)
   - [📤 Uploading Audio Files to Device](#-uploading-audio-files-to-device)
 - [🛠️ Troubleshooting](#️-troubleshooting)
+- [🧪 Running the Tests](#-running-the-tests)
 - [📄 License](#-license)
 
 ## ✨ Features
@@ -954,6 +955,19 @@ If the BLE connection is unstable:
 2. **Check REST server logs**: See output from the REST server terminal
 3. **Verify prerequisites**: Ensure PipeWire, bluetoothctl, and all dependencies are installed on the REST server host
 4. **Test manually**: Try connecting and playing audio directly on the REST server host before using Home Assistant
+
+## 🧪 Running the Tests
+
+The tests run the integration in a real Home Assistant against a simulated Skelly, so no device or Bluetooth adapter is needed. With Python 3.13 and ffmpeg (on Windows, inside WSL2):
+
+```bash
+python3.13 -m venv .venv
+. .venv/bin/activate
+pip install -r requirements_test.txt
+pytest
+```
+
+See [tests/README.md](tests/README.md) for details.
 
 ## 📄 License
 

@@ -658,7 +658,7 @@ class SkellyClient:
                                 self._polling_task.cancel()
                             self._discard_pending_events()
                             # Report the drop, so entities go unavailable and
-                            # the cached state is pushed again after the
+                            # are refreshed from the device after the
                             # reconnect (the device may have restarted).
                             self._notify_disconnected()
 

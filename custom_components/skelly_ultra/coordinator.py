@@ -81,9 +81,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._file_list: list[Any] = []
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
-        self._was_connected = False
-        self._pending_state_push = False
-        self._pending_state_push_attempts = 0
         adapter.register_disconnected_handler(self._on_device_disconnected)
         adapter.register_reconnected_callback(self._on_device_reconnected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
@@ -119,7 +116,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
         adapter's background reconnect, so the device doesn't stay away until
         the next poll.
         """
-        self._was_connected = False
         # The device can't still be playing for us; don't let the playback
         # guard keep returning stale data instead of polling.
         self.mark_playback_inactive()
@@ -129,14 +125,19 @@ class SkellyCoordinator(DataUpdateCoordinator):
     def _on_device_reconnected(self) -> None:
         """Poll right away once the connection is back after a drop.
 
-        This makes entities available again and pushes the cached state to
-        the device without waiting for the next scheduled poll.
+        This makes entities available again and shows the device's current
+        state (it may have changed or reset meanwhile) without waiting for the
+        next scheduled poll.
         """
         self.hass.async_create_task(self._async_refresh_after_reconnect())
 
     async def _async_refresh_after_reconnect(self) -> None:
-        # The base class debouncer, not our 3s debounce + 2s settle delay.
-        await super().async_request_refresh()
+        # Refresh directly: the base class debouncer would hold this back for
+        # up to 10s after any recent refresh request (e.g. a volume change
+        # right before the drop), and our own request adds a 3s debounce and
+        # a 2s settle delay. A reconnect happens once per drop, so this can't
+        # flood the device.
+        await self.async_refresh()
 
     def notify_done_initializing(self) -> None:
         """Notifies the coordinator that device initialization started in async_setup_entry is done."""
@@ -363,13 +364,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
         }
 
     async def _async_update_data(self) -> Any:
-        # Logic to ensure we push state to device on first connection or on reconnect after a disconnect
-        if not self._was_connected and self.adapter.client.is_connected:
-            self._pending_state_push = True
-            self._pending_state_push_attempts = 0
-
-        self._was_connected = self.adapter.client.is_connected
-
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
             self._logger.debug("Coordinator updates paused - skipping poll")
@@ -640,26 +634,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
                         self.async_request_refresh(force_immediate=True)
                     )
 
-                if (
-                    not optimistic_update_occurred
-                    and self._pending_state_push
-                    and self.adapter.client.is_connected
-                ):
-                    try:
-                        await self._async_push_state_to_device(result_data)
-                        self._pending_state_push = False
-                        self._pending_state_push_attempts = 0
-                        self._logger.debug(
-                            "Finished pushing coordinator state to device after connection"
-                        )
-                    except Exception:
-                        self._pending_state_push_attempts += 1
-                        self._logger.exception(
-                            "Failed to push coordinator state to device (attempt %d)",
-                            self._pending_state_push_attempts,
-                        )
-                        # Keep pending flag true to retry on the next successful update
-
                 return result_data
 
             except UpdateFailed:
@@ -667,91 +641,3 @@ class SkellyCoordinator(DataUpdateCoordinator):
             except Exception:
                 self._logger.exception("Coordinator update failed")
                 raise UpdateFailed("Failed to update Skelly data") from None
-
-    async def _async_push_state_to_device(self, state: dict[str, Any]) -> None:
-        """Push selected coordinator state back to the device after connection."""
-
-        # Skip if we don't have a connection to write to
-        if not self.adapter.client.is_connected:
-            self._logger.debug("Skipping state push - client not connected")
-            return
-
-        volume = state.get("volume")
-        if volume is not None:
-            try:
-                await self.adapter.client.set_volume(int(volume))
-            except Exception:
-                self._logger.debug("Failed to push volume to device", exc_info=True)
-
-        eye_icon = state.get("eye_icon")
-        if eye_icon is not None:
-            try:
-                await self.adapter.client.set_eye_icon(int(eye_icon))
-            except Exception:
-                self._logger.debug("Failed to push eye icon to device", exc_info=True)
-
-        action = state.get("action")
-        if action is not None:
-            try:
-                await self.adapter.client.set_movement_action(int(action))
-            except Exception:
-                self._logger.debug(
-                    "Failed to push action bitfield to device", exc_info=True
-                )
-
-        lights = state.get("lights") or []
-        for index, light_state in enumerate(lights):
-            if not isinstance(light_state, dict):
-                continue
-
-            rgb = light_state.get("rgb")
-            color_cycle = light_state.get("color_cycle")
-            if rgb is not None:
-                try:
-                    r, g, b = (int(rgb[0]), int(rgb[1]), int(rgb[2]))
-                    await self.adapter.client.set_light_rgb(
-                        index,
-                        r,
-                        g,
-                        b,
-                        int(color_cycle) if color_cycle is not None else 0,
-                    )
-                except Exception:
-                    self._logger.debug(
-                        "Failed to push RGB for light channel %d", index, exc_info=True
-                    )
-
-            brightness = light_state.get("brightness")
-            if brightness is not None:
-                try:
-                    await self.adapter.client.set_light_brightness(
-                        index, int(brightness)
-                    )
-                except Exception:
-                    self._logger.debug(
-                        "Failed to push brightness for light channel %d",
-                        index,
-                        exc_info=True,
-                    )
-
-            effect_type = light_state.get("effect_type")
-            if effect_type is not None:
-                try:
-                    await self.adapter.client.set_light_mode(index, int(effect_type))
-                except Exception:
-                    self._logger.debug(
-                        "Failed to push effect mode for light channel %d",
-                        index,
-                        exc_info=True,
-                    )
-
-            effect_speed = light_state.get("effect_speed")
-            if effect_speed is not None:
-                try:
-                    await self.adapter.client.set_light_speed(index, int(effect_speed))
-                except Exception:
-                    self._logger.debug(
-                        "Failed to push effect speed for light channel %d",
-                        index,
-                        exc_info=True,
-                    )

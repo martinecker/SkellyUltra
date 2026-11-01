@@ -1,0 +1,20 @@
+# Test dependencies for the Skelly Ultra integration.
+# pytest-homeassistant-custom-component pins one Home Assistant release
+# (0.13.316 = Home Assistant 2026.2.3). Bump it to test against a newer HA.
+pytest-homeassistant-custom-component==0.13.316
+
+# Requirements of this integration (manifest.json) and of the HA components it
+# depends on or imports (bluetooth, usb, tts, ffmpeg), as pinned by that HA
+# release.
+bleak==2.1.1
+bleak-retry-connector==4.4.3
+bluetooth-adapters==2.1.0
+bluetooth-auto-recovery==1.5.3
+bluetooth-data-tools==1.28.4
+dbus-fast==3.1.2
+habluetooth==5.8.0
+aiousbwatcher==1.1.1
+pyserial==3.5
+mutagen==1.47.0
+ha-ffmpeg==3.2.2
+pydub>=0.25.1
