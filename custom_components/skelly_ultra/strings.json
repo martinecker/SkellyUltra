@@ -78,11 +78,11 @@
     },
     "send_file": {
       "name": "Send file",
-      "description": "Upload an audio file to the device. The file will be automatically converted to 8kHz mono MP3 format if needed. Supports local files and HTTP/HTTPS URLs, including Home Assistant media files (/media/...).",
+      "description": "Upload an audio file to the device. The file will be automatically converted to 8kHz mono MP3 format if needed. Supports local files, HTTP/HTTPS URLs, Home Assistant media files (/media/...), and media source IDs (media-source://...).",
       "fields": {
         "file_path": {
           "name": "File path",
-          "description": "Path to the audio file. Can be a local file path, HTTP/HTTPS URL, or Home Assistant media path (/media/...)."
+          "description": "Path to the audio file. Can be a local file path, HTTP/HTTPS URL, Home Assistant media path (/media/...), or media source ID (media-source://...). Text-to-speech media isn't supported."
         },
         "target_filename": {
           "name": "Target filename",

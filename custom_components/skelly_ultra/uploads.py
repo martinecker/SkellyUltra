@@ -20,9 +20,20 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+import aiohttp
+
+from homeassistant.components import media_source
+from homeassistant.components.media_player.browse_media import (
+    async_process_play_media_url,
+)
+from homeassistant.components.media_source.const import (
+    URI_SCHEME as MEDIA_SOURCE_URI_SCHEME,
+    URI_SCHEME_REGEX as MEDIA_SOURCE_URI_SCHEME_REGEX,
+)
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.util import raise_if_invalid_path
 
 from .const import DOMAIN
 from .helpers import get_device_profile
@@ -100,6 +111,116 @@ def remove_temp_files(temp_files: list[Path]) -> None:
             _LOGGER.debug("Failed to cleanup temp file: %s", temp_file)
 
 
+async def _async_download_to_temp_file(
+    hass: HomeAssistant, url: str, temp_files: list[Path]
+) -> Path:
+    """Download a URL to a new temp file and return its path."""
+    session = async_get_clientsession(hass)
+
+    temp_fd, temp_name = tempfile.mkstemp()
+    os.close(temp_fd)
+    temp_path = Path(temp_name)
+    temp_files.append(temp_path)
+
+    try:
+        async with session.get(url) as resp:
+            if resp.status != 200:
+                raise HomeAssistantError(f"Failed to download file: HTTP {resp.status}")
+            data = await resp.read()
+    except (aiohttp.ClientError, TimeoutError) as err:
+        raise HomeAssistantError(
+            f"Failed to download file: {type(err).__name__} {err}".rstrip()
+        ) from err
+
+    # Use executor for file write to avoid blocking
+    await hass.async_add_executor_job(temp_path.write_bytes, data)
+
+    return temp_path
+
+
+async def _async_resolve_media_source_id(
+    hass: HomeAssistant, source: str, temp_files: list[Path]
+) -> Path:
+    """Resolve a media-source:// ID to a local file.
+
+    Local media (including files uploaded through the HA media browser)
+    resolves to a filesystem path, which is used directly. Any other media
+    source resolves to a URL, which is signed and downloaded to a temp file.
+    """
+    match = MEDIA_SOURCE_URI_SCHEME_REGEX.match(source)
+    if match and match["domain"] == "tts":
+        raise HomeAssistantError(
+            "Text-to-speech media can't be uploaded with send_file. "
+            "Use the send_file_from_tts action instead."
+        )
+
+    try:
+        media = await media_source.async_resolve_media(hass, source, None)
+    except media_source.MediaSourceError as err:
+        raise HomeAssistantError(f"Could not resolve {source}: {err}") from err
+    except AssertionError as err:
+        # local_source asserts that it can guess a MIME type from the file
+        # extension, so an unknown extension or a folder ends up here.
+        raise HomeAssistantError(
+            f"Could not resolve {source}: not a file, or unsupported file type"
+        ) from err
+    except (AttributeError, KeyError, ValueError) as err:
+        # Malformed IDs such as "media-source://media_source" fail inside
+        # media_source with raw exceptions.
+        raise HomeAssistantError(f"Could not resolve {source}") from err
+
+    # Only audio (or video, for its audio track) can be converted. This also
+    # keeps out camera streams and other endless or non-audio sources.
+    if not media.mime_type.startswith(("audio/", "video/")):
+        raise HomeAssistantError(
+            f"{source} is not audio (media type {media.mime_type})"
+        )
+
+    if media.path is not None:
+        local_file = Path(media.path)
+        if not await hass.async_add_executor_job(local_file.is_file):
+            raise HomeAssistantError(f"Media file not found: {source}")
+        return local_file
+
+    # Sign the URL if it points at this HA instance, so it can be fetched
+    # without an auth header, and make a relative URL absolute. This is the
+    # same processing HA applies before handing media to a media player.
+    url = async_process_play_media_url(hass, media.url)
+
+    _LOGGER.debug("Downloading media source %s", source)
+    return await _async_download_to_temp_file(hass, url, temp_files)
+
+
+def _resolve_media_url_path(hass: HomeAssistant, source: str) -> Path:
+    """Map a /media/<dir_id>/<path> URL to a filesystem path.
+
+    HA serves local media at /media/<dir_id>/<path>, which corresponds to
+    hass.config.media_dirs[dir_id]/<path>.
+    """
+    dir_id, _, location = source[7:].partition("/")  # Remove '/media/'
+    if (base := hass.config.media_dirs.get(dir_id)) is None:
+        media_dirs = ", ".join(hass.config.media_dirs) or "none"
+        raise HomeAssistantError(
+            f'Unknown media directory "{dir_id}" in {source}. Paths starting '
+            "with /media/ must be /media/<media_dir>/<path>, for example "
+            f"/media/local/sounds/boo.mp3 (configured media dirs: {media_dirs})."
+        )
+
+    # Same checks as HA's local media source: no "..", "~" or absolute paths.
+    # Symlinks inside the media dir are allowed, as they are in HA.
+    try:
+        raise_if_invalid_path(location)
+    except ValueError as err:
+        raise HomeAssistantError(f"Invalid media path: {source}") from err
+    if Path(location).is_absolute():
+        raise HomeAssistantError(f"Invalid media path: {source}")
+    local_file = Path(base, location)
+
+    if not local_file.is_file():
+        raise HomeAssistantError(f"Media file not found: {source}")
+    return local_file
+
+
 async def async_resolve_audio_source(
     hass: HomeAssistant, source: str, temp_files: list[Path]
 ) -> Path:
@@ -108,7 +229,8 @@ async def async_resolve_audio_source(
     The source can be:
     - Local file path
     - HTTP/HTTPS URL (downloaded to a temp file)
-    - Home Assistant media URL (/media/...)
+    - Home Assistant media URL (/media/<dir_id>/...)
+    - Media source ID (media-source://...), except text-to-speech IDs
 
     Any temp file created here is appended to `temp_files`. The caller owns
     that list and must pass it to remove_temp_files once the upload is done,
@@ -116,34 +238,18 @@ async def async_resolve_audio_source(
     """
     _LOGGER.info("Processing file for upload: %s", source)
 
+    if source.startswith(MEDIA_SOURCE_URI_SCHEME):
+        return await _async_resolve_media_source_id(hass, source, temp_files)
+
     if source.startswith(("http://", "https://")):
         # Download from URL
         _LOGGER.debug("Downloading file from URL: %s", source)
-        session = async_get_clientsession(hass)
-
-        temp_fd, temp_name = tempfile.mkstemp()
-        os.close(temp_fd)
-        temp_path = Path(temp_name)
-        temp_files.append(temp_path)
-
-        async with session.get(source) as resp:
-            if resp.status != 200:
-                raise HomeAssistantError(f"Failed to download file: HTTP {resp.status}")
-            # Use executor for file write to avoid blocking
-            data = await resp.read()
-            await hass.async_add_executor_job(temp_path.write_bytes, data)
-
-        return temp_path
+        return await _async_download_to_temp_file(hass, source, temp_files)
 
     if source.startswith("/media/"):
-        # HA media file - convert to filesystem path
-        media_path = Path(hass.config.path("media"))
-        relative_path = source[7:]  # Remove '/media/'
-        local_file = media_path / relative_path
-
-        if not local_file.exists():
-            raise HomeAssistantError(f"Media file not found: {source}")
-        return local_file
+        # HA media file - convert to filesystem path. This touches the
+        # filesystem, so run it in the executor.
+        return await hass.async_add_executor_job(_resolve_media_url_path, hass, source)
 
     # Assume local filesystem path
     local_file = Path(source)

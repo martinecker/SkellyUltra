@@ -642,7 +642,8 @@ Upload an audio file to the device. The file will be automatically converted to 
 **Supported file sources**:
 - **Local file paths**: Full paths to files accessible from the Home Assistant container
 - **HTTP/HTTPS URLs**: Download and upload files from the web
-- **Home Assistant media files**: Use `/media/...` paths to reference files in your media folder
+- **Home Assistant media files**: Use `/media/<media_dir>/...` paths, the same URLs HA serves them at (for example, `/media/local/my_audio.ogg` is `my_audio.ogg` in your `local` media folder, usually `/media` or `/config/media`)
+- **Media source IDs**: Use `media-source://...` IDs, such as `media-source://media_source/local/my_audio.ogg`. This also covers files uploaded through the Media panel. Text-to-speech media source IDs are not supported.
 
 ```yaml
 # Upload a local file
@@ -662,6 +663,12 @@ data:
 service: skelly_ultra.send_file
 data:
   file_path: "/media/local/my_audio.ogg"
+  target_filename: "my_audio"
+
+# Upload from a media source ID (for example, a file uploaded in the Media panel)
+service: skelly_ultra.send_file
+data:
+  file_path: "media-source://media_source/local/my_audio.ogg"
   target_filename: "my_audio"
 ```
 
