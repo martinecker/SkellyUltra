@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import functools
 import logging
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -24,27 +21,19 @@ from homeassistant.helpers import (
     device_registry as dr,
     entity_registry as er,
 )
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import DOMAIN
-from .helpers import get_device_profile
 from .perform import SERVICE_PERFORM, async_perform
-from .skelly_ultra_pkg import parser
-from .skelly_ultra_pkg.audio_processor import AudioProcessor
 from .skelly_ultra_pkg.client import ConnectionLostError
-from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
-from .skelly_ultra_pkg.file_transfer import (
-    FileTransferCancelled,
-    FileTransferError,
-    FileTransferManager,
+from .uploads import (
+    async_resolve_audio_source,
+    async_upload_audio,
+    normalize_target_filename,
+    remove_temp_files,
+    transfer_failed,
 )
 
 _LOGGER = logging.getLogger(__name__)
-
-# Delay between the per-file setting writes in _restore_file_settings. These are
-# unacknowledged writes the device can drop when sent back-to-back (matches
-# APPLY_ALL_COMMAND_DELAY_MS in the web controller).
-RESTORE_COMMAND_DELAY = 0.04
 
 
 def get_adapter_from_service_call(
@@ -274,55 +263,6 @@ async def async_cancel_file_transfer_service(
     _LOGGER.info("File transfer cancellation requested for entry %s", entry_id)
 
 
-async def _restore_file_settings(
-    client: any,
-    profile: dict,
-    cluster: int,
-    filename: str,
-    existing_file: parser.FileInfoEvent,
-) -> None:
-    """Re-send a file's movement/eye/light settings after an overwrite.
-
-    The device resets a file's settings to default on every upload,
-    including an overwrite of an existing file, so callers must capture the
-    file's previous FileInfoEvent before uploading and pass it here right
-    after the transfer completes, using the pre-upload cluster.
-
-    Writes are paced by RESTORE_COMMAND_DELAY, since the device can drop
-    back-to-back writes.
-    """
-
-    async def paced(command) -> None:
-        await command
-        await asyncio.sleep(RESTORE_COMMAND_DELAY)
-
-    await paced(client.set_movement_action(existing_file.action, cluster, filename))
-
-    if profile.get("has_eye_image"):
-        await paced(client.set_eye_icon(existing_file.eye_icon, cluster, filename))
-
-    for light_def in profile.get("lights", []):
-        channel = light_def["channel"]
-        if channel >= len(existing_file.lights):
-            continue
-        light = existing_file.lights[channel]
-
-        await paced(
-            client.set_light_brightness(channel, light.brightness, cluster, filename)
-        )
-        await paced(
-            client.set_light_mode(channel, light.effect_type, cluster, filename)
-        )
-        if light.effect_type != 1:
-            await paced(
-                client.set_light_speed(channel, light.effect_speed, cluster, filename)
-            )
-        r, g, b = light.rgb
-        await paced(
-            client.set_light_rgb(channel, r, g, b, light.color_cycle, cluster, filename)
-        )
-
-
 async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Send audio file to device.
 
@@ -340,208 +280,22 @@ async def async_send_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
 
     file_path = call.data["file_path"]
-    target_filename = call.data["target_filename"]
 
-    # AudioProcessor always converts the uploaded audio to MP3 (the device
-    # only plays MP3), so normalize the target filename to match regardless
-    # of what extension, if any, the user provided. Doing this before the
-    # length check below ensures that check validates the filename that will
-    # actually be sent to the device.
-    target_filename = f"{Path(target_filename).stem}.mp3"
+    # Validate the target filename before resolving the source, so a bad
+    # name fails fast instead of after a download. async_upload_audio checks
+    # it again, so other callers can't bypass the check.
+    target_filename = normalize_target_filename(call.data["target_filename"])
 
-    # The device accepts an upload with a filename longer than this, acking
-    # transfer/confirm with failed=0, but then silently never lists the file
-    # afterward. Reject up front instead of failing silently.
-    if len(target_filename) > MAX_FILENAME_LENGTH:
-        raise HomeAssistantError(
-            f'Target filename "{target_filename}" is {len(target_filename)} '
-            f"characters, which exceeds the device's {MAX_FILENAME_LENGTH}-character "
-            "limit. Shorten it and try again."
-        )
-
-    # Get the transfer progress sensor for this entry
-    transfer_sensor = None
-    if entry_id in hass.data[DOMAIN]:
-        transfer_sensor = hass.data[DOMAIN][entry_id].get("transfer_sensor")
-
-    # Create file transfer manager
-    transfer_manager = FileTransferManager()
-
-    # Store in hass.data for potential cancellation
-    if "file_transfers" not in hass.data[DOMAIN]:
-        hass.data[DOMAIN]["file_transfers"] = {}
-    hass.data[DOMAIN]["file_transfers"][entry_id] = transfer_manager
-
-    temp_files = []
-
-    # Define progress callback for sensor updates
-    def progress_callback(sent_chunks: int, total_chunks: int) -> None:
-        """Update progress sensor."""
-        if transfer_sensor:
-            transfer_sensor.update_progress(sent_chunks, total_chunks)
-
+    temp_files: list[Path] = []
     try:
-        # Step 1: Download/get file
-        _LOGGER.info("Processing file for upload: %s", file_path)
+        try:
+            local_file = await async_resolve_audio_source(hass, file_path, temp_files)
+        except Exception as exc:
+            raise transfer_failed(hass, entry_id, exc) from exc
 
-        if file_path.startswith(("http://", "https://")):
-            # Download from URL
-            _LOGGER.debug("Downloading file from URL: %s", file_path)
-            session = async_get_clientsession(hass)
-
-            temp_fd, temp_path = tempfile.mkstemp()
-            os.close(temp_fd)
-            temp_files.append(temp_path)
-
-            async with session.get(file_path) as resp:
-                if resp.status != 200:
-                    raise HomeAssistantError(
-                        f"Failed to download file: HTTP {resp.status}"
-                    )
-                # Use executor for file write to avoid blocking
-                data = await resp.read()
-                await hass.async_add_executor_job(Path(temp_path).write_bytes, data)
-
-            local_file = temp_path
-        elif file_path.startswith("/media/"):
-            # HA media file - convert to filesystem path
-            media_path = Path(hass.config.path("media"))
-            relative_path = file_path[7:]  # Remove '/media/'
-            local_file = str(media_path / relative_path)
-
-            if not Path(local_file).exists():
-                raise HomeAssistantError(f"Media file not found: {file_path}")
-        else:
-            # Assume local filesystem path
-            if not Path(file_path).exists():
-                raise HomeAssistantError(f"File not found: {file_path}")
-            local_file = file_path
-
-        # Get coordinator early to check for bitrate override
-        coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-        if not coordinator:
-            raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
-
-        # If this upload overwrites an existing file, the device resets that
-        # file's movement/eye/light settings to default. Capture them now so
-        # they can be restored right after the new upload lands.
-        existing_file = next(
-            (f for f in coordinator.file_list if f.name == target_filename), None
-        )
-        config_entry = hass.config_entries.async_get_entry(entry_id)
-        profile = get_device_profile(config_entry) if config_entry else None
-
-        # Check if bitrate override is enabled
-        bitrate = None
-        if coordinator.data:
-            override_enabled = coordinator.data.get("override_bitrate", False)
-            if override_enabled:
-                bitrate = coordinator.data.get("bitrate_override")
-                _LOGGER.debug("Using bitrate override: %s", bitrate)
-
-        # Step 2: Process audio to required format (8kHz mono MP3)
-        # Run audio processing in executor to avoid blocking event loop
-        _LOGGER.debug("Processing audio file: %s", local_file)
-        processed_file = await hass.async_add_executor_job(
-            AudioProcessor.process_file, local_file, None, bitrate
-        )
-        if str(processed_file) != local_file:
-            temp_files.append(str(processed_file))
-
-        # Step 3: Read file data using executor to avoid blocking
-        file_data = await hass.async_add_executor_job(Path(processed_file).read_bytes)
-
-        # Acquire lock to prevent concurrent coordinator updates during file transfer
-        _LOGGER.debug("Acquiring lock for file transfer")
-        async with coordinator.action_lock:
-            # Step 4: Upload to device
-            _LOGGER.info(
-                "Uploading file to entry %s as %s",
-                entry_id,
-                target_filename,
-            )
-
-            # Check if chunk size override is enabled
-            override_chunk_size = None
-            if coordinator.data:
-                override_enabled = coordinator.data.get("override_chunk_size", False)
-                if override_enabled:
-                    override_chunk_size = coordinator.data.get("chunk_size_override")
-                    _LOGGER.debug(
-                        "Using chunk size override: %d bytes", override_chunk_size
-                    )
-
-            await transfer_manager.send_file(
-                adapter.client,
-                file_data,
-                target_filename,
-                progress_callback,
-                override_chunk_size,
-            )
-
-            # If this was an overwrite, restore the previous movement/eye/light
-            # settings right away, using the pre-upload cluster - the device
-            # resets them to default on upload, and delaying this (e.g. until
-            # after a file-list refresh) risks the writes getting dropped.
-            if existing_file and profile:
-                try:
-                    await _restore_file_settings(
-                        adapter.client,
-                        profile,
-                        existing_file.cluster,
-                        target_filename,
-                        existing_file,
-                    )
-                    _LOGGER.info(
-                        "Restored previous settings for overwritten file %s",
-                        target_filename,
-                    )
-                except Exception:
-                    _LOGGER.exception(
-                        "Failed to restore settings after overwriting %s",
-                        target_filename,
-                    )
-
-            _LOGGER.info(
-                "Successfully sent file %s to entry %s",
-                target_filename,
-                entry_id,
-            )
-
-            # Update sensor to show completion
-            if transfer_sensor:
-                transfer_sensor.set_complete()
-
-    except FileTransferCancelled:
-        _LOGGER.warning("File transfer was cancelled: %s", target_filename)
-        if transfer_sensor:
-            transfer_sensor.set_cancelled()
-        raise HomeAssistantError("File transfer was cancelled") from None
-    except FileTransferError as exc:
-        _LOGGER.error("File transfer failed: %s", exc)
-        if transfer_sensor:
-            transfer_sensor.set_error(str(exc))
-        raise HomeAssistantError(f"File transfer failed: {exc}") from exc
-    except Exception as exc:
-        _LOGGER.exception("Unexpected error during file transfer")
-        if transfer_sensor:
-            transfer_sensor.set_error(str(exc))
-        raise HomeAssistantError(f"File transfer failed: {exc}") from exc
+        await async_upload_audio(hass, adapter, entry_id, local_file, target_filename)
     finally:
-        # Cleanup temp files
-        for temp_file in temp_files:
-            try:
-                Path(temp_file).unlink(missing_ok=True)
-            except OSError:
-                _LOGGER.debug("Failed to cleanup temp file: %s", temp_file)
-
-        # Remove from tracking
-        if "file_transfers" in hass.data[DOMAIN]:
-            hass.data[DOMAIN]["file_transfers"].pop(entry_id, None)
-
-    # Refresh the file list via coordinator
-    _LOGGER.debug("Refreshing file list after successful upload")
-    await coordinator.async_refresh_file_list()
+        remove_temp_files(temp_files)
 
 
 async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> None:

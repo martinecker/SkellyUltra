@@ -41,7 +41,7 @@ HISTORY_STORAGE_VERSION = 1
 
 # Delay between device writes. They are unacknowledged and the device can
 # drop them when sent back-to-back (same as RESTORE_COMMAND_DELAY in
-# services.py).
+# uploads.py).
 COMMAND_DELAY = 0.04
 
 # How often to check whether live mode has connected
