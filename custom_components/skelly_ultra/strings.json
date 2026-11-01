@@ -188,6 +188,28 @@
         }
       }
     },
+    "set_file_order": {
+      "name": "Set file order",
+      "description": "Choose which files on the device are enabled for playback, and in what order. Files left out are disabled. Give the files by filenames or by file_indices. The device must be connected and not playing a file. Optionally returns the play order the device reports afterwards.",
+      "fields": {
+        "device_id": {
+          "name": "Device ID",
+          "description": "The device registry ID of the device to target."
+        },
+        "entity_id": {
+          "name": "Entity ID",
+          "description": "An entity ID associated with the device. If provided, the device_id will be derived from this entity."
+        },
+        "filenames": {
+          "name": "Filenames",
+          "description": "The names of the files to enable, in play order. At least one is required. Mutually exclusive with file_indices."
+        },
+        "file_indices": {
+          "name": "File indices",
+          "description": "The indices of the files to enable, as reported in the file list, in play order. At least one is required. Mutually exclusive with filenames."
+        }
+      }
+    },
     "perform": {
       "name": "Perform",
       "description": "Make the device say a line in live mode, with eyes, lights and movement to match a mood. The line is a literal message or written by an AI Task entity from a prompt, optionally looking at a camera snapshot.",

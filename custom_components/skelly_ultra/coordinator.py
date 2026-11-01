@@ -274,6 +274,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
             self._file_list = []
             self._async_merge_data({"file_count_received": 0})
 
+    async def async_refresh_file_order(self) -> list[int]:
+        """Fetch the play order from the device and store it.
+
+        Unlike async_refresh_file_list, this only reads the order. The caller
+        must hold action_lock. Errors from the device are passed on.
+        """
+        file_order = await self.adapter.client.get_file_order(timeout=5.0)
+        self._async_merge_data({"file_order": file_order})
+        return file_order
+
     @property
     def playback_active(self) -> bool:
         """Return True while the device plays an internal file.

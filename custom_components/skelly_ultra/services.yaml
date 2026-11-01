@@ -256,6 +256,32 @@ edit_file:
       selector:
         object:
 
+set_file_order:
+  name: Set file order
+  description: Choose which files on the Skelly device are enabled for playback, and in what order. Files left out are disabled. Give the files by filenames or by file_indices. The device must be connected and not playing a file. Optionally returns the play order the device reports afterwards.
+  fields:
+    device_id:
+      name: Device id
+      description: The device registry id of the Skelly device to target
+      example: "1234567890abcdef"
+    entity_id:
+      name: Entity id
+      description: An entity id associated with the device. If provided, the device_id will be derived from this entity
+      example: "sensor.skelly_ultra_volume"
+    filenames:
+      name: Filenames
+      description: The names of the files to enable, in play order. At least one is required. Mutually exclusive with file_indices.
+      example: '["greeting.mp3", "laugh.mp3"]'
+      selector:
+        text:
+          multiple: true
+    file_indices:
+      name: File indices
+      description: The indices of the files to enable, as reported in the file list, in play order. At least one is required. Mutually exclusive with filenames.
+      example: "[3, 1, 2]"
+      selector:
+        object:
+
 perform:
   name: Perform
   description: Make the Skelly say a line in live mode, with eyes, lights and movement to match a mood. The line is either a literal message or written by an AI Task entity from a prompt (optionally looking at a camera snapshot). Turns live mode on if it is off and leaves it on. Returns status, line, mood, person_present and history; if a perform is already running on this Skelly, returns status busy and does nothing.

@@ -334,6 +334,34 @@ def settings_from_edit_request(profile: dict, data: dict[str, Any]) -> FileSetti
     return settings
 
 
+async def async_load_file_list_for_change(
+    adapter: Any, coordinator: Any
+) -> list[parser.FileInfoEvent]:
+    """Refresh the file list before changing files on the device, and return it.
+
+    The caller must hold coordinator.action_lock. Raises if the device isn't
+    connected or is playing a file, since the refresh is skipped in those
+    states and working from a stale list could miss changes, or if the list
+    couldn't be read.
+    """
+    if not adapter.client.is_connected:
+        raise HomeAssistantError("The device is not connected")
+    if coordinator.playback_active:
+        raise HomeAssistantError(
+            "The device is playing a file, so its file list can't be read. "
+            "Try again once playback has stopped."
+        )
+    await coordinator.async_refresh_file_list(lock_held=True)
+    # A failed load leaves an empty list, which shouldn't read as "not found"
+    if not adapter.client.is_connected:
+        raise HomeAssistantError("Lost connection while reading the file list")
+    if not coordinator.file_list:
+        raise HomeAssistantError(
+            "The device reported no files, or its file list couldn't be read"
+        )
+    return coordinator.file_list
+
+
 def _find_file(
     file_list: list[parser.FileInfoEvent],
     filename: str | None,
@@ -394,24 +422,8 @@ async def async_edit_file(
     # Holding the lock keeps coordinator polling and other writes out while
     # the file is looked up and edited.
     async with coordinator.action_lock:
-        # The refresh is skipped in these states, and editing against a stale
-        # file list could skip changes the file needs.
-        if not adapter.client.is_connected:
-            raise HomeAssistantError("The device is not connected")
-        if coordinator.playback_active:
-            raise HomeAssistantError(
-                "The device is playing a file, so its file list can't be read. "
-                "Try again once playback has stopped."
-            )
-        await coordinator.async_refresh_file_list(lock_held=True)
-        # A failed load leaves an empty list, which shouldn't read as "not found"
-        if not adapter.client.is_connected:
-            raise HomeAssistantError("Lost connection while reading the file list")
-        if not coordinator.file_list:
-            raise HomeAssistantError(
-                "The device reported no files, or its file list couldn't be read"
-            )
-        file_info = _find_file(coordinator.file_list, filename, file_index, cluster)
+        file_list = await async_load_file_list_for_change(adapter, coordinator)
+        file_info = _find_file(file_list, filename, file_index, cluster)
 
         current = settings_from_file_info(profile, file_info)
         # Compare speeds even for static lights, where settings_from_file_info

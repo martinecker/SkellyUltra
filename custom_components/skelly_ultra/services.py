@@ -23,6 +23,7 @@ from homeassistant.helpers import (
 )
 
 from .const import DOMAIN
+from .file_order import async_set_file_order
 from .file_settings import async_edit_file
 from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg.client import ConnectionLostError
@@ -188,6 +189,20 @@ SERVICE_EDIT_FILE = vol.Schema(
         },
         cv.has_at_least_one_key("filename", "file_index"),
         cv.has_at_least_one_key("movements", "eye_icon", "lights"),
+    )
+)
+
+SERVICE_SET_FILE_ORDER = vol.Schema(
+    vol.All(
+        {
+            vol.Optional("device_id"): cv.string,
+            vol.Optional("entity_id"): cv.entity_id,
+            vol.Optional("filenames"): vol.All(cv.ensure_list, [cv.string]),
+            vol.Optional("file_indices"): vol.All(
+                cv.ensure_list, [vol.All(vol.Coerce(int), vol.Range(min=0))]
+            ),
+        },
+        cv.has_at_least_one_key("filenames", "file_indices"),
     )
 )
 
@@ -419,6 +434,40 @@ async def async_edit_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
         raise HomeAssistantError(f"Failed to edit file: {exc}") from exc
 
 
+async def async_set_file_order_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> ServiceResponse:
+    """Enable the given files for playback, in the given order.
+
+    The files are given by `filenames` or by `file_indices`. Files left out
+    are disabled. Optionally returns the play order the device reports
+    afterwards.
+
+    The service accepts either `device_id` or `entity_id`. If neither is
+    provided and there is exactly one configured entry for this
+    integration, that entry will be used.
+    """
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
+
+    try:
+        file_order = await async_set_file_order(
+            hass, adapter, entry_id, dict(call.data)
+        )
+    except HomeAssistantError:
+        raise
+    except ConnectionLostError:
+        raise HomeAssistantError(
+            "Lost connection to device while setting the file order"
+        ) from None
+    except Exception as exc:
+        _LOGGER.exception("Failed to set file order")
+        raise HomeAssistantError(f"Failed to set file order: {exc}") from exc
+
+    if not call.return_response:
+        return None
+    return {"file_order": file_order}
+
+
 async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Delete a file from the device.
 
@@ -620,6 +669,12 @@ _SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
         async_edit_file_service,
         SERVICE_EDIT_FILE,
         SupportsResponse.NONE,
+    ),
+    (
+        "set_file_order",
+        async_set_file_order_service,
+        SERVICE_SET_FILE_ORDER,
+        SupportsResponse.OPTIONAL,
     ),
     (
         "delete_file",

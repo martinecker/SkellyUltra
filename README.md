@@ -784,6 +784,35 @@ data:
 - The file list is refreshed before the edit (to find the file) and after it, if anything changed or a write failed partway
 - The device must be connected and not playing a file, since the file list can't be read during playback
 
+#### Set File Order Service
+
+Choose which files are enabled for playback and in what order, like the checkboxes and drag-and-drop in the web controller's file list. Files you leave out are disabled. At least one file must be enabled.
+
+```yaml
+service: skelly_ultra.set_file_order
+data:
+  device_id: <device_id>  # Optional if you have only one device
+  filenames:  # Or file_indices: [3, 1, 2]
+    - greeting.mp3
+    - laugh.mp3
+response_variable: result  # Optional
+```
+
+The optional response holds the play order the device reports afterwards:
+
+```yaml
+file_order:
+  - file_index: 3
+    filename: greeting.mp3
+  - file_index: 1
+    filename: laugh.mp3
+```
+
+**Notes**:
+- Give the files by `filenames` or by `file_indices` (as in the file list), not both, and list each file once
+- The device must be connected and not playing a file, since the file list can't be read during playback
+- The **File Order** sensor is updated with the new order
+
 #### Automation Example: Play Different Files Based on Time
 
 ```yaml
