@@ -419,7 +419,7 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
         async with coordinator.action_lock:
             # Step 1: Refresh file list to ensure accurate info
             _LOGGER.info("Refreshing file list before delete for entry %s", entry_id)
-            await coordinator.async_refresh_file_list()
+            await coordinator.async_refresh_file_list(lock_held=True)
 
             # Step 2: If filename provided, look up file_index and cluster
             if filename:
@@ -499,7 +499,7 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
 
             # Step 4: Refresh file list to reflect the deletion
             _LOGGER.info("Refreshing file list after successful delete")
-            await coordinator.async_refresh_file_list()
+            await coordinator.async_refresh_file_list(lock_held=True)
 
     except ConnectionLostError:
         raise HomeAssistantError(

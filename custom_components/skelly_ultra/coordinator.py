@@ -206,7 +206,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
             )
             self._playback_active = False
 
-    async def async_refresh_file_list(self) -> None:
+    async def async_refresh_file_list(self, *, lock_held: bool = False) -> None:
         """Refresh the list of files from the device.
 
         This method fetches the current file list from the device and stores
@@ -214,6 +214,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
         that need the latest file list information.
 
         Uses action_lock to prevent concurrent execution with coordinator updates.
+        Callers that already hold action_lock must pass lock_held=True, since
+        asyncio.Lock isn't reentrant and acquiring it again would deadlock.
         """
         # Check if we have a connection before attempting to fetch
         if not self.adapter.client.is_connected:
@@ -227,42 +229,50 @@ class SkellyCoordinator(DataUpdateCoordinator):
             )
             return
 
+        if lock_held:
+            await self._async_load_file_list()
+            return
+
         async with self.action_lock:
             self._logger.debug("Acquiring lock for file list refresh")
-            try:
-                self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
-                self._logger.debug("Loaded %d files from device", len(self._file_list))
+            await self._async_load_file_list()
 
-                # Also fetch file order and capacity to get updated device state
-                file_order = await self.adapter.client.get_file_order(timeout=5.0)
-                cap = await self.adapter.client.get_capacity(timeout=5.0)
+    async def _async_load_file_list(self) -> None:
+        """Fetch the file list, order and capacity. Caller holds action_lock."""
+        try:
+            self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
+            self._logger.debug("Loaded %d files from device", len(self._file_list))
 
-                # Extract capacity info
-                capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
-                file_count_reported = getattr(cap, "file_count", None) if cap else None
+            # Also fetch file order and capacity to get updated device state
+            file_order = await self.adapter.client.get_file_order(timeout=5.0)
+            cap = await self.adapter.client.get_capacity(timeout=5.0)
 
-                # Update coordinator data with file list, order, and capacity
-                if self.data:
-                    updated_data = {
-                        **self.data,
-                        "file_count_received": len(self._file_list),
-                        "file_order": file_order,
-                        "capacity_kb": capacity_kb,
-                        "file_count_reported": file_count_reported,
-                    }
-                    self.async_set_updated_data(updated_data)
-            except ConnectionLostError:
-                self._logger.debug("Device disconnected while loading file list")
-                self._file_list = []
-                self._async_merge_data({"file_count_received": 0})
-            except TimeoutError:
-                self._logger.warning("Timeout loading file list from device")
-                self._file_list = []
-                self._async_merge_data({"file_count_received": 0})
-            except Exception:
-                self._logger.exception("Failed to load file list from device")
-                self._file_list = []
-                self._async_merge_data({"file_count_received": 0})
+            # Extract capacity info
+            capacity_kb = getattr(cap, "capacity_kb", None) if cap else None
+            file_count_reported = getattr(cap, "file_count", None) if cap else None
+
+            # Update coordinator data with file list, order, and capacity
+            if self.data:
+                updated_data = {
+                    **self.data,
+                    "file_count_received": len(self._file_list),
+                    "file_order": file_order,
+                    "capacity_kb": capacity_kb,
+                    "file_count_reported": file_count_reported,
+                }
+                self.async_set_updated_data(updated_data)
+        except ConnectionLostError:
+            self._logger.debug("Device disconnected while loading file list")
+            self._file_list = []
+            self._async_merge_data({"file_count_received": 0})
+        except TimeoutError:
+            self._logger.warning("Timeout loading file list from device")
+            self._file_list = []
+            self._async_merge_data({"file_count_received": 0})
+        except Exception:
+            self._logger.exception("Failed to load file list from device")
+            self._file_list = []
+            self._async_merge_data({"file_count_received": 0})
 
     @property
     def file_list(self) -> list[Any]:
