@@ -13,6 +13,12 @@ DEFAULT_SERVER_URL = "http://localhost:8765"
 CONF_SHOW_PANEL = "show_panel"
 DEFAULT_SHOW_PANEL = True
 
+# Options flow: Home Assistant controls the live light, eye and volume settings.
+# On every connect, the last settings HA knew are sent to the device, which
+# can show a different look after a power-up than it reports.
+CONF_HA_CONTROLS_SETTINGS = "ha_controls_settings"
+DEFAULT_HA_CONTROLS_SETTINGS = False
+
 # Device type constants (stored in entry.data[CONF_DEVICE_TYPE])
 CONF_DEVICE_TYPE = "device_type"
 DEVICE_TYPE_SKELLY = "ultra_skelly"

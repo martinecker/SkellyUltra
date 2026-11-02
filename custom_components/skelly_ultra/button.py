@@ -1,4 +1,4 @@
-"""Button platform for triggering Skelly movement."""
+"""Button platform: trigger a movement, push settings, clear perform history."""
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ async def async_setup_entry(
     async_add_entities(
         [
             SkellyTriggerMovementButton(coordinator, entry.entry_id, device_info),
+            SkellyPushSettingsButton(coordinator, entry.entry_id, device_info),
             SkellyClearPerformHistoryButton(
                 data["perform"], entry.entry_id, device_info
             ),
@@ -82,6 +83,45 @@ class SkellyTriggerMovementButton(CoordinatorEntity, ButtonEntity):
                 await self.coordinator.adapter.client.set_movement_action(action)
             except Exception:
                 _LOGGER.exception("Failed to trigger movement")
+
+
+class SkellyPushSettingsButton(CoordinatorEntity, ButtonEntity):
+    """Button that sends HA's light, eye and volume settings to the device.
+
+    The device can show a different look than it reports (e.g. after a
+    power-up) until it gets a write; this sends every setting HA shows,
+    never movement. Works whether or not the ha_controls_settings option,
+    which does the same on every connect, is on.
+    """
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:upload"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the push settings button."""
+        super().__init__(coordinator)
+        self.coordinator = coordinator
+        self._attr_name = "Push Settings to Skelly"
+        self._attr_unique_id = f"{entry_id}_push_settings"
+        self._attr_device_info = device_info
+
+    @property
+    def available(self) -> bool:
+        """Available while the device is connected and has been polled."""
+        return bool(
+            getattr(self.coordinator, "last_update_success", False)
+            and self.coordinator.adapter.client.is_connected
+        )
+
+    async def async_press(self) -> None:
+        """Send the settings; raises HomeAssistantError if that isn't possible."""
+        await self.coordinator.async_push_settings()
 
 
 class SkellyClearPerformHistoryButton(ButtonEntity):

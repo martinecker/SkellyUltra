@@ -9,6 +9,7 @@ a file's settings after an upload overwrote it.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
 import logging
 from typing import Any
@@ -96,6 +97,7 @@ async def async_apply_file_settings(
     cluster: int,
     filename: str,
     settings: FileSettings,
+    keep_going: Callable[[], bool] | None = None,
 ) -> int:
     """Write a file's settings to the device and return the number of writes.
 
@@ -103,16 +105,39 @@ async def async_apply_file_settings(
     the color cycle flag too, so callers that change only one of rgb and
     color_cycle must fill in the other (diff_file_settings does). Writes are
     paced by FILE_SETTING_WRITE_DELAY, since the device can drop back-to-back
-    writes.
+    writes. If keep_going returns False before a write, the rest are skipped.
     """
     writes = 0
 
     async def paced(command) -> None:
         nonlocal writes
+        if keep_going is not None and not keep_going():
+            command.close()
+            raise _WritesStopped
         await command
         writes += 1
         await asyncio.sleep(FILE_SETTING_WRITE_DELAY)
 
+    try:
+        await _async_apply(client, profile, cluster, filename, settings, paced)
+    except _WritesStopped:
+        pass
+    return writes
+
+
+class _WritesStopped(Exception):
+    """keep_going said to stop sending settings."""
+
+
+async def _async_apply(
+    client: Any,
+    profile: dict,
+    cluster: int,
+    filename: str,
+    settings: FileSettings,
+    paced: Callable,
+) -> None:
+    """Send each setting that isn't None through paced()."""
     if settings.action is not None:
         await paced(client.set_movement_action(settings.action, cluster, filename))
 
@@ -141,6 +166,61 @@ async def async_apply_file_settings(
                     channel, r, g, b, light.color_cycle or 0, cluster, filename
                 )
             )
+
+
+LIVE_SETTING_KEYS = ("volume", "eye_icon", "lights")
+
+
+async def async_push_live_settings(
+    client: Any,
+    profile: dict,
+    settings: dict[str, Any],
+    keep_going: Callable[[], bool] | None = None,
+) -> int:
+    """Send live light, eye and volume settings to the device; return the write count.
+
+    settings uses the coordinator's data format: "volume", "eye_icon" and
+    "lights" (a list of per-channel dicts); missing keys and None values are
+    skipped, and only the profile's light channels are sent. If keep_going
+    returns False before a write, the rest are skipped. Every value is written even if
+    the device already reports it: after a power-up the device can show a
+    different look than it reports until it receives a write.
+
+    Movement is never sent, since a movement write starts a move.
+    """
+    lights: dict[int, LightSettings] = {}
+    cached_lights = settings.get("lights") or []
+    for light_def in profile.get("lights", []):
+        channel = light_def["channel"]
+        if channel >= len(cached_lights) or not cached_lights[channel]:
+            continue
+        light = cached_lights[channel]
+        rgb = light.get("rgb")
+        lights[channel] = LightSettings(
+            brightness=light.get("brightness"),
+            effect_type=light.get("effect_type"),
+            # Sent for static lights too, so the speed HA shows survives a
+            # later change to another effect.
+            effect_speed=light.get("effect_speed"),
+            rgb=tuple(rgb) if rgb is not None else None,
+            color_cycle=light.get("color_cycle"),
+        )
+
+    # Cluster 0 with no name addresses the live settings.
+    writes = await async_apply_file_settings(
+        client,
+        profile,
+        0,
+        "",
+        FileSettings(eye_icon=settings.get("eye_icon"), lights=lights),
+        keep_going,
+    )
+
+    volume = settings.get("volume")
+    if volume is not None and (keep_going is None or keep_going()):
+        await client.set_volume(int(volume))
+        writes += 1
+        await asyncio.sleep(FILE_SETTING_WRITE_DELAY)
 
     return writes
 

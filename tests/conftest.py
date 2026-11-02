@@ -118,6 +118,13 @@ def no_settle_delay():
     with (
         patch("custom_components.skelly_ultra.coordinator.asyncio", _FastAsyncio()),
         patch("custom_components.skelly_ultra.coordinator.time", COORDINATOR_TIME),
+        # The pause between setting writes, so a push on connect completes
+        # within advance()
+        patch(
+            "custom_components.skelly_ultra.file_settings.FILE_SETTING_WRITE_DELAY", 0
+        ),
+        # Store's delayed save checks the real loop time, which advance() doesn't move
+        patch("custom_components.skelly_ultra.coordinator.SETTINGS_SAVE_DELAY", 0),
     ):
         yield
 

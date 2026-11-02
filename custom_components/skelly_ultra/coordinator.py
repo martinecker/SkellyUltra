@@ -13,13 +13,16 @@ from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
-from .const import DOMAIN
-from .helpers import DeviceLoggerAdapter
+from .const import CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS, DOMAIN
+from .file_settings import LIVE_SETTING_KEYS, async_push_live_settings
+from .helpers import DeviceLoggerAdapter, get_device_profile
 from .skelly_ultra_pkg.client import ConnectionLostError
 
 
@@ -37,6 +40,49 @@ _LOGGER = logging.getLogger(__name__)
 # duration.
 PLAYBACK_ACTIVE_MARGIN_SECONDS = 10.0
 PLAYBACK_ACTIVE_FALLBACK_SECONDS = 60.0
+
+# The last live light, eye and volume settings HA knew, kept across restarts
+# so they can be sent to the device on connect (ha_controls_settings option).
+SETTINGS_STORAGE_VERSION = 1
+SETTINGS_SAVE_DELAY = 5.0
+
+
+def _settings_store(hass: HomeAssistant, entry_id: str) -> Store:
+    return Store(hass, SETTINGS_STORAGE_VERSION, f"{DOMAIN}.{entry_id}.settings")
+
+
+async def async_remove_settings(hass: HomeAssistant, entry_id: str) -> None:
+    """Delete the stored settings of a removed config entry."""
+    await _settings_store(hass, entry_id).async_remove()
+
+
+def _live_settings(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return the live light, eye and volume settings in data, or None if incomplete."""
+    if not data:
+        return None
+    settings = {key: data.get(key) for key in LIVE_SETTING_KEYS}
+    lights = settings["lights"]
+    if (
+        settings["volume"] is None
+        or not isinstance(lights, list)
+        or not lights
+        or not all(isinstance(light, dict) for light in lights)
+        or all(light.get("brightness") is None for light in lights)
+    ):
+        return None
+    settings["lights"] = [dict(light) for light in lights]
+    return settings
+
+
+def _normalize_settings(settings: dict[str, Any]) -> dict[str, Any]:
+    """Make stored settings compare equal to the coordinator's (JSON has no tuples)."""
+    lights = []
+    for light in settings.get("lights") or []:
+        light = dict(light)
+        if light.get("rgb") is not None:
+            light["rgb"] = tuple(light["rgb"])
+        lights.append(light)
+    return {**settings, "lights": lights}
 
 
 class SkellyCoordinator(DataUpdateCoordinator):
@@ -66,6 +112,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=30),
         )
         self.adapter = adapter
+        self._entry = entry
+        self._profile = get_device_profile(entry)
         self.action_lock = asyncio.Lock()
         self.device_info = device_info
         self._logger = device_logger or DeviceLoggerAdapter(
@@ -81,8 +129,24 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._file_list: list[Any] = []
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
+        # Last live settings HA knew (see async_load_settings), and the
+        # settings last pushed, which the next poll checks.
+        self._settings_store = _settings_store(hass, entry.entry_id)
+        self._known_settings: dict[str, Any] | None = None
+        self._settings_save_pending = False
+        self._push_to_verify: dict[str, Any] | None = None
+        # Bumped only by changes made in HA (async_update_data_optimistic),
+        # unlike _data_counters, which every poll bumps too.
+        self._ha_changes: dict[str, int] = {}
+        self._push_counters: dict[str, int] = {}
+        self._push_stop_count = 0
+        self._push_retried = False
+        # A push on connect held back by playback, sent once it ends.
+        self._push_after_playback = False
+        self._closing = False
         adapter.register_disconnected_handler(self._on_device_disconnected)
         adapter.register_reconnected_callback(self._on_device_reconnected)
+        adapter.register_connected_hook(self._async_on_connected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
 
     def async_update_data_optimistic(self, key: str, value: Any) -> None:
@@ -92,6 +156,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         and want to update the state immediately without waiting for the next poll.
         """
         self._data_counters[key] = self._data_counters.get(key, 0) + 1
+        self._ha_changes[key] = self._ha_changes.get(key, 0) + 1
 
         new_data = dict(self.data or {})
         new_data[key] = value
@@ -108,6 +173,263 @@ class SkellyCoordinator(DataUpdateCoordinator):
             self.data = {**self.data, **updates}
             self.async_update_listeners()
 
+    async def async_load_settings(self) -> None:
+        """Load the live settings HA last knew; call before the first connect."""
+        stored = await self._settings_store.async_load()
+        if isinstance(stored, dict) and _live_settings(stored) is not None:
+            self._known_settings = _normalize_settings(stored)
+
+    @property
+    def ha_controls_settings(self) -> bool:
+        """Return True if HA's settings are sent to the device on connect."""
+        return self._entry.options.get(
+            CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS
+        )
+
+    @callback
+    def async_update_listeners(self) -> None:
+        """Update entities, and remember changed live settings for the next connect."""
+        super().async_update_listeners()
+        settings = _live_settings(self.data)
+        if settings is not None and settings != self._known_settings:
+            self._known_settings = settings
+            self._settings_save_pending = True
+            self._settings_store.async_delay_save(
+                lambda: self._known_settings, SETTINGS_SAVE_DELAY
+            )
+
+    @property
+    def known_settings(self) -> dict[str, Any] | None:
+        """Return the live light, eye and volume settings HA knows, if any."""
+        return _live_settings(self.data) or self._known_settings
+
+    async def _async_on_connected(self) -> None:
+        """Send HA's settings after every connect if HA controls them.
+
+        Runs inside the adapter's connect, before the first poll and before
+        any command that triggered the reconnect.
+        """
+        # A check left over from before a disconnect() (no poll ran since)
+        # would compare against a device that may have changed meanwhile.
+        self._push_to_verify = None
+        if self._closing or not self.ha_controls_settings:
+            return
+        settings = self.known_settings
+        if settings is None:
+            self._logger.debug("No known settings yet - nothing to send on connect")
+            return
+        if self._playback_active:
+            self._logger.debug("Playback in progress - sending settings once it ends")
+            self._push_after_playback = True
+            return
+        # Take action_lock when it's free, so no poll runs between the writes.
+        # When it's held, the holder may be waiting for this very reconnect.
+        if self.action_lock.locked():
+            await self._async_push_settings(settings)
+        else:
+            async with self.action_lock:
+                await self._async_push_settings(settings)
+
+    def _counters(self) -> dict[str, int]:
+        return {key: self._ha_changes.get(key, 0) for key in LIVE_SETTING_KEYS}
+
+    async def _async_push_settings(
+        self, settings: dict[str, Any], *, retry: bool = False
+    ) -> None:
+        """Send settings to the device and have the next poll check them.
+
+        settings may hold only some of the live setting keys. Entity commands
+        don't take action_lock, so a setting can change in HA while this
+        runs; the device may then have got the older value after the newer
+        one, so HA's current value is sent once more.
+
+        Stops between writes when disconnect() runs meanwhile (Connected
+        switch off, unload); in proxy mode the client still looks connected
+        then.
+        """
+        stops = self.adapter.stop_count
+
+        def keep_going() -> bool:
+            return self.adapter.stop_count == stops
+
+        counters = self._counters()
+        writes = await async_push_live_settings(
+            self.adapter.client, self._profile, settings, keep_going
+        )
+        changed = {
+            key: self.data[key]
+            for key in settings
+            if self.data and self._ha_changes.get(key, 0) != counters[key]
+        }
+        if changed:
+            counters.update(self._counters())
+            writes += await async_push_live_settings(
+                self.adapter.client, self._profile, changed, keep_going
+            )
+            settings = {**settings, **changed}
+        self._logger.debug("Sent %d live settings to the device", writes)
+        if not keep_going():
+            return  # disconnecting: nothing to check
+        # Only what HA still shows: a change during the second round is
+        # newer than anything sent, and its own command sent it.
+        unchanged = {
+            key: value
+            for key, value in settings.items()
+            if self._ha_changes.get(key, 0) == counters[key]
+        }
+        self._push_to_verify = unchanged
+        self._push_counters = counters
+        self._push_stop_count = stops
+        self._push_retried = retry
+        self._async_merge_data(unchanged)
+
+    async def async_push_settings(self) -> None:
+        """Send HA's live light, eye and volume settings to the device now.
+
+        For the Push Settings button. Raises HomeAssistantError when there is
+        nothing to send, the device isn't connected or plays a file.
+        """
+        settings = self.known_settings
+        if settings is None:
+            raise HomeAssistantError("No Skelly settings known yet to send")
+        if not self.adapter.client.is_connected:
+            raise HomeAssistantError("Skelly is not connected")
+        if self._playback_active:
+            raise HomeAssistantError(
+                "Skelly is playing a file; try again when it has ended"
+            )
+        async with self.action_lock:
+            try:
+                await self._async_push_settings(self.known_settings or settings)
+            except Exception as ex:
+                raise HomeAssistantError(f"Failed to send settings: {ex}") from ex
+        await self.async_request_refresh(force_immediate=True)
+
+    def _verify_pushed_settings(self, data: dict[str, Any]) -> None:
+        """Check a poll against the settings last pushed; called inside the poll.
+
+        A dropped write would otherwise teach HA the device's wrong value. On
+        a mismatch the pushed values are kept and sent once more; if the
+        device still differs after that, its values are taken.
+        """
+        pushed = self._push_to_verify
+        self._push_to_verify = None
+        # disconnect() started since the push (e.g. while this poll ran)
+        if pushed is None or self.adapter.stop_count != self._push_stop_count:
+            return
+        polled = {key: data.get(key) for key in LIVE_SETTING_KEYS}
+        mismatched = [
+            key
+            for key in pushed
+            # Changed in HA since the push (e.g. by the command that caused
+            # the reconnect): the device has the newer value, not a dropped write.
+            if self._ha_changes.get(key, 0) == self._push_counters.get(key, 0)
+            and self._differs(key, pushed, polled)
+        ]
+        if not mismatched:
+            return
+        if self._push_retried:
+            self._logger.warning(
+                "Device still reports different %s than sent; using the device's",
+                ", ".join(mismatched),
+            )
+            return
+        self._logger.debug(
+            "Device reports different %s than sent; sending again",
+            ", ".join(mismatched),
+        )
+        for key in mismatched:
+            data[key] = pushed[key]
+        self._start_push_task(mismatched, retry=True)
+
+    def _differs(
+        self, key: str, pushed: dict[str, Any], polled: dict[str, Any]
+    ) -> bool:
+        """Return True if a polled setting differs from what was pushed."""
+        if pushed.get(key) is None:
+            return False
+        if key == "eye_icon" and not self._profile.get("has_eye_image"):
+            return False  # not sent
+        if key != "lights":
+            return pushed[key] != polled[key]
+        polled_lights = polled["lights"] or []
+        for light_def in self._profile.get("lights", []):
+            channel = light_def["channel"]
+            if channel >= len(pushed["lights"]):
+                continue
+            want = pushed["lights"][channel]
+            have = polled_lights[channel] if channel < len(polled_lights) else {}
+            if any(
+                value is not None and have.get(field) != value
+                for field, value in want.items()
+            ):
+                return True
+        return False
+
+    def _start_push_task(self, keys: list[str], *, retry: bool) -> None:
+        """Send some live settings in the background (ended by an unload)."""
+        self._entry.async_create_background_task(
+            self.hass,
+            self._async_push_keys(keys, retry=retry),
+            f"skelly_ultra push settings {self._entry.entry_id}",
+        )
+
+    async def _async_push_keys(self, keys: list[str], *, retry: bool) -> None:
+        """Send HA's current values of some live settings, then poll to check them.
+
+        retry: a resend after a poll reported other values (checked once
+        more, then the device's values are taken). Otherwise the push held
+        back while a file played.
+        """
+        if self._closing or not self.adapter.client.is_connected:
+            return
+        if not retry and not self.ha_controls_settings:
+            return
+        async with self.action_lock:
+            if self._closing or not self.adapter.client.is_connected:
+                return
+            if self._playback_active:
+                if not retry:
+                    self._push_after_playback = True
+                return
+            settings = self.known_settings
+            if settings is None:
+                return
+            try:
+                await self._async_push_settings(
+                    {key: settings[key] for key in keys}, retry=retry
+                )
+            except Exception:
+                self._logger.debug("Failed to send settings", exc_info=True)
+                return
+        await self.async_request_refresh(force_immediate=True)
+
+    def _on_playback_ended(self) -> None:
+        if self._push_after_playback and not self._closing:
+            self._push_after_playback = False
+            self._start_push_task(list(LIVE_SETTING_KEYS), retry=False)
+
+    def async_stop_settings_push(self) -> None:
+        """Send no more settings; call when the entry starts to unload."""
+        self._closing = True
+        self._push_to_verify = None
+
+    def async_resume_settings_push(self) -> None:
+        """Undo async_stop_settings_push() after an unload failed."""
+        self._closing = False
+        if not self._playback_active:
+            self._on_playback_ended()  # a push held back meanwhile
+
+    async def async_flush_settings(self) -> None:
+        """Write a pending delayed save now; call on unload.
+
+        A delayed save still pending when the entry is removed would write
+        the file again after async_remove_settings deleted it.
+        """
+        if self._settings_save_pending and self._known_settings is not None:
+            self._settings_save_pending = False
+            await self._settings_store.async_save(self._known_settings)
+
     def _on_device_disconnected(self) -> None:
         """Mark entities unavailable as soon as the BLE link drops.
 
@@ -117,7 +439,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
         the next poll.
         """
         # The device can't still be playing for us; don't let the playback
-        # guard keep returning stale data instead of polling.
+        # guard keep returning stale data instead of polling. A push held
+        # back by playback is made by the next connect instead.
+        self._push_after_playback = False
+        self._push_to_verify = None
         self.mark_playback_inactive()
         self.async_set_update_error(UpdateFailed("Device disconnected"))
         self.adapter.start_reconnect_loop()
@@ -196,6 +521,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         if self._playback_active:
             self._playback_active = False
             self._logger.debug("Playback ended - resuming device polling")
+            self._on_playback_ended()
 
     def _on_playback_active_timeout(self) -> None:
         """Force-resume polling if no 'playback stopped' event arrived in time."""
@@ -206,6 +532,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 "resuming device polling"
             )
             self._playback_active = False
+            self._on_playback_ended()
 
     async def async_refresh_file_list(self, *, lock_held: bool = False) -> None:
         """Refresh the list of files from the device.
@@ -605,6 +932,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     ],
                 }
                 self._logger.debug("Coordinator fetched data: %s", data)
+                self._verify_pushed_settings(data)
 
                 # On initial update, also fetch the file list
                 if not self._initial_update_done:

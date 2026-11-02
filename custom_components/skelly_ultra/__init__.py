@@ -13,7 +13,7 @@ from homeassistant.core import HomeAssistant
 
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
-from .coordinator import SkellyCoordinator
+from .coordinator import SkellyCoordinator, async_remove_settings
 from .frontend import async_setup_frontend, async_update_panel
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .perform import PerformManager, async_remove_perform_history
@@ -73,6 +73,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_info,
         device_logger,
     )
+
+    # Before the first connect, which may send these settings to the device
+    await coordinator.async_load_settings()
 
     # Check if Connected switch is on (defaults to True)
     is_connected = options.get("connected", True)
@@ -161,9 +164,12 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Before anything is torn down, so no update reaches a subscriber mid-unload
     async_end_file_subscriptions(hass, entry.entry_id)
+    # Removing the media players ends playback, which would send settings held back
+    data["coordinator"].async_stop_settings_push()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
+        data["coordinator"].async_resume_settings_push()
         return False
 
     hass.data[DOMAIN].pop(entry.entry_id)
@@ -181,6 +187,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await data["adapter"].disconnect()
     except Exception:
         _LOGGER.debug("Failed to disconnect BLE client during unload", exc_info=True)
+
+    # Before a removal deletes the file, so a delayed save can't recreate it
+    await data["coordinator"].async_flush_settings()
 
     # If there are no more entries for this domain, remove the services
     if not hass.data[DOMAIN]:
@@ -200,3 +209,4 @@ async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> Non
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     """Delete data stored for a removed config entry."""
     await async_remove_perform_history(hass, entry.entry_id)
+    await async_remove_settings(hass, entry.entry_id)

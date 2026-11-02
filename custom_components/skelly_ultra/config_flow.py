@@ -17,9 +17,11 @@ from homeassistant.core import callback
 from .const import (
     ALL_BLE_NAME_FILTERS,
     CONF_DEVICE_TYPE,
+    CONF_HA_CONTROLS_SETTINGS,
     CONF_SERVER_URL,
     CONF_SHOW_PANEL,
     CONF_USE_BLE_PROXY,
+    DEFAULT_HA_CONTROLS_SETTINGS,
     DEFAULT_SERVER_URL,
     DEFAULT_SHOW_PANEL,
     DEVICE_PROFILES,
@@ -483,7 +485,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
 
 class SkellyOptionsFlow(config_entries.OptionsFlow):
-    """Options for a Skelly: whether it shows the Skelly sidebar panel."""
+    """Options for a Skelly: the sidebar panel, and whether HA controls its settings."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None):
         """Show the options form, then save it."""
@@ -499,6 +501,12 @@ class SkellyOptionsFlow(config_entries.OptionsFlow):
                     CONF_SHOW_PANEL,
                     default=self.config_entry.options.get(
                         CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL
+                    ),
+                ): bool,
+                vol.Required(
+                    CONF_HA_CONTROLS_SETTINGS,
+                    default=self.config_entry.options.get(
+                        CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS
                     ),
                 ): bool,
             }

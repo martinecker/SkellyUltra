@@ -100,6 +100,8 @@ class SkellyClientAdapter:
         # callback so the coordinator can refresh right away.
         self._recovering = False
         self._reconnected_callback: Callable[[], None] | None = None
+        # Awaited after every successful connect, before connect() returns.
+        self._connected_hook: Callable[[], Awaitable[None]] | None = None
         self._client.register_reconnect_handler(self._reconnect_for_command)
 
     def register_disconnected_handler(self, handler: Callable[[], None]) -> None:
@@ -114,6 +116,18 @@ class SkellyClientAdapter:
         """Register a callback for when the connection is back after a drop."""
         self._reconnected_callback = callback
 
+    def register_connected_hook(self, hook: Callable[[], Awaitable[None]]) -> None:
+        """Register a coroutine to await after every successful connect.
+
+        It runs for every connect (setup, Connected switch, background and
+        command reconnects), while the connect lock is held and before
+        connect() returns, so a command that triggered the reconnect is sent
+        after it and the first poll sees what it wrote. A command it sends on
+        a link that dropped again fails instead of reconnecting. Errors are
+        logged, not raised.
+        """
+        self._connected_hook = hook
+
     def enable_auto_reconnect(self) -> None:
         """Reconnect automatically from now on, even if the next connect() fails.
 
@@ -123,6 +137,16 @@ class SkellyClientAdapter:
         the Connected switch doesn't leave the device reconnecting on its own.
         """
         self._auto_reconnect = True
+
+    @property
+    def stop_count(self) -> int:
+        """Return how often automatic reconnects were stopped (disconnect() too).
+
+        A change tells work started earlier that the device is being
+        disconnected, also in proxy mode, where the client still looks
+        connected while disconnect() runs.
+        """
+        return self._stops
 
     @property
     def is_reconnecting(self) -> bool:
@@ -521,6 +545,16 @@ class SkellyClientAdapter:
                     except Exception:
                         self._logger.exception("Failed to enable classic Bluetooth")
                     # The link can drop again during enable_classic_bt.
+                    connected = self._client.is_connected
+                if (
+                    connected
+                    and self._connected_hook is not None
+                    and self._stops == stops
+                ):
+                    try:
+                        await self._connected_hook()
+                    except Exception:
+                        self._logger.exception("Error in connected hook")
                     connected = self._client.is_connected
             except Exception:
                 self._logger.exception("Unexpected error while connecting")

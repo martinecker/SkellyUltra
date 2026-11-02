@@ -38,7 +38,7 @@ Both devices share these features:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect per light channel)
   - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
-- 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches), Clear Perform History
+- 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches), Push Settings to Skelly, Clear Perform History
 - 🎚️ **Number entities**: Volume control, effect speed per light channel
 - 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
 - 🎵 **Media Player entities**:
@@ -315,6 +315,7 @@ The integration creates different entities depending on which device type you co
 - **Signal strength sensors** (diagnostic): RSSI of the live-mode classic link (in dB relative to the controller's golden receive range, 0 = good) and, in BLE proxy mode, of the BLE link (in dBm). Both are read by the REST server, which needs to run as root or in the privileged Docker container for this. Not available for direct BLE connections, since Home Assistant's Bluetooth stack doesn't report RSSI for connected devices
 - **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Bitrate
 - **Numbers**: Volume, Override Chunk Size Value
+- **Buttons**: Trigger Movement, Push Settings to Skelly (see below), Clear Perform History
 
 **Note about entity IDs**: Entity IDs are generated based on:
 1. The BLE device name discovered during config (e.g., "Ultra Skelly v2", "Animated Skelly", or "Lethal Lily")
@@ -324,6 +325,15 @@ For example, if your Lethal Lily's BLE name is "Lethal Lily" with MAC address `A
 - `media_player.lethal_lily_aa_bb_cc_dd_ee_ff_live_mode_speaker`
 
 You can find your actual entity IDs in **Settings** → **Devices & Services** → **Skelly Ultra** → click on your device.
+
+### 💡 Keeping the Skelly's Light Settings in Sync
+
+By default the Skelly is in charge of its settings: after a reconnect, Home Assistant shows whatever the device reports, including changes made in the phone app.
+
+After a power-up, though, the Skelly can show a different look than the live settings it reports (for example the lights of its first file) until it receives a setting. Two things help:
+
+- **Push Settings to Skelly** button: sends all live light settings (brightness, effect, effect speed, color and color cycle per light), the eye icon and the volume that Home Assistant shows to the device. Movement is never sent, since that would start a move. Refuses while the device plays a stored file.
+- **Home Assistant controls light, eye and volume settings** option (**Settings** → **Devices & Services** → **Skelly Ultra** → **Configure**, off by default): sends the same settings on every connect (Home Assistant start, Connected switch, reconnects), before Home Assistant reads the device (held back until a stored file has finished playing). The settings are the last ones Home Assistant saw, kept across restarts. Changes made in the phone app while Home Assistant is connected are kept once Home Assistant has polled them (every 30 seconds); changes made while it is disconnected are overwritten.
 
 ### 🔊 Playing Audio
 

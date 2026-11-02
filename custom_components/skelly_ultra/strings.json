@@ -40,10 +40,12 @@
       "init": {
         "title": "Skelly options",
         "data": {
-          "show_panel": "Show the Skelly sidebar panel"
+          "show_panel": "Show the Skelly sidebar panel",
+          "ha_controls_settings": "Home Assistant controls light, eye and volume settings"
         },
         "data_description": {
-          "show_panel": "Adds Skelly to the sidebar, to manage the files on your devices. The panel is shown while at least one Skelly has this option on."
+          "show_panel": "Adds Skelly to the sidebar, to manage the files on your devices. The panel is shown while at least one Skelly has this option on.",
+          "ha_controls_settings": "On every connect, sends the light, eye and volume settings Home Assistant last knew to the Skelly (never movement). Changes made in the phone app while Home Assistant is disconnected are overwritten. Off: the Skelly's own settings are shown as they are."
         }
       }
     }

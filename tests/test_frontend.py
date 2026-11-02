@@ -131,16 +131,14 @@ async def test_option_hides_and_shows_the_panel(
 async def test_options_form_shows_the_current_value(hass, setup_integration):
     entry = setup_integration
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    schema = result["data_schema"].schema
-    (key,) = schema
-    assert key == CONF_SHOW_PANEL
+    key = next(k for k in result["data_schema"].schema if k == CONF_SHOW_PANEL)
     assert key.default() is True
 
     await hass.config_entries.options.async_configure(
         result["flow_id"], {CONF_SHOW_PANEL: False}
     )
     result = await hass.config_entries.options.async_init(entry.entry_id)
-    (key,) = result["data_schema"].schema
+    key = next(k for k in result["data_schema"].schema if k == CONF_SHOW_PANEL)
     assert key.default() is False
 
 
