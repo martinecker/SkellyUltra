@@ -142,17 +142,17 @@ class SkellyChannelLight(CoordinatorEntity, LightEntity):
             try:
                 r, g, b = int(rgb[0]), int(rgb[1]), int(rgb[2])
 
-                # Get current effect (color cycle) state from coordinator
-                loop = 0  # default: no color cycling
+                # Get current color cycle state from coordinator
+                color_cycle = 0  # default: no color cycling
                 data = getattr(self.coordinator, "data", None)
                 if data:
                     lights = data.get("lights", [])
                     if self._channel < len(lights):
-                        effect = lights[self._channel].get("effect", 0)
-                        loop = 1 if effect == 1 else 0
+                        cached = lights[self._channel].get("color_cycle", 0)
+                        color_cycle = 1 if cached == 1 else 0
 
-                # Call set_light_rgb with current loop state to preserve color cycle setting
-                await client.set_light_rgb(self._channel, r, g, b, loop)
+                # Call set_light_rgb with current color cycle state to preserve it
+                await client.set_light_rgb(self._channel, r, g, b, color_cycle)
             except (ValueError, TypeError):
                 pass
             else:
