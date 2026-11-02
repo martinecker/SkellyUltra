@@ -64,9 +64,7 @@ async def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list_files)
     websocket_api.async_register_command(hass, ws_subscribe_files)
 
-    # http is always loaded with the frontend; without it there's no UI to
-    # show the icons
-    if hass.http is not None and EYE_ICON_DIR.is_dir():
+    if EYE_ICON_DIR.is_dir():
         await hass.http.async_register_static_paths(
             [StaticPathConfig(EYE_ICON_URL, str(EYE_ICON_DIR), cache_headers=True)]
         )

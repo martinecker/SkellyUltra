@@ -55,6 +55,20 @@ def no_real_bluetooth(mock_bleak_scanner_start, mock_bluetooth_adapters):
 
 
 @pytest.fixture(autouse=True)
+def onboarded():
+    """Behave like an installation that has finished onboarding.
+
+    The integration depends on the frontend, which sets up onboarding. Before
+    onboarding is done, Bluetooth adds a config entry for each adapter on its
+    own, which a real installation wouldn't.
+    """
+    with patch(
+        "homeassistant.components.onboarding.async_is_onboarded", return_value=True
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def own_config_dir(hass: HomeAssistant, tmp_path):
     """Give each test its own config dir, so files (e.g. TTS cache) don't leak."""
     hass.config.config_dir = str(tmp_path)

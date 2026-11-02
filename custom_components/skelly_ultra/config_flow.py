@@ -12,13 +12,16 @@ from bleak import BleakScanner
 from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
+from homeassistant.core import callback
 
 from .const import (
     ALL_BLE_NAME_FILTERS,
     CONF_DEVICE_TYPE,
     CONF_SERVER_URL,
+    CONF_SHOW_PANEL,
     CONF_USE_BLE_PROXY,
     DEFAULT_SERVER_URL,
+    DEFAULT_SHOW_PANEL,
     DEVICE_PROFILES,
     DEVICE_TYPE_SKELLY,
     DOMAIN,
@@ -43,6 +46,14 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         self._user_input: dict[str, Any] | None = None
         self._device_type: str = DEVICE_TYPE_SKELLY
         self._default_name: str = DEVICE_PROFILES[DEVICE_TYPE_SKELLY]["default_name"]
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(
+        config_entry: config_entries.ConfigEntry,
+    ) -> SkellyOptionsFlow:
+        """Return the options flow."""
+        return SkellyOptionsFlow()
 
     async def _validate_rest_server(self, server_url: str) -> dict[str, str] | None:
         """Validate the REST server is accessible.
@@ -469,3 +480,27 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                 CONF_DEVICE_TYPE: self._device_type,
             },
         )
+
+
+class SkellyOptionsFlow(config_entries.OptionsFlow):
+    """Options for a Skelly: whether it shows the Skelly sidebar panel."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None):
+        """Show the options form, then save it."""
+        if user_input is not None:
+            # Keep the other options (the Connected and Live Mode switch states)
+            return self.async_create_entry(
+                data={**self.config_entry.options, **user_input}
+            )
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_SHOW_PANEL,
+                    default=self.config_entry.options.get(
+                        CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL
+                    ),
+                ): bool,
+            }
+        )
+        return self.async_show_form(step_id="init", data_schema=schema)

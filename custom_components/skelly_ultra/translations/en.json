@@ -35,6 +35,19 @@
       }
     }
   },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Skelly options",
+        "data": {
+          "show_panel": "Show the Skelly sidebar panel"
+        },
+        "data_description": {
+          "show_panel": "Adds Skelly to the sidebar, to manage the files on your devices. The panel is shown while at least one Skelly has this option on."
+        }
+      }
+    }
+  },
   "entity": {
     "sensor": {
       "file_transfer_progress": {

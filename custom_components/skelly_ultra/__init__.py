@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
 from .coordinator import SkellyCoordinator
+from .frontend import async_setup_frontend, async_update_panel
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .perform import PerformManager, async_remove_perform_history
 from .services import register_services, unregister_services
@@ -140,6 +141,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Websocket commands for a file manager UI (registered once per run)
     await async_setup_websocket_api(hass)
 
+    # The Skelly sidebar panel and dashboard card
+    await async_setup_frontend(hass)
+    await async_update_panel(hass)
+    entry.async_on_unload(entry.add_update_listener(_async_options_updated))
+
     # Forward setup to entity platforms
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 
@@ -180,7 +186,15 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if not hass.data[DOMAIN]:
         unregister_services(hass)
 
+    # Remove the panel if no loaded entry shows it any more
+    await async_update_panel(hass)
+
     return True
+
+
+async def _async_options_updated(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Show or hide the sidebar panel when the show_panel option changes."""
+    await async_update_panel(hass)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:

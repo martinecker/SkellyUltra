@@ -6,8 +6,8 @@
 pytest-homeassistant-custom-component==0.13.375
 
 # Requirements of this integration (manifest.json) and of the HA components it
-# depends on or imports (bluetooth, usb, tts, ffmpeg), as pinned by that HA
-# release.
+# depends on or imports (bluetooth, usb, tts, ffmpeg, frontend), as pinned by
+# that HA release.
 bleak==3.0.2
 bleak-retry-connector==4.7.1
 bluetooth-adapters==2.4.0
@@ -17,6 +17,7 @@ dbus-fast==5.0.22
 habluetooth==7.1.2
 aiousbwatcher==1.1.2
 serialx==1.11.0
+home-assistant-frontend==20260930.5
 mutagen==1.48.1
 ha-ffmpeg==3.2.2
 pydub>=0.25.1

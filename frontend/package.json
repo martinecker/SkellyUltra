@@ -1,0 +1,30 @@
+{
+	"name": "skelly-ultra-frontend",
+	"version": "0.0.0",
+	"private": true,
+	"description": "Sidebar panel and dashboard card for the Skelly Ultra Home Assistant integration",
+	"license": "MIT",
+	"type": "module",
+	"engines": {
+		"node": ">=22"
+	},
+	"scripts": {
+		"build": "vite build",
+		"dev": "vite build --watch",
+		"lint": "biome check .",
+		"format": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"check": "biome check . && tsc --noEmit && vitest run"
+	},
+	"dependencies": {
+		"lit": "3.3.3"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.5.15",
+		"happy-dom": "21.0.4",
+		"typescript": "6.0.3",
+		"vite": "8.3.4",
+		"vitest": "5.0.4"
+	}
+}

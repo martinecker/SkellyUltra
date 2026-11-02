@@ -9,6 +9,10 @@ CONF_SERVER_URL = "server_url"
 CONF_USE_BLE_PROXY = "use_ble_proxy"
 DEFAULT_SERVER_URL = "http://localhost:8765"
 
+# Options flow: show the Skelly sidebar panel (on when any loaded entry has it on)
+CONF_SHOW_PANEL = "show_panel"
+DEFAULT_SHOW_PANEL = True
+
 # Device type constants (stored in entry.data[CONF_DEVICE_TYPE])
 CONF_DEVICE_TYPE = "device_type"
 DEVICE_TYPE_SKELLY = "ultra_skelly"
