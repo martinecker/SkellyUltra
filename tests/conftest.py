@@ -187,6 +187,18 @@ def mock_ble(device: FakeSkellyDevice):
         yield device
 
 
+@pytest.fixture(autouse=True)
+def media_dir(hass: HomeAssistant, tmp_path):
+    """My media: the "local" media directory, set before the integration loads.
+
+    In each test's own folder, so the upload folder the integration creates
+    doesn't land in the test plugin's installed files.
+    """
+    path = tmp_path / "media"
+    hass.config.media_dirs = {"local": str(path)}
+    return path
+
+
 @pytest.fixture
 def config_entry(hass: HomeAssistant) -> MockConfigEntry:
     entry = MockConfigEntry(

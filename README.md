@@ -30,8 +30,6 @@ There is a companion project that provides a fully web browser-based controller 
 
 ## ✨ Features
 
-Both devices share these features:
-
 - 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
 - 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly), Torso (12ft Skelly) or Lantern (Lethal Lily)
 - 🔌 **Switch entities**:
@@ -53,11 +51,8 @@ Both devices share these features:
 - ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
 - 📁 **File management**: Upload files from a path, URL or the media browser (`send_file`) or from any text-to-speech engine (`send_file_from_tts`); change a file's movement, eyes and lights (`edit_file`); choose which files play and in what order (`set_file_order`); delete files; plus a websocket API for a file manager UI
 - 🎭 **Perform action**: The device says a literal or AI-written line (optionally reacting to a camera snapshot) with eyes, lights and movement to match a mood, plus a ready-made blueprint
-
-Ultra Skelly only:
-
-- 🎨 **Select entities**: Eye icon selection (18 options)
-- 🖼️ **Image entities**: Eye icon preview
+- 🎨 **Select entities**: Eye icon selection (18 options, Skelly only)
+- 🖼️ **Image entities**: Eye icon preview (Skelly only)
 
 ## 📋 Prerequisites
 
@@ -66,10 +61,12 @@ Ultra Skelly only:
 If you want to use Skelly's live mode and the live mode media player provided by this integration you have to set up and run the Skelly Ultra REST server.
 
 The Skelly Ultra REST server **must be running on a Linux host** (e.g., Raspberry Pi, Ubuntu server, etc.) that can connect to both:
+
 1. Your Home Assistant instance (via network)
 2. The Skelly Ultra device via Bluetooth
 
 The REST server handles:
+
 - Classic Bluetooth pairing and connections for Live Mode audio playback
 - Audio processing and streaming to the Skelly Ultra speaker
 
@@ -89,6 +86,7 @@ The REST server can automatically pair devices when you enable Live Mode, if it'
 See the [REST Server Documentation](custom_components/skelly_ultra/skelly_ultra_srv/README.md) for details.
 
 **How it works**:
+
 1. **Add the integration in Home Assistant** (see Installation section below)
 2. **Turn on the "Live Mode" switch** in Home Assistant
    - The integration will automatically discover, pair, and connect to the device
@@ -132,6 +130,7 @@ bluetoothctl
 ```
 
 **Important notes**:
+
 - Pairing only needs to be done **once per device**. The pairing will persist.
 - You must enable Live Mode in HA first (even if it doesn't stay on) to make the speaker discoverable
 - Look for the device name with **(Live)** suffix — this is the Classic Bluetooth speaker
@@ -143,6 +142,7 @@ By default, the integration connects directly from your Home Assistant host to t
 ### What is BLE Proxy Mode?
 
 In BLE proxy mode:
+
 - The REST server handles the BLE connection to your Skelly Ultra device
 - Home Assistant communicates with the REST server via HTTP
 - The REST server forwards BLE commands to the device and relays responses back to Home Assistant
@@ -171,11 +171,13 @@ When adding the integration in Home Assistant:
 ### Important Differences in BLE Proxy Mode
 
 #### Device Identification
+
 - In direct BLE mode, devices are identified by MAC address only
 - In BLE proxy mode, devices are identified by **both MAC address and REST server URL**
 - Example device title in proxy mode: `Ultra Skelly v2 (AA:BB:CC:DD:EE:FF via http://192.168.1.100:8765)`
 
 #### Scanning Behavior
+
 - In direct BLE mode, scanning uses Home Assistant's Bluetooth integration
 - In BLE proxy mode, scanning is performed by the REST server using its BLE adapter
 - The REST server maintains a background scan cache and returns results quickly
@@ -318,10 +320,12 @@ The integration creates different entities depending on which device type you co
 - **Buttons**: Trigger Movement, Push Settings to Skelly (see below), Clear Perform History
 
 **Note about entity IDs**: Entity IDs are generated based on:
+
 1. The BLE device name discovered during config (e.g., "Ultra Skelly v2", "Animated Skelly", or "Lethal Lily")
 2. The device's Bluetooth MAC address (to support multiple devices)
 
 For example, if your Lethal Lily's BLE name is "Lethal Lily" with MAC address `AA:BB:CC:DD:EE:FF`, the live mode media player might be:
+
 - `media_player.lethal_lily_aa_bb_cc_dd_ee_ff_live_mode_speaker`
 
 You can find your actual entity IDs in **Settings** → **Devices & Services** → **Skelly Ultra** → click on your device.
@@ -432,6 +436,7 @@ automation:
 ```
 
 **Notes**:
+
 - Supported audio formats: MP3, WAV, FLAC, OGG, M4A, and more
 - The integration automatically handles connecting the Bluetooth speaker
 - Pairing can be done automatically if the REST server can get elevated root privileges and otherwise must be done manually via `bluetoothctl` (only needed once)
@@ -485,7 +490,7 @@ The response has `status` (`ok` or `busy`), `line`, `mood`, `person_present` (on
 #### Fields
 
 | Field | Description |
-|---|---|
+| --- | --- |
 | `device_id` / `entity_id` | The device, as for the other actions |
 | `message` | A literal line. Skips the AI. Give either `message` or `prompt` |
 | `prompt` | Instructions for the AI, sent as is. Keeping lines short and family friendly is up to the prompt |
@@ -504,7 +509,7 @@ The response has `status` (`ok` or `busy`), `line`, `mood`, `person_present` (on
 #### Moods
 
 | Mood | Eyes | Lights | Movement |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `friendly` | Green Eyeball | Warm white (Ultra Skelly head light green), steady | Subtle |
 | `spooky` | Color Spiral | Purple, slow pulse | Full |
 | `menacing` | Red Eyeball | Red, fast flashing | Full |
@@ -652,6 +657,7 @@ The integration provides file transfer services to upload audio files to the dev
 Upload an audio file to the device. The file will be automatically converted to the required format if needed.
 
 **Supported file sources**:
+
 - **Local file paths**: Full paths to files accessible from the Home Assistant container
 - **HTTP/HTTPS URLs**: Download and upload files from the web
 - **Home Assistant media files**: Use `/media/<media_dir>/...` paths, the same URLs HA serves them at (for example, `/media/local/my_audio.ogg` is `my_audio.ogg` in your `local` media folder, usually `/media` or `/config/media`)
@@ -685,6 +691,7 @@ data:
 ```
 
 **Notes**:
+
 - The `.mp3` extension is added automatically to `target_filename`
 - Audio is automatically converted to the preferred device format, which is 8kHz mono MP3 format
 - Supported input formats: MP3, WAV, FLAC, OGG, M4A, and many others
@@ -723,6 +730,7 @@ The service returns the filename and file index on the device, so an automation 
 ```
 
 **Notes**:
+
 - `file_index` is empty if the file list couldn't be refreshed after the upload (for example while the device is playing); guard the `play_file` step with a condition like `{{ upload.file_index is not none }}` if that can happen
 - Without `target_filename`, the name is built from the message (for example `happy_halloween.mp3`), shortened to fit the device's filename length limit
 - An explicit `target_filename` that is too long is rejected, the same as for Send File
@@ -747,6 +755,7 @@ data:
 ```
 
 **Notes**:
+
 - This service only works while a file transfer is in progress
 - The device will receive a cancellation command and stop accepting chunks
 - Partial uploads are discarded
@@ -764,6 +773,7 @@ data:
 ```
 
 **Notes**:
+
 - `filename` must match a file currently on the device — check the **File Order** sensor or the internal files media player to see what's stored
 - The service refreshes the device's file list before deleting (to resolve the file) and again afterward to confirm the change
 - Deletion is confirmed with the device before the service call returns; an error is raised if the device doesn't confirm within the timeout
@@ -790,6 +800,7 @@ data:
 ```
 
 **Notes**:
+
 - Movement parts depend on the device: Ultra Skelly has `all`, `head`, `arm`, `torso`; 12ft Skelly has `head`; Lethal Lily has `all`, `wrist`, `elbow`, `head`, `eyes`
 - Light channels: Ultra Skelly has 0 (torso) and 1 (head); 12ft Skelly and Lethal Lily have 0. Light mode names are Static, Strobe, Pulse (Lethal Lily: Flickering, Pulsing, Chasing)
 - Eye icons aren't available on Lethal Lily
@@ -821,18 +832,22 @@ file_order:
 ```
 
 **Notes**:
+
 - Give the files by `filenames` or by `file_indices` (as in the file list), not both, and list each file once
 - The device must be connected and not playing a file, since the file list can't be read during playback
 - The **File Order** sensor is updated with the new order
 
 #### Websocket API for a File Manager UI
 
-For a dashboard card or panel, two websocket commands return everything needed to show and edit the files on a device. They only read; changes go through the actions above (`send_file`, `edit_file`, `set_file_order`, `delete_file`).
+For a dashboard card or panel, these websocket commands return everything needed to show and edit the files on a device. They only read; changes go through the actions above (`send_file`, `edit_file`, `set_file_order`, `delete_file`).
 
 - `skelly_ultra/files/list`: returns the payload once. Pass `refresh: true` to read the file list from the device first (skipped while it's disconnected or playing a file).
 - `skelly_ultra/files/subscribe`: sends the payload right away and again whenever it changes (file list, play order, free storage, availability, upload progress).
+- `skelly_ultra/devices/list`: lists the loaded Skellies (`entry_id`, `device_id`, `name`, `type`, `available`, `upload_target`), for a device picker. Unlike Home Assistant's device registry commands, users who aren't admins can use it too.
 
-Both take `entry_id` or `device_id`, or neither if you have only one Skelly.
+The files commands take `entry_id` or `device_id`, or neither if you have only one Skelly.
+
+`upload_target` is the media source ID of the `skelly_ultra` folder in **My media**, which the integration creates at startup. Upload a file there through Home Assistant's media upload API (`POST /api/media_source/local_source/upload`, admins only) and pass the `media_content_id` it returns to `send_file`. It's `null` if Home Assistant has no `local` media folder.
 
 ```js
 const files = await hass.callWS({ type: "skelly_ultra/files/list", refresh: true });
@@ -846,6 +861,8 @@ The payload:
 
 ```yaml
 entry_id: 01J...
+device_id: 4f2c...  # null if the entry has no device
+name: Skelly Santa  # the device's name, as renamed by the user
 unloaded: false
 available: true
 capacity: {free_kb: 4000, file_count_reported: 3}
@@ -864,12 +881,15 @@ transfer: {status: uploading, in_progress: true, progress: 42, filename: boo.mp3
 device_profile:
   type: ultra_skelly
   display_name: Ultra Skelly
-  movements: [all, head, arm, torso]
+  movements:  # with the picture the web controller shows for each
+    - {part: all, label: All, icon_url: /skelly_ultra/images/skelly/movement_all.png}
+    - {part: head, label: Head, icon_url: /skelly_ultra/images/skelly/movement_head.png}
   lights: [{channel: 0, label: Torso Light}, {channel: 1, label: Head Light}]
   light_modes: [Static, Strobe, Pulse]  # effect_mode 1, 2, 3
   eye_icons:  # empty on Lethal Lily
-    - {value: 1, label: 1 Blue Eyeball, url: /skelly_ultra/eye_icons/skelly/eye_icon_1.png}
+    - {value: 1, label: 1 Blue Eyeball, url: /skelly_ultra/images/skelly/eye_icon_1.png}
   max_effect_speed: 254
+  max_filename_length: 33  # the longest filename the device takes, with .mp3
 ```
 
 `transfer.status` is `idle`, `uploading`, `complete`, `cancelled` or `error`. The device only reports its free storage, not its total size. `movements` lists only the parts the device profile knows; `movement_bits` is the raw value.
@@ -900,6 +920,7 @@ automation:
 ```
 
 **Notes**:
+
 - File indices are 1-based (first file is index 1, not 0)
 - The valid range is [1, N] where N is the number of files on the device
 - Check the **File Count** sensor to see how many files are stored
@@ -914,6 +935,7 @@ automation:
 **Cause**: Live Mode is not enabled or the Bluetooth speaker is not connected.
 
 **Solution**:
+
 1. Turn on the **Live Mode switch** in Home Assistant
 2. Wait 10-30 seconds for the connection to establish
 3. Check Home Assistant logs for error messages
@@ -928,6 +950,7 @@ automation:
 **Cause**: The Skelly device has not been manually paired via Bluetooth.
 
 **Solution**:
+
 1. Pair the device manually (this only needs to be done once):
    ```bash
    bluetoothctl
@@ -945,6 +968,7 @@ automation:
 **Symptom**: Media player accepts commands but no audio plays.
 
 **Solution**:
+
 1. **Check REST server logs** for PipeWire/Bluetooth errors
 2. **Verify PipeWire is running** on the REST server host:
    ```bash
@@ -965,6 +989,7 @@ automation:
 **Symptom**: Integration shows "Cannot connect to REST server" or similar error.
 
 **Solution**:
+
 1. **Verify the REST server is running**:
    ```bash
    curl http://localhost:8765/health
@@ -982,6 +1007,7 @@ automation:
 **Explanation**: Classic Bluetooth connections can take time, especially on first connect. This is normal behavior.
 
 **Solutions**:
+
 - Be patient and wait for the connection to establish
 - Check REST server logs for progress
 - If it fails, try disabling and re-enabling Live Mode
@@ -991,6 +1017,7 @@ automation:
 #### REST Server Unreachable
 
 If you see "Cannot connect to REST server" error:
+
 - Verify the REST server is running: `curl http://<server-ip>:8765/health`
 - Check firewall rules on the REST server host
 - Ensure the URL is correct (include `http://` and port `:8765`)
@@ -1006,6 +1033,7 @@ If scanning doesn't find your device:
 #### Connection Drops Frequently
 
 If the BLE connection is unstable:
+
 - Check for Bluetooth interference (Wi-Fi, other devices)
 - Move the REST server closer to the device
 - Check REST server logs for BLE errors

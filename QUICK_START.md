@@ -39,6 +39,7 @@ This gets you basic control: lights, switches, sensors, and playing files stored
 ### Step 3: Start Using It!
 
 You now have control over:
+
 - 💡 **Lights**: Ultra Skelly — Torso and Head colors; Lethal Lily — Lantern color
 - 🔌 **Switches**: Toggle movements and color cycling
 - 🎵 **Media Player**: Play audio files stored on your device
@@ -53,6 +54,7 @@ Want to make your Skelly speak using Text-to-Speech? This requires additional se
 ### What is Live Mode?
 
 Live Mode lets you:
+
 - 🗣️ Use TTS (Text-to-Speech) to make your Skelly talk
 - 🎵 Stream any audio file to the Skelly's speaker
 - 🔊 Play sounds from automations in real-time
@@ -69,7 +71,7 @@ Live Mode lets you:
    - Run the server script (see [detailed guide](custom_components/skelly_ultra/skelly_ultra_srv/README.md))
 
 2. **Pair Bluetooth** (one-time setup)
-   - Use automatic pairing when running the REST Server (requires python3 to get elevanted iiviledges for pairing), or
+   - Use automatic pairing when running the REST Server (requires python3 to get elevated privileges for pairing), or
    - Pair manually:
      - Enable Live Mode in Home Assistant
      - Use `bluetoothctl` to pair with your Skelly
@@ -87,12 +89,14 @@ Live Mode lets you:
 ### Control Lights from Dashboard
 
 Ultra Skelly torso:
+
 ```yaml
 type: light
 entity: light.animated_skelly_torso_light
 ```
 
 Lethal Lily lantern:
+
 ```yaml
 type: light
 entity: light.lethal_lily_lantern
@@ -101,6 +105,7 @@ entity: light.lethal_lily_lantern
 ### Make Your Device Move on Motion
 
 Ultra Skelly:
+
 ```yaml
 automation:
   - alias: "Skelly Moves When Someone Approaches"
@@ -115,6 +120,7 @@ automation:
 ```
 
 Lethal Lily:
+
 ```yaml
 automation:
   - alias: "Lily Moves When Someone Approaches"
@@ -162,6 +168,7 @@ automation:
 ### Manage Files on the Device
 
 Upload a file (a local path, a URL, or a `media-source://` ID from the media browser):
+
 ```yaml
 action: skelly_ultra.send_file
 data:
@@ -170,6 +177,7 @@ data:
 ```
 
 Have any text-to-speech engine record a line and store it on the device (no Live Mode needed to play it later):
+
 ```yaml
 action: skelly_ultra.send_file_from_tts
 data:
@@ -179,6 +187,7 @@ response_variable: uploaded  # {filename, file_index}, ready for play_file
 ```
 
 Set what a file does while it plays, and which files play in what order:
+
 ```yaml
 action: skelly_ultra.edit_file
 data:
@@ -190,6 +199,7 @@ data:
       rgb: [255, 0, 0]
       effect_mode: Pulse
 ```
+
 ```yaml
 action: skelly_ultra.set_file_order
 data:
@@ -225,7 +235,7 @@ Go to **Settings** → **Devices & Services** → **Skelly Ultra** → Click on 
 Entity IDs are based on your BLE device name. Examples:
 
 | Device | BLE Name | Example entity |
-|---|---|---|
+| --- | --- | --- |
 | Ultra Skelly (old firmware) | Animated Skelly | `light.animated_skelly_torso_light` |
 | Ultra Skelly (new firmware) | Ultra Skelly v2 | `light.ultra_skelly_v2_torso_light` |
 | Lethal Lily | Lethal Lily | `light.lethal_lily_lantern` |

@@ -1,0 +1,126 @@
+{
+	"entry_id": "01JSKELLYENTRY00000000000",
+	"device_id": "0123456789abcdef0123456789abcdef",
+	"name": "Skelly Santa",
+	"unloaded": false,
+	"device_profile": {
+		"type": "ultra_skelly",
+		"display_name": "Ultra Skelly",
+		"movements": [
+			{
+				"part": "all",
+				"label": "All",
+				"icon_url": "/skelly_ultra/images/skelly/movement_all.png"
+			},
+			{
+				"part": "head",
+				"label": "Head",
+				"icon_url": "/skelly_ultra/images/skelly/movement_head.png"
+			},
+			{
+				"part": "arm",
+				"label": "Arm",
+				"icon_url": "/skelly_ultra/images/skelly/movement_arm.png"
+			},
+			{
+				"part": "torso",
+				"label": "Torso",
+				"icon_url": "/skelly_ultra/images/skelly/movement_torso.png"
+			}
+		],
+		"lights": [
+			{
+				"channel": 0,
+				"label": "Torso Light"
+			},
+			{
+				"channel": 1,
+				"label": "Head Light"
+			}
+		],
+		"light_modes": ["Static", "Strobe", "Pulse"],
+		"eye_icons": [
+			{
+				"value": 1,
+				"label": "1 Blue Eyeball",
+				"url": "/skelly_ultra/images/skelly/eye_icon_1.png"
+			},
+			{
+				"value": 2,
+				"label": "2 Yellow Eyeball",
+				"url": "/skelly_ultra/images/skelly/eye_icon_2.png"
+			}
+		],
+		"max_effect_speed": 254,
+		"max_filename_length": 33
+	},
+	"available": true,
+	"capacity": {
+		"free_kb": 4000,
+		"file_count_reported": 3
+	},
+	"file_order": [1],
+	"files": [
+		{
+			"name": "hello.mp3",
+			"file_index": 1,
+			"cluster": 1010,
+			"enabled": true,
+			"movements": ["head", "torso"],
+			"movement_bits": 5,
+			"eye_icon": 7,
+			"lights": [
+				{
+					"channel": 0,
+					"brightness": 255,
+					"effect_mode": 1,
+					"effect_speed": 254,
+					"rgb": [255, 0, 0],
+					"color_cycle": false
+				},
+				{
+					"channel": 1,
+					"brightness": 128,
+					"effect_mode": 3,
+					"effect_speed": 200,
+					"rgb": [0, 0, 255],
+					"color_cycle": true
+				}
+			]
+		},
+		{
+			"name": "laugh.mp3",
+			"file_index": 2,
+			"cluster": 1020,
+			"enabled": false,
+			"movements": [],
+			"movement_bits": 0,
+			"eye_icon": 1,
+			"lights": [
+				{
+					"channel": 0,
+					"brightness": 255,
+					"effect_mode": 1,
+					"effect_speed": 254,
+					"rgb": [255, 0, 0],
+					"color_cycle": false
+				},
+				{
+					"channel": 1,
+					"brightness": 255,
+					"effect_mode": 1,
+					"effect_speed": 254,
+					"rgb": [255, 0, 0],
+					"color_cycle": false
+				}
+			]
+		}
+	],
+	"transfer": {
+		"status": "uploading",
+		"in_progress": true,
+		"progress": 42,
+		"filename": "boo.mp3",
+		"error": null
+	}
+}

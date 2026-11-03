@@ -14,11 +14,22 @@ export interface HassEntity {
 	attributes: Record<string, unknown>;
 }
 
+// home-assistant-js-websocket's Connection
 export interface HassConnection {
+	// false while the websocket is down and reconnecting
+	connected: boolean;
 	subscribeMessage<T>(
 		callback: (message: T) => void,
 		message: Record<string, unknown>,
+		// resubscribe: false stops the library from subscribing again on its
+		// own after a reconnect (and from hiding a failure to do so)
+		options?: { resubscribe?: boolean },
 	): Promise<() => Promise<void>>;
+	addEventListener(event: "ready" | "disconnected", listener: () => void): void;
+	removeEventListener(
+		event: "ready" | "disconnected",
+		listener: () => void,
+	): void;
 }
 
 export interface HomeAssistant {

@@ -2,7 +2,7 @@
 
 This image entity displays the currently-selected eye icon using the
 coordinator data as the authoritative source. Image files are stored in
-the integration's `images/<eye_icon_folder>/` folder (per device profile) as
+the integration's `images/<image_folder>/` folder (per device profile) as
 `eye_icon_1.png`..`eye_icon_<n>.png`.
 """
 

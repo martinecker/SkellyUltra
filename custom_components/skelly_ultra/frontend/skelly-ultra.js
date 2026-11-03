@@ -544,7 +544,7 @@ function q(e) {
 	})(e, t, n);
 }
 // node_modules/@lit/reactive-element/decorators/state.js
-function xe(e) {
+function J(e) {
 	return q({
 		...e,
 		state: !0,
@@ -552,14 +552,26 @@ function xe(e) {
 	});
 }
 // src/constants.ts
-var Se = "skelly-ultra-panel", J = "skelly-ultra-card", Y = {
+var xe = "skelly-ultra-panel", Y = "skelly-ultra-card", X = {
 	panelTitle: "Skelly",
 	openSidebar: "Open the sidebar",
 	greeting: (e) => `Hello, ${e}!`,
-	placeholder: "The Skelly file manager is coming soon.",
+	device: "Skelly",
+	noDevices: "No Skelly is set up, or none is loaded right now.",
+	loadingDevices: "Loading your Skellies…",
+	devicesFailed: (e) => `Couldn't list your Skellies: ${e}`,
+	status: {
+		idle: "Not connected",
+		connecting: "Connecting…",
+		live: "Live",
+		reloading: "Integration reloading…",
+		error: "Error"
+	},
+	unavailable: "The Skelly is not connected; showing the last known files.",
+	rawPayloadHeading: "Live data from the Skelly (for testing)",
 	cardName: "Skelly Ultra",
 	cardDescription: "Shows a Skelly's status, says text through it and plays its files."
-}, X = o`
+}, Se = o`
 	:host {
 		color: var(--primary-text-color);
 		font-family: var(--ha-font-family-body, var(--paper-font-body1_-_font-family, sans-serif));
@@ -593,7 +605,7 @@ var Q = class extends K {
 		return 2;
 	}
 	static {
-		this.styles = [X, o`
+		this.styles = [Se, o`
 			ha-card {
 				padding: 16px;
 			}
@@ -611,25 +623,149 @@ var Q = class extends K {
 	render() {
 		return this._config ? F`
 			<ha-card>
-				<div class="header">${Y.cardName}</div>
-				<p>${Y.greeting(this.hass?.user?.name ?? "")}</p>
+				<div class="header">${X.cardName}</div>
+				<p>${X.greeting(this.hass?.user?.name ?? "")}</p>
 			</ha-card>
 		` : null;
 	}
 };
-Z([q({ attribute: !1 })], Q.prototype, "hass", void 0), Z([xe()], Q.prototype, "_config", void 0);
+Z([q({ attribute: !1 })], Q.prototype, "hass", void 0), Z([J()], Q.prototype, "_config", void 0);
 var Ce = {
-	type: J,
-	name: Y.cardName,
-	description: Y.cardDescription,
+	type: Y,
+	name: X.cardName,
+	description: X.cardDescription,
 	preview: !0,
 	documentationURL: "https://github.com/martinecker/SkellyUltra"
-}, $ = class extends K {
+};
+// src/api/actions.ts
+function we(e) {
+	if (e && typeof e == "object" && "message" in e) {
+		let t = e.message;
+		if (typeof t == "string" && t) return t;
+	}
+	return typeof e == "string" && e ? e : "Unknown error";
+}
+// src/api/devices.ts
+function Te(e) {
+	return e.callWS({ type: "skelly_ultra/devices/list" });
+}
+// src/api/files-subscription.ts
+var Ee = [
+	1,
+	2,
+	5,
+	10
+], De = /* @__PURE__ */ new Set(["not_found", "unknown_command"]), Oe = class {
+	constructor(e) {
+		this._host = e, this.status = "idle", this._target = {}, this._hostConnected = !1, this._generation = 0, this._retries = 0, this._onReady = () => {
+			this._restart();
+		}, this._onDisconnected = () => {
+			this._unsubscribe = void 0, this._teardown(), this.status = "connecting", this._host.requestUpdate();
+		}, e.addController(this);
+	}
+	setTarget(e, t) {
+		let n = e?.connection;
+		if (n === this._connection && ke(t, this._target)) return;
+		let r = !ke(t, this._target);
+		this._connection = n, this._target = { ...t }, r && (this.payload = void 0), this._restart();
+	}
+	hostConnected() {
+		this._hostConnected = !0, this._restart();
+	}
+	hostDisconnected() {
+		this._hostConnected = !1, this._teardown(), this._listen(void 0), this.status = "idle";
+	}
+	_listen(e) {
+		e !== this._listening && (this._listening?.removeEventListener("ready", this._onReady), this._listening?.removeEventListener("disconnected", this._onDisconnected), this._listening = e, e?.addEventListener("ready", this._onReady), e?.addEventListener("disconnected", this._onDisconnected));
+	}
+	_restart() {
+		this._teardown(), this._retries = 0, !this._hostConnected || !this._connection ? (this._listen(void 0), this.status = "idle", this._host.requestUpdate()) : (this._listen(this._connection), this._subscribe());
+	}
+	async _subscribe() {
+		let e = this._connection;
+		if (!e) return;
+		let t = ++this._generation;
+		if (this.status !== "reloading" && (this.status = "connecting"), this.error = void 0, this._host.requestUpdate(), e.connected) try {
+			let n = await e.subscribeMessage((e) => {
+				t === this._generation && this._onPayload(e);
+			}, {
+				type: "skelly_ultra/files/subscribe",
+				...this._target
+			}, { resubscribe: !1 });
+			if (t !== this._generation) {
+				Ae(n);
+				return;
+			}
+			this._unsubscribe = n;
+		} catch (e) {
+			if (t !== this._generation) return;
+			if (e && typeof e == "object") {
+				let { code: t, message: n } = e;
+				this.error = n || t, this.status = t && De.has(t) ? "reloading" : "error";
+			} else this.error = void 0, this.status = "reloading";
+			this.status === "reloading" && this._scheduleRetry(), this._host.requestUpdate();
+		}
+	}
+	_onPayload(e) {
+		this.payload = e, e.unloaded ? (this.status = "reloading", this._unsubscribe = void 0, this._teardown(), this._scheduleRetry()) : (this.status = "live", this.error = void 0, this._retries = 0), this._host.requestUpdate();
+	}
+	_scheduleRetry() {
+		clearTimeout(this._retryTimer);
+		let e = Ee[Math.min(this._retries, Ee.length - 1)];
+		this._retries += 1, this._retryTimer = setTimeout(() => {
+			this._retryTimer = void 0, this._subscribe();
+		}, e * 1e3);
+	}
+	_teardown() {
+		this._generation += 1, clearTimeout(this._retryTimer), this._retryTimer = void 0, this._unsubscribe &&= (Ae(this._unsubscribe), void 0);
+	}
+};
+function ke(e, t) {
+	return e.device_id === t.device_id && e.entry_id === t.entry_id;
+}
+function Ae(e) {
+	e().catch(() => void 0);
+}
+// src/api/types.ts
+function je(e) {
+	return e.device_id ? { device_id: e.device_id } : { entry_id: e.entry_id };
+}
+// src/panel/skelly-ultra-panel.ts
+var Me = "device", $ = class extends K {
 	constructor(...e) {
-		super(...e), this.narrow = !1;
+		super(...e), this.narrow = !1, this._files = new Oe(this), this._loadingDevices = !1;
+	}
+	connectedCallback() {
+		super.connectedCallback(), this._selected = new URLSearchParams(window.location.search).get(Me) ?? void 0;
+	}
+	willUpdate(e) {
+		e.has("hass") && this.hass && !this._devices && !this._loadingDevices && this._loadDevices();
+		let t = this._device;
+		this._files.setTarget(t ? this.hass : void 0, t ? je(t) : {});
+	}
+	get _device() {
+		if (this._devices?.length) return this._devices.find((e) => e.device_id === this._selected || e.entry_id === this._selected) ?? this._devices[0];
+	}
+	async _loadDevices() {
+		if (this.hass) {
+			this._loadingDevices = !0;
+			try {
+				this._devices = await Te(this.hass), this._devicesError = void 0;
+			} catch (e) {
+				this._devicesError = we(e);
+			} finally {
+				this._loadingDevices = !1;
+			}
+		}
+	}
+	_onDeviceChange(e) {
+		let t = e.target.value;
+		this._selected = t;
+		let n = new URL(window.location.href);
+		n.searchParams.set(Me, t), history.replaceState(history.state, "", n);
 	}
 	static {
-		this.styles = [X, o`
+		this.styles = [Se, o`
 			:host {
 				display: block;
 				min-height: 100%;
@@ -653,33 +789,125 @@ var Ce = {
 				padding-left: 4px;
 			}
 
+			.title {
+				flex: 1;
+			}
+
+			.toolbar select {
+				font: inherit;
+				font-size: 14px;
+				color: inherit;
+				background: transparent;
+				border: 1px solid currentColor;
+				border-radius: 4px;
+				padding: 4px 8px;
+				max-width: 50vw;
+			}
+
+			.toolbar option {
+				color: var(--primary-text-color);
+				background: var(--card-background-color);
+			}
+
 			.content {
 				padding: 16px;
 			}
 
 			ha-card {
 				padding: 16px;
-				max-width: 600px;
+			}
+
+			.status {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				align-items: center;
+				margin-bottom: 8px;
+			}
+
+			.dot {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				background: var(--disabled-text-color, #999);
+			}
+
+			.dot.live {
+				background: var(--success-color, #4caf50);
+			}
+
+			.dot.error {
+				background: var(--error-color, #db4437);
+			}
+
+			.warning {
+				color: var(--warning-color, #ffa600);
+			}
+
+			.error {
+				color: var(--error-color, #db4437);
+			}
+
+			h2 {
+				font-size: 16px;
+				font-weight: 500;
+				margin: 16px 0 8px;
+			}
+
+			pre {
+				margin: 0;
+				padding: 8px;
+				overflow: auto;
+				font-size: 12px;
+				background: var(--secondary-background-color);
+				border-radius: 4px;
 			}
 		`];
 	}
 	render() {
+		let e = this._device;
 		return F`
 			<div class="toolbar">
 				${this.narrow ? F`<ha-icon-button
-								.label=${Y.openSidebar}
+								.label=${X.openSidebar}
 								@click=${this._toggleSidebar}
 							>
 								<ha-icon icon="mdi:menu"></ha-icon>
-							</ha-icon-button>` : null}
-				<div class="title">${Y.panelTitle}</div>
+							</ha-icon-button>` : L}
+				<div class="title">${X.panelTitle}</div>
+				${e && this._devices && this._devices.length > 1 ? F`<select
+								aria-label=${X.device}
+								.value=${e.device_id ?? e.entry_id}
+								@change=${this._onDeviceChange}
+							>
+								${this._devices.map((t) => F`<option
+											value=${t.device_id ?? t.entry_id}
+											?selected=${t === e}
+										>
+											${t.name}
+										</option>`)}
+							</select>` : L}
 			</div>
 			<div class="content">
-				<ha-card>
-					<p>${Y.greeting(this.hass?.user?.name ?? "")}</p>
-					<p class="secondary">${Y.placeholder}</p>
-				</ha-card>
+				<ha-card>${this._renderBody(e)}</ha-card>
 			</div>
+		`;
+	}
+	_renderBody(e) {
+		if (this._devicesError) return F`<p class="error">${X.devicesFailed(this._devicesError)}</p>`;
+		if (!this._devices) return F`<p class="secondary">${X.loadingDevices}</p>`;
+		if (!e) return F`<p>${X.noDevices}</p>`;
+		let { status: t, payload: n, error: r } = this._files;
+		return F`
+			<div class="status">
+				<span class="dot ${t === "live" && !n?.available ? "unavailable" : t}"></span>
+				<strong>${n?.name ?? e.name}</strong>
+				<span class="secondary">${X.status[t]}</span>
+			</div>
+			${r ? F`<p class="error">${r}</p>` : L}
+			${n && !n.available && t === "live" ? F`<p class="warning">${X.unavailable}</p>` : L}
+			${n ? F`<h2>${X.rawPayloadHeading}</h2>
+							<pre>${JSON.stringify(n, null, 2)}</pre>` : L}
 		`;
 	}
 	_toggleSidebar() {
@@ -692,10 +920,10 @@ var Ce = {
 Z([q({ attribute: !1 })], $.prototype, "hass", void 0), Z([q({
 	type: Boolean,
 	reflect: !0
-})], $.prototype, "narrow", void 0), Z([q({ attribute: !1 })], $.prototype, "panel", void 0);
+})], $.prototype, "narrow", void 0), Z([q({ attribute: !1 })], $.prototype, "panel", void 0), Z([J()], $.prototype, "_devices", void 0), Z([J()], $.prototype, "_devicesError", void 0), Z([J()], $.prototype, "_selected", void 0);
 // src/main.ts
-function we() {
-	customElements.get("skelly-ultra-panel") || customElements.define(Se, $), customElements.get("skelly-ultra-card") || customElements.define(J, Q), window.customCards = window.customCards ?? [], window.customCards.some((e) => e.type === "skelly-ultra-card") || window.customCards.push(Ce);
+function Ne() {
+	customElements.get("skelly-ultra-panel") || customElements.define(xe, $), customElements.get("skelly-ultra-card") || customElements.define(Y, Q), window.customCards = window.customCards ?? [], window.customCards.some((e) => e.type === "skelly-ultra-card") || window.customCards.push(Ce);
 }
-we();
-export { we as register };
+Ne();
+export { Ne as register };

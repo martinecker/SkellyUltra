@@ -96,14 +96,14 @@ def files_updated_signal(entry_id: str) -> str:
 
 def get_eye_icon_path(profile: dict, eye_icon: int) -> Path | None:
     """Return the image path for a 1-based eye icon index, or None if out of range."""
-    if not profile.get("eye_icon_folder") or not 1 <= eye_icon <= len(
+    if not profile.get("image_folder") or not 1 <= eye_icon <= len(
         profile.get("eye_icons", [])
     ):
         return None
     return (
         Path(__file__).parent
         / "images"
-        / profile["eye_icon_folder"]
+        / profile["image_folder"]
         / f"eye_icon_{eye_icon}.png"
     )
 

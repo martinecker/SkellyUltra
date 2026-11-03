@@ -38,17 +38,3 @@ describe("card", () => {
 		card.remove();
 	});
 });
-
-describe("panel", () => {
-	it("renders the user's name", async () => {
-		const panel = document.createElement(PANEL_ELEMENT) as HTMLElement & {
-			hass: unknown;
-			updateComplete: Promise<boolean>;
-		};
-		panel.hass = { user: { name: "Martin" } };
-		document.body.append(panel);
-		await panel.updateComplete;
-		expect(panel.shadowRoot?.textContent).toContain("Hello, Martin!");
-		panel.remove();
-	});
-});

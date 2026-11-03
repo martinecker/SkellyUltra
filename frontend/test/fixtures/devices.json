@@ -1,0 +1,10 @@
+[
+	{
+		"entry_id": "01JSKELLYENTRY00000000000",
+		"device_id": "0123456789abcdef0123456789abcdef",
+		"name": "Skelly Santa",
+		"type": "ultra_skelly",
+		"available": true,
+		"upload_target": "media-source://media_source/local/skelly_ultra"
+	}
+]

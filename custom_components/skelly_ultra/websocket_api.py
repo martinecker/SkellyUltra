@@ -4,6 +4,7 @@ skelly_ultra/files/list returns a device's files with their settings, the
 play order, the free storage, the transfer state and the device profile
 metadata a UI needs to edit files. skelly_ultra/files/subscribe sends the
 same payload right away and again whenever it changes.
+skelly_ultra/devices/list returns the loaded Skellies, for a device picker.
 
 These commands only read. Changes go through the skelly_ultra.* actions,
 so automations and the UI share one path.
@@ -12,6 +13,7 @@ so automations and the UI share one path.
 from __future__ import annotations
 
 import logging
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +27,7 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY, DOMAIN
+from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .helpers import (
     MAX_UI_EFFECT_SPEED,
     device_speed_to_ui,
@@ -36,11 +39,20 @@ from .sensor import idle_transfer_state
 
 _LOGGER = logging.getLogger(__name__)
 
-# Eye icon images, served from images/<eye_icon_folder>/eye_icon_<n>.png
-EYE_ICON_URL = f"/{DOMAIN}/eye_icons"
-EYE_ICON_DIR = Path(__file__).parent / "images"
+# The images/ folder: eye icons (<image_folder>/eye_icon_<n>.png) and movement
+# icons (<image_folder>/movement_<part>.png) of each device profile
+IMAGE_URL = f"/{DOMAIN}/images"
+IMAGE_DIR = Path(__file__).parent / "images"
+
+# Folder in the "local" media directory (My media) that a UI uploads files to
+# before sending them to a Skelly. Uploaded files stay there, so they can be
+# sent again from the media library.
+UPLOAD_FOLDER = DOMAIN
+LOCAL_MEDIA_DIR = "local"
 
 _REGISTERED_KEY = f"{DOMAIN}_websocket_registered"
+# Media source ID of the upload folder, or None if there is none
+_UPLOAD_TARGET_KEY = f"{DOMAIN}_upload_target"
 # entry_id -> {subscription end callbacks}, to end them when the entry unloads
 _SUBSCRIPTIONS_KEY = f"{DOMAIN}_file_subscriptions"
 
@@ -51,23 +63,52 @@ _TARGET_SCHEMA = {
 
 
 async def async_setup_websocket_api(hass: HomeAssistant) -> None:
-    """Register the websocket commands and the eye icon path.
+    """Register the websocket commands and the images path, make the upload folder.
 
-    Neither can be unregistered, so this runs once per Home Assistant run,
+    None of these can be undone, so this runs once per Home Assistant run,
     on the first entry that is set up. The commands check that the entry
     they are asked about is loaded.
     """
     if hass.data.get(_REGISTERED_KEY):
         return
     hass.data[_REGISTERED_KEY] = True
+    hass.data[_UPLOAD_TARGET_KEY] = None
 
     websocket_api.async_register_command(hass, ws_list_files)
     websocket_api.async_register_command(hass, ws_subscribe_files)
+    websocket_api.async_register_command(hass, ws_list_devices)
 
-    if EYE_ICON_DIR.is_dir():
+    if IMAGE_DIR.is_dir():
         await hass.http.async_register_static_paths(
-            [StaticPathConfig(EYE_ICON_URL, str(EYE_ICON_DIR), cache_headers=True)]
+            [StaticPathConfig(IMAGE_URL, str(IMAGE_DIR), cache_headers=True)]
         )
+
+    hass.data[_UPLOAD_TARGET_KEY] = await _async_make_upload_folder(hass)
+
+
+async def _async_make_upload_folder(hass: HomeAssistant) -> str | None:
+    """Create the upload folder in My media; return its media source ID.
+
+    Return None if there is no "local" media directory (it can be configured
+    away) or the folder can't be created.
+    """
+    media_dir = hass.config.media_dirs.get(LOCAL_MEDIA_DIR)
+    if media_dir is None:
+        _LOGGER.debug("No local media directory, so the UI can't upload files")
+        return None
+    folder = Path(media_dir) / UPLOAD_FOLDER
+    try:
+        await hass.async_add_executor_job(
+            partial(folder.mkdir, parents=True, exist_ok=True)
+        )
+    except OSError as err:
+        _LOGGER.warning(
+            "Can't create the upload folder %s, so the UI can't upload files: %s",
+            folder,
+            err,
+        )
+        return None
+    return f"media-source://media_source/{LOCAL_MEDIA_DIR}/{UPLOAD_FOLDER}"
 
 
 def _resolve_entry(hass: HomeAssistant, msg: dict[str, Any]) -> ConfigEntry | None:
@@ -123,21 +164,28 @@ def async_end_file_subscriptions(hass: HomeAssistant, entry_id: str) -> None:
 
 def _profile_payload(entry: ConfigEntry, profile: dict) -> dict[str, Any]:
     """Return the profile metadata a UI needs to show and edit files."""
+    folder_url = f"{IMAGE_URL}/{profile['image_folder']}"
     eye_icons = []
     if profile.get("has_eye_image"):
-        folder = profile["eye_icon_folder"]
         eye_icons = [
             {
                 "value": number,
                 "label": label,
-                "url": f"{EYE_ICON_URL}/{folder}/eye_icon_{number}.png",
+                "url": f"{folder_url}/eye_icon_{number}.png",
             }
             for number, label in enumerate(profile["eye_icons"], start=1)
         ]
     return {
         "type": entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY),
         "display_name": profile["display_name"],
-        "movements": [m["part"] for m in profile["movements"]],
+        "movements": [
+            {
+                "part": m["part"],
+                "label": m["part"].capitalize(),
+                "icon_url": f"{folder_url}/movement_{m['part']}.png",
+            }
+            for m in profile["movements"]
+        ],
         "lights": [
             {"channel": light["channel"], "label": light["label"]}
             for light in profile["lights"]
@@ -145,6 +193,7 @@ def _profile_payload(entry: ConfigEntry, profile: dict) -> dict[str, Any]:
         "light_modes": list(profile["light_modes"]),
         "eye_icons": eye_icons,
         "max_effect_speed": MAX_UI_EFFECT_SPEED,
+        "max_filename_length": MAX_FILENAME_LENGTH,
     }
 
 
@@ -178,6 +227,19 @@ def _file_payload(profile: dict, file_info: Any, enabled: bool) -> dict[str, Any
     }
 
 
+def _entry_device(hass: HomeAssistant, entry: ConfigEntry) -> dr.DeviceEntry | None:
+    """Return the entry's device in the device registry."""
+    devices = dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+    return devices[0] if devices else None
+
+
+def _device_name(entry: ConfigEntry, device: dr.DeviceEntry | None) -> str:
+    """Return the name the user sees for the device."""
+    if device is not None:
+        return device.name_by_user or device.name or entry.title
+    return entry.title
+
+
 def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """Return the files payload of a loaded entry."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
@@ -187,8 +249,11 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
     file_order = list(data.get("file_order") or [])
     enabled = set(file_order)
     transfer_sensor = entry_data.get("transfer_sensor")
+    device = _entry_device(hass, entry)
     return {
         "entry_id": entry.entry_id,
+        "device_id": device.id if device else None,
+        "name": _device_name(entry, device),
         "unloaded": False,
         "device_profile": _profile_payload(entry, profile),
         "available": coordinator.last_update_success,
@@ -323,3 +388,39 @@ def ws_subscribe_files(
     connection.subscriptions[msg["id"]] = unsubscribe
     connection.send_result(msg["id"])
     send_if_changed()
+
+
+@websocket_api.websocket_command({vol.Required("type"): "skelly_ultra/devices/list"})
+@callback
+def ws_list_devices(
+    hass: HomeAssistant,
+    connection: websocket_api.ActiveConnection,
+    msg: dict[str, Any],
+) -> None:
+    """Return the loaded Skellies, for a UI's device picker.
+
+    Unlike the device registry commands, this doesn't need an admin user.
+    upload_target is the media source ID a UI uploads files to (the same for
+    every Skelly), or None if Home Assistant has no local media directory.
+    """
+    upload_target = hass.data.get(_UPLOAD_TARGET_KEY)
+    devices = []
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        if (
+            entry.state is not ConfigEntryState.LOADED
+            or entry.entry_id not in hass.data.get(DOMAIN, {})
+        ):
+            continue
+        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        device = _entry_device(hass, entry)
+        devices.append(
+            {
+                "entry_id": entry.entry_id,
+                "device_id": device.id if device else None,
+                "name": _device_name(entry, device),
+                "type": entry.data.get(CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY),
+                "available": coordinator.last_update_success,
+                "upload_target": upload_target,
+            }
+        )
+    connection.send_result(msg["id"], devices)

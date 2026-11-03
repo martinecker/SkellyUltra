@@ -4,6 +4,7 @@ import asyncio
 import shutil
 import subprocess
 
+import aiohttp
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
@@ -18,7 +19,10 @@ from custom_components.skelly_ultra.const import (
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
 )
-from custom_components.skelly_ultra.websocket_api import EYE_ICON_DIR
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import (
+    MAX_FILENAME_LENGTH,
+)
+from custom_components.skelly_ultra.websocket_api import IMAGE_DIR
 
 from .conftest import advance, coordinator
 from .device_sim import Light
@@ -69,6 +73,11 @@ async def test_list_files(hass, setup_integration, device, hass_ws_client):
     result = await ws_list(client, entry_id=entry.entry_id, refresh=True)
 
     assert result["entry_id"] == entry.entry_id
+    (device_entry,) = dr.async_entries_for_config_entry(
+        dr.async_get(hass), entry.entry_id
+    )
+    assert result["device_id"] == device_entry.id
+    assert result["name"] == "Ultra Skelly v2"
     assert result["available"] is True
     assert result["file_order"] == [3, 1]
     assert result["capacity"] == {"free_kb": 4000, "file_count_reported": 3}
@@ -112,18 +121,31 @@ async def test_list_files(hass, setup_integration, device, hass_ws_client):
 
     profile = result["device_profile"]
     assert profile["type"] == "ultra_skelly"
-    assert profile["movements"] == ["all", "head", "arm", "torso"]
+    assert profile["movements"] == [
+        {
+            "part": part,
+            "label": label,
+            "icon_url": f"/skelly_ultra/images/skelly/movement_{part}.png",
+        }
+        for part, label in [
+            ("all", "All"),
+            ("head", "Head"),
+            ("arm", "Arm"),
+            ("torso", "Torso"),
+        ]
+    ]
     assert profile["lights"] == [
         {"channel": 0, "label": "Torso Light"},
         {"channel": 1, "label": "Head Light"},
     ]
     assert profile["light_modes"] == ["Static", "Strobe", "Pulse"]
     assert profile["max_effect_speed"] == 254
+    assert profile["max_filename_length"] == MAX_FILENAME_LENGTH
     assert len(profile["eye_icons"]) == 18
     assert profile["eye_icons"][0] == {
         "value": 1,
         "label": "1 Blue Eyeball",
-        "url": "/skelly_ultra/eye_icons/skelly/eye_icon_1.png",
+        "url": "/skelly_ultra/images/skelly/eye_icon_1.png",
     }
 
 
@@ -320,12 +342,22 @@ async def test_payload_follows_device_profile(
     hello = next(f for f in result["files"] if f["name"] == "hello.mp3")
     assert [light["channel"] for light in hello["lights"]] == [0]
     if device_type == DEVICE_TYPE_SKELLY_12FT:
-        assert profile["movements"] == ["head"]
+        assert [m["part"] for m in profile["movements"]] == ["head"]
         assert hello["movements"] == ["head"]
         assert len(profile["eye_icons"]) == 20
+        assert profile["movements"][0]["icon_url"] == (
+            "/skelly_ultra/images/skelly12ft/movement_head.png"
+        )
         assert profile["eye_icons"][0]["url"].endswith("/skelly12ft/eye_icon_1.png")
     else:
         assert hello["movements"] == ["elbow"]
+        assert [m["part"] for m in profile["movements"]] == [
+            "all",
+            "wrist",
+            "elbow",
+            "head",
+            "eyes",
+        ]
         assert profile["eye_icons"] == []
         assert all(f["eye_icon"] is None for f in result["files"])
 
@@ -433,9 +465,149 @@ async def test_eye_icon_images_are_served(hass, config_entry, mock_ble, hass_cli
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     client = await hass_client()
-    response = await client.get("/skelly_ultra/eye_icons/skelly/eye_icon_1.png")
+    response = await client.get("/skelly_ultra/images/skelly/eye_icon_1.png")
     assert response.status == 200
     assert (
-        await response.read()
-        == (EYE_ICON_DIR / "skelly" / "eye_icon_1.png").read_bytes()
+        await response.read() == (IMAGE_DIR / "skelly" / "eye_icon_1.png").read_bytes()
     )
+
+
+async def ws_devices(client) -> list[dict]:
+    await client.send_json_auto_id({"type": "skelly_ultra/devices/list"})
+    response = await client.receive_json()
+    assert response["success"], response
+    return response["result"]
+
+
+async def test_list_devices(
+    hass, config_entry, mock_ble, media_dir, hass_ws_client, hass_read_only_access_token
+):
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    (device_entry,) = dr.async_entries_for_config_entry(
+        dr.async_get(hass), config_entry.entry_id
+    )
+    expected = [
+        {
+            "entry_id": config_entry.entry_id,
+            "device_id": device_entry.id,
+            "name": "Ultra Skelly v2",
+            "type": "ultra_skelly",
+            "available": True,
+            "upload_target": "media-source://media_source/local/skelly_ultra",
+        }
+    ]
+
+    assert await ws_devices(await hass_ws_client(hass)) == expected
+    # Users who aren't admins can list them too
+    client = await hass_ws_client(hass, hass_read_only_access_token)
+    assert await ws_devices(client) == expected
+
+    # The name the user gave the device wins
+    dr.async_get(hass).async_update_device(device_entry.id, name_by_user="Bones")
+    (listed,) = await ws_devices(client)
+    assert listed["name"] == "Bones"
+    result = await ws_list(client)
+    assert result["name"] == "Bones"
+    assert result["device_id"] == device_entry.id
+
+
+async def test_list_devices_leaves_out_unloaded_skellies(
+    hass, setup_integration, hass_ws_client
+):
+    other = MockConfigEntry(
+        domain=DOMAIN,
+        title="Not loaded",
+        data={"address": "11:22:33:44:55:66"},
+        unique_id="11:22:33:44:55:66",
+    )
+    other.add_to_hass(hass)
+    client = await hass_ws_client(hass)
+
+    devices = await ws_devices(client)
+    assert [d["entry_id"] for d in devices] == [setup_integration.entry_id]
+
+    assert await hass.config_entries.async_unload(setup_integration.entry_id)
+    await hass.async_block_till_done()
+    assert await ws_devices(client) == []
+
+
+async def test_upload_folder_is_created_in_my_media(
+    hass, config_entry, mock_ble, media_dir
+):
+    assert not media_dir.exists()
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert (media_dir / "skelly_ultra").is_dir()
+
+
+async def test_no_upload_target_without_local_media(
+    hass, config_entry, mock_ble, hass_ws_client
+):
+    hass.config.media_dirs = {"recordings": "/somewhere"}
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    (listed,) = await ws_devices(await hass_ws_client(hass))
+    assert listed["upload_target"] is None
+
+
+async def test_no_upload_target_if_the_folder_cant_be_made(
+    hass, config_entry, mock_ble, hass_ws_client, tmp_path
+):
+    blocker = tmp_path / "media"
+    blocker.write_text("a file where the media folder should be")
+    hass.config.media_dirs = {"local": str(blocker)}
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    assert config_entry.state.name == "LOADED"
+    (listed,) = await ws_devices(await hass_ws_client(hass))
+    assert listed["upload_target"] is None
+
+
+@needs_ffmpeg
+async def test_upload_then_send_file(
+    hass, config_entry, mock_ble, device, media_dir, hass_ws_client, hass_client, tone
+):
+    """The Upload tab's flow: upload to the target, then send_file the result."""
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+    await hass.async_block_till_done()
+    (listed,) = await ws_devices(await hass_ws_client(hass))
+
+    client = await hass_client()
+    form = aiohttp.FormData()
+    form.add_field("media_content_id", listed["upload_target"])
+    form.add_field(
+        "file", tone.read_bytes(), filename="boo.wav", content_type="audio/wav"
+    )
+    response = await client.post("/api/media_source/local_source/upload", data=form)
+    assert response.status == 200, await response.text()
+    uploaded = (await response.json())["media_content_id"]
+    assert (media_dir / "skelly_ultra" / "boo.wav").is_file()
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "send_file",
+        {"file_path": uploaded, "target_filename": "boo"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["filename"] == "boo.mp3"
+    assert "boo.mp3" in [f.name for f in device.files]
+
+
+def test_every_image_url_has_a_file():
+    """Each profile's eye icon and movement pictures exist under images/."""
+    from custom_components.skelly_ultra.const import DEVICE_PROFILES
+    from custom_components.skelly_ultra.websocket_api import IMAGE_URL, _profile_payload
+
+    for device_type, profile in DEVICE_PROFILES.items():
+        entry = MockConfigEntry(domain=DOMAIN, data={CONF_DEVICE_TYPE: device_type})
+        payload = _profile_payload(entry, profile)
+        urls = [m["icon_url"] for m in payload["movements"]] + [
+            icon["url"] for icon in payload["eye_icons"]
+        ]
+        assert len(urls) == len(profile["movements"]) + len(profile["eye_icons"])
+        for url in urls:
+            assert url.startswith(f"{IMAGE_URL}/")
+            path = IMAGE_DIR / url.removeprefix(f"{IMAGE_URL}/")
+            assert path.is_file(), f"{device_type}: no {path}"

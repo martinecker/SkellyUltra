@@ -57,10 +57,11 @@ class DeviceProfile(TypedDict):
     default_name: str
     ble_names: list[str]
     has_eye_image: bool
-    # Eye icon option labels in device index order (1-based), and the folder
-    # under images/ holding eye_icon_<n>.png for each of them.
+    # Eye icon option labels in device index order (1-based)
     eye_icons: list[str]
-    eye_icon_folder: str
+    # Folder under images/ with the profile's pictures: eye_icon_<n>.png for
+    # each eye icon and movement_<part>.png for each movement part
+    image_folder: str
     movements: list[MovementDef]
     lights: list[LightDef]
     light_modes: list[str]
@@ -98,7 +99,7 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             "17 Snowflake",
             "18 Confetti",
         ],
-        "eye_icon_folder": "skelly",
+        "image_folder": "skelly",
         "movements": [
             {"part": "all", "bit": 255},
             {"part": "head", "bit": 0x01},
@@ -140,7 +141,7 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             "19 Crossbones",
             "20 Fireworks",
         ],
-        "eye_icon_folder": "skelly12ft",
+        "image_folder": "skelly12ft",
         "movements": [
             {"part": "head", "bit": 0x02},
         ],
@@ -157,7 +158,7 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
         "ble_names": ["lethal lily"],
         "has_eye_image": False,
         "eye_icons": [],
-        "eye_icon_folder": "",
+        "image_folder": "lily",
         "movements": [
             {"part": "all", "bit": 255},
             {"part": "wrist", "bit": 0x01},
