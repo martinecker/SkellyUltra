@@ -314,9 +314,9 @@ describe("panel", () => {
 		// The device does one thing at a time
 		expect(button(panel, 1, "play").disabled).toBe(true);
 		expect(button(panel, 1, "play").title).toBe(
-			"Files can't be played or deleted until the transfer is done.",
+			"Files can't be played, edited or deleted until the transfer is done.",
 		);
-		expect(text(panel)).toContain("can't be played or deleted");
+		expect(text(panel)).toContain("can't be played, edited or deleted");
 
 		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
 			?.shadowRoot as ShadowRoot;
@@ -655,6 +655,345 @@ describe("panel", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	describe("edit dialog", () => {
+		const editor = (panel: Panel) =>
+			panel.shadowRoot?.querySelector("sk-edit-dialog") as HTMLElement & {
+				updateComplete: Promise<boolean>;
+			};
+		const ed = (panel: Panel) => editor(panel).shadowRoot as ShadowRoot;
+		const edDialog = (panel: Panel) =>
+			ed(panel).querySelector("dialog") as HTMLDialogElement;
+		const edButton = (panel: Panel, selector: string) =>
+			ed(panel).querySelector(selector) as HTMLButtonElement;
+		const flush = async (panel: Panel) => {
+			await settle(panel);
+			await editor(panel).updateComplete;
+		};
+		const openEditor = async (panel: Panel, fileIndex = 1) => {
+			button(panel, fileIndex, "edit").click();
+			await flush(panel);
+		};
+		const entry = () => ({
+			...idlePayload,
+			entry_id: devicesFixture[0].entry_id,
+		});
+
+		it("saves only what changed", async () => {
+			const messages = toasts();
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			expect(edDialog(panel).open).toBe(true);
+			expect(ed(panel).textContent).toContain("Edit hello.mp3");
+			// Nothing changed yet
+			expect(edButton(panel, "button.save").disabled).toBe(true);
+
+			edButton(panel, 'button.movement[data-part="all"]').click();
+			await flush(panel);
+			expect(
+				edButton(panel, 'button.movement[data-part="all"]').getAttribute(
+					"aria-pressed",
+				),
+			).toBe("true");
+			expect(
+				edButton(panel, 'button.movement[data-part="head"]').getAttribute(
+					"aria-pressed",
+				),
+			).toBe("false");
+
+			const brightness = ed(panel).querySelector(
+				'fieldset[data-channel="1"] input.brightness',
+			) as HTMLInputElement;
+			brightness.value = "200";
+			brightness.dispatchEvent(new Event("input"));
+			await flush(panel);
+
+			edButton(panel, "button.save").click();
+			await flush(panel);
+			expect(hass.callService).toHaveBeenLastCalledWith(
+				"skelly_ultra",
+				"edit_file",
+				{
+					device_id: DEVICE_ID,
+					filename: "hello.mp3",
+					movements: ["all"],
+					lights: [{ channel: 1, brightness: 200 }],
+				},
+				undefined,
+				false,
+				false,
+			);
+			expect(edDialog(panel).open).toBe(false);
+			expect(messages).toContain("Saved hello.mp3");
+		});
+
+		it("shows a failed save in the dialog and keeps the changes", async () => {
+			const { hass } = fakeHass(one);
+			hass.callService.mockRejectedValueOnce({
+				code: "home_assistant_error",
+				message: "The device is playing a file",
+			});
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			await flush(panel);
+			edButton(panel, "button.save").click();
+			await flush(panel);
+			expect(edDialog(panel).open).toBe(true);
+			expect(ed(panel).textContent).toContain(
+				"Couldn't save: The device is playing a file",
+			);
+			expect(edButton(panel, "button.save").disabled).toBe(false);
+		});
+
+		it("stops a file it played before saving", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			button(panel, 2, "play").click();
+			await settle(panel);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			await flush(panel);
+			edButton(panel, "button.save").click();
+			await flush(panel);
+			const services = hass.callService.mock.calls.map((c) => c[1]);
+			expect(services).toEqual(["play_file", "stop_file", "edit_file"]);
+			expect(row(panel, 2).classList.contains("playing")).toBe(false);
+		});
+
+		it("previews the file with its saved settings", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, "button.preview").click();
+			await flush(panel);
+			expect(hass.callService).toHaveBeenLastCalledWith(
+				"skelly_ultra",
+				"play_file",
+				{ device_id: DEVICE_ID, file_index: 1 },
+				undefined,
+				false,
+				false,
+			);
+			expect(edButton(panel, "button.preview").textContent).toContain("Stop");
+			edButton(panel, "button.preview").click();
+			await flush(panel);
+			expect(hass.callService.mock.calls.at(-1)?.[1]).toBe("stop_file");
+		});
+
+		it("says when the file changed on the Skelly, and takes the new values", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			await flush(panel);
+
+			const changed = entry();
+			changed.files = changed.files.map((f) =>
+				f.file_index === 1 ? { ...f, movements: ["arm"] } : f,
+			);
+			send(changed);
+			await flush(panel);
+			expect(ed(panel).textContent).toContain("changed on the Skelly");
+			edButton(panel, "button.reload").click();
+			await flush(panel);
+			expect(ed(panel).textContent).not.toContain("changed on the Skelly");
+			expect(
+				edButton(panel, 'button.movement[data-part="arm"]').getAttribute(
+					"aria-pressed",
+				),
+			).toBe("true");
+			// The user's eye change is gone too
+			expect(edButton(panel, "button.save").disabled).toBe(true);
+		});
+
+		it("can't save while the Skelly is disconnected or the file is gone", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			send({ ...entry(), available: false });
+			await flush(panel);
+			expect(ed(panel).textContent).toContain("not connected");
+			expect(edButton(panel, "button.save").disabled).toBe(true);
+
+			send({
+				...entry(),
+				files: entry().files.filter((f) => f.file_index !== 1),
+			});
+			await flush(panel);
+			expect(ed(panel).textContent).toContain("no longer on the Skelly");
+			expect(edButton(panel, "button.save").disabled).toBe(true);
+		});
+
+		it("shows a speed only for moving effects, and no eye icons on Lily", async () => {
+			const lilyPayload: FilesPayload = {
+				...idlePayload,
+				device_profile: {
+					...idlePayload.device_profile,
+					eye_icons: [],
+				},
+				files: idlePayload.files.map((f) => ({ ...f, eye_icon: null })),
+			};
+			const { hass } = fakeHass(one, lilyPayload);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			expect(ed(panel).querySelector("button.eye")).toBeNull();
+			// Channel 0 is Static, channel 1 Pulse
+			expect(
+				ed(panel).querySelector('fieldset[data-channel="0"] input.speed'),
+			).toBeNull();
+			expect(
+				ed(panel).querySelector('fieldset[data-channel="1"] input.speed'),
+			).not.toBeNull();
+
+			const mode = ed(panel).querySelector(
+				'fieldset[data-channel="0"] select.mode',
+			) as HTMLSelectElement;
+			mode.value = "2";
+			mode.dispatchEvent(new Event("change"));
+			await flush(panel);
+			expect(
+				ed(panel).querySelector('fieldset[data-channel="0"] input.speed'),
+			).not.toBeNull();
+		});
+
+		it("discards the changes on Cancel and Escape", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			await flush(panel);
+			edButton(panel, "button.cancel").click();
+			await flush(panel);
+			expect(edDialog(panel).open).toBe(false);
+
+			await openEditor(panel);
+			expect(edButton(panel, "button.save").disabled).toBe(true);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			edDialog(panel).dispatchEvent(new Event("cancel"));
+			edDialog(panel).close();
+			await flush(panel);
+			await openEditor(panel);
+			expect(
+				edButton(panel, 'button.eye[data-value="2"]').getAttribute(
+					"aria-pressed",
+				),
+			).toBe("false");
+			expect(hass.callService).not.toHaveBeenCalled();
+		});
+
+		it("can't be cancelled while saving, and reports a save it lost", async () => {
+			const messages = toasts();
+			const { hass } = fakeHass(one);
+			let fail = (_err: unknown) => {};
+			hass.callService.mockImplementationOnce(
+				() =>
+					new Promise((_resolve, reject) => {
+						fail = reject;
+					}),
+			);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			edButton(panel, 'button.eye[data-value="2"]').click();
+			await flush(panel);
+			edButton(panel, "button.save").click();
+			await flush(panel);
+			expect(edButton(panel, "button.cancel").disabled).toBe(true);
+			// A browser may still close it (a second Escape)
+			edDialog(panel).close();
+			edDialog(panel).dispatchEvent(new Event("close"));
+			fail({ message: "Lost connection" });
+			await flush(panel);
+			expect(messages).toContain("Couldn't save hello.mp3: Lost connection");
+		});
+
+		it("shows the reloaded effect and clamps typed numbers", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			const mode = () =>
+				ed(panel).querySelector(
+					'fieldset[data-channel="0"] select.mode',
+				) as HTMLSelectElement;
+			mode().value = "3";
+			mode().dispatchEvent(new Event("change"));
+			await flush(panel);
+			mode().value = "1";
+			mode().dispatchEvent(new Event("change"));
+			await flush(panel);
+
+			const changed = entry();
+			changed.files = changed.files.map((f) =>
+				f.file_index === 1
+					? {
+							...f,
+							lights: f.lights.map((l) =>
+								l.channel === 0 ? { ...l, effect_mode: 3 } : l,
+							),
+						}
+					: f,
+			);
+			send(changed);
+			await flush(panel);
+			edButton(panel, "button.reload").click();
+			await flush(panel);
+			expect(mode().value).toBe("3");
+
+			const number = ed(panel).querySelector(
+				'fieldset[data-channel="0"] input.brightness-number',
+			) as HTMLInputElement;
+			number.value = "300";
+			number.dispatchEvent(new Event("change"));
+			await flush(panel);
+			expect(number.value).toBe("255");
+		});
+
+		it("previews the file by its current index", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			await openEditor(panel, 2);
+			// Another file was deleted, and the device renumbered
+			send({
+				...entry(),
+				file_order: [],
+				files: entry()
+					.files.filter((f) => f.file_index === 2)
+					.map((f) => ({ ...f, file_index: 1 })),
+			});
+			await flush(panel);
+			edButton(panel, "button.preview").click();
+			await flush(panel);
+			expect(hass.callService).toHaveBeenLastCalledWith(
+				"skelly_ultra",
+				"play_file",
+				{ device_id: DEVICE_ID, file_index: 1 },
+				undefined,
+				false,
+				false,
+			);
+		});
+
+		it("closes when another Skelly is picked", async () => {
+			const second = {
+				...devicesFixture[0],
+				entry_id: "e2",
+				device_id: "d2",
+				name: "Lily",
+			};
+			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+			const panel = await showPanel(hass);
+			await openEditor(panel);
+			const select = panel.shadowRoot?.querySelector(
+				"select",
+			) as HTMLSelectElement;
+			select.value = "d2";
+			select.dispatchEvent(new Event("change"));
+			await flush(panel);
+			expect(edDialog(panel).open).toBe(false);
+		});
 	});
 
 	it("says so when no Skelly is loaded", async () => {

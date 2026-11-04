@@ -5,11 +5,13 @@
 
 import { CARD_PICKER_ENTRY, SkellyUltraCard } from "./card/skelly-ultra-card";
 import { SkConfirm } from "./components/sk-confirm";
+import { SkEditDialog } from "./components/sk-edit-dialog";
 import { SkFileTable } from "./components/sk-file-table";
 import { SkTransferBar } from "./components/sk-transfer-bar";
 import {
 	CARD_ELEMENT,
 	CONFIRM_ELEMENT,
+	EDIT_DIALOG_ELEMENT,
 	FILE_TABLE_ELEMENT,
 	PANEL_ELEMENT,
 	TRANSFER_BAR_ELEMENT,
@@ -20,6 +22,7 @@ const ELEMENTS: [string, CustomElementConstructor][] = [
 	[FILE_TABLE_ELEMENT, SkFileTable],
 	[TRANSFER_BAR_ELEMENT, SkTransferBar],
 	[CONFIRM_ELEMENT, SkConfirm],
+	[EDIT_DIALOG_ELEMENT, SkEditDialog],
 	[PANEL_ELEMENT, SkellyUltraPanel],
 	[CARD_ELEMENT, SkellyUltraCard],
 ];

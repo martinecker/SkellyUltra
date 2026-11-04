@@ -15,14 +15,15 @@ const MODE_ANIMATIONS: Record<string, "strobe" | "pulse"> = {
 	pulsing: "pulse",
 };
 
-// Detail of the events the table fires: sk-play, sk-stop and sk-delete
+// Detail of the events the table fires: sk-play, sk-stop, sk-edit and
+// sk-delete
 export interface FileEventDetail {
 	file: FileEntry;
 }
 
 // The files of one Skelly: a table on wide screens, a two-line list on narrow
 // ones. It only shows and asks; the panel does the actions, after an
-// sk-play, sk-stop or sk-delete event.
+// sk-play, sk-stop, sk-edit or sk-delete event.
 export class SkFileTable extends LitElement {
 	@property({ attribute: false }) profile?: DeviceProfile;
 	@property({ attribute: false }) rows: FileRow[] = [];
@@ -325,6 +326,15 @@ export class SkFileTable extends LitElement {
 								<td class="actions">
 									${this._renderPlayButton(file)}
 									<button
+										class="edit"
+										title=${this._title(strings.edit)}
+										aria-label=${strings.edit}
+										?disabled=${this._isDisabled(file)}
+										@click=${() => this._fire("sk-edit", file)}
+									>
+										<ha-icon icon="mdi:pencil"></ha-icon>
+									</button>
+									<button
 										class="delete"
 										title=${this._title(strings.delete)}
 										aria-label=${strings.delete}
@@ -394,6 +404,18 @@ export class SkFileTable extends LitElement {
 									<ha-icon icon="mdi:dots-vertical"></ha-icon>
 								</summary>
 								<div class="menu">
+									<button
+										class="edit"
+										title=${this._title(strings.edit)}
+										?disabled=${this._isDisabled(file)}
+										@click=${(ev: Event) => {
+											this._closeMenu(ev);
+											this._fire("sk-edit", file);
+										}}
+									>
+										<ha-icon icon="mdi:pencil"></ha-icon>
+										${strings.edit}
+									</button>
 									<button
 										class="delete"
 										title=${this._title(strings.delete)}
@@ -539,7 +561,10 @@ export class SkFileTable extends LitElement {
 		return this.disabledReason && !this.disabled ? this.disabledReason : label;
 	}
 
-	private _fire(type: "sk-play" | "sk-stop" | "sk-delete", file: FileEntry) {
+	private _fire(
+		type: "sk-play" | "sk-stop" | "sk-edit" | "sk-delete",
+		file: FileEntry,
+	) {
 		this.dispatchEvent(
 			new CustomEvent<FileEventDetail>(type, {
 				detail: { file },

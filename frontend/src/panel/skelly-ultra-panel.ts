@@ -4,6 +4,7 @@ import {
 	type ActionTarget,
 	cancelTransfer,
 	deleteFile,
+	editFile,
 	errorMessage,
 	playFile,
 	stopFile,
@@ -18,6 +19,7 @@ import {
 	targetOf,
 } from "../api/types";
 import type { SkConfirm } from "../components/sk-confirm";
+import type { SaveHandler, SkEditDialog } from "../components/sk-edit-dialog";
 import type { FileEventDetail } from "../components/sk-file-table";
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
@@ -68,6 +70,8 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _devicesError?: string;
 	// device_id or entry_id of the chosen Skelly
 	@state() private _selected?: string;
+	// The file in the edit dialog
+	@state() private _editing?: { entry_id: string; name: string };
 	// The file last played; the device doesn't report playback
 	@state() private _playing?: PlayingFile;
 	// busyKey()s of files with an action in progress
@@ -194,6 +198,8 @@ export class SkellyUltraPanel extends LitElement {
 	private _onDeviceChange(ev: Event): void {
 		const value = (ev.target as HTMLSelectElement).value;
 		this._selected = value;
+		// The edit dialog belongs to the Skelly it was opened on
+		this._closeEditor();
 		const url = new URL(window.location.href);
 		url.searchParams.set(DEVICE_PARAM, value);
 		history.replaceState(history.state, "", url);
@@ -480,10 +486,25 @@ export class SkellyUltraPanel extends LitElement {
 							?details=${this._details}
 							@sk-play=${this._onPlay}
 							@sk-stop=${this._onStop}
+							@sk-edit=${this._onEdit}
 							@sk-delete=${this._onDelete}
 						></sk-file-table>`
 					: nothing
 			}
+			<sk-edit-dialog
+				.profile=${payload?.device_profile}
+				.file=${this._editedFile(payload)}
+				.save=${this._saveEdit}
+				.readOnlyReason=${this._editBlockedReason(live, payload)}
+				?playing=${
+					payload !== undefined &&
+					this._editing !== undefined &&
+					this._playingIndex(payload) === this._editedFile(payload)?.file_index
+				}
+				@sk-preview=${this._onPlay}
+				@sk-preview-stop=${this._onStop}
+				@sk-edit-closed=${this._onEditClosed}
+			></sk-edit-dialog>
 			<sk-confirm></sk-confirm>
 		`;
 	}
@@ -599,6 +620,97 @@ export class SkellyUltraPanel extends LitElement {
 			this._clearPlaying(entryId, file);
 		}
 	}
+
+	// The edited file's current entry: undefined while there's no payload of
+	// its Skelly, null once the file is gone
+	private _editedFile(
+		payload: FilesPayload | undefined,
+	): FileEntry | null | undefined {
+		const editing = this._editing;
+		if (!editing || !payload || payload.entry_id !== editing.entry_id) {
+			return undefined;
+		}
+		return payload.files.find((f) => f.name === editing.name) ?? null;
+	}
+
+	// Why the edit dialog can't save right now, if it can't
+	private _editBlockedReason(
+		live: boolean,
+		payload: FilesPayload | undefined,
+	): string | undefined {
+		if (!live || !payload) {
+			return this._files.status === "reloading"
+				? strings.reloadingNotice
+				: strings.editWaiting;
+		}
+		if (!payload.available) {
+			return strings.editDisconnected;
+		}
+		if (!this._actionTarget) {
+			return strings.noDeviceId;
+		}
+		if (payload.transfer.in_progress) {
+			return strings.transferBusy;
+		}
+		return undefined;
+	}
+
+	private async _onEdit(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const entryId = this._payload?.entry_id;
+		const dialog = this._editDialog;
+		if (!entryId || !dialog) {
+			return;
+		}
+		this._editing = { entry_id: entryId, name: file.name };
+		await dialog.open(file);
+	}
+
+	private get _editDialog(): SkEditDialog | null {
+		return this.renderRoot.querySelector<SkEditDialog>("sk-edit-dialog");
+	}
+
+	private _onEditClosed() {
+		this._editing = undefined;
+	}
+
+	private _closeEditor() {
+		this._editing = undefined;
+		this._editDialog?.close();
+	}
+
+	// Saves the edit dialog's changes. The device can't change a file's
+	// settings while it plays one, so a file we started is stopped first.
+	private readonly _saveEdit: SaveHandler = async (file, changes) => {
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			throw new Error(strings.editWaiting);
+		}
+		const playing = this._playing;
+		if (playing?.entry_id === entryId) {
+			try {
+				await stopFile(hass, target, playing.file_index);
+			} catch {
+				// Saving says why, if the device is still busy
+			}
+			if (this._playing === playing) {
+				this._playing = undefined;
+			}
+		}
+		// The file's current index (it may have changed since the dialog opened)
+		const current =
+			this._payload?.files.find((f) => f.name === file.name) ?? file;
+		const key = busyKey(entryId, current.file_index);
+		this._setBusy(key, true);
+		try {
+			await editFile(hass, target, file.name, changes);
+		} finally {
+			this._setBusy(key, false);
+		}
+		this._toast(strings.saved(file.name));
+	};
 
 	private async _onDelete(ev: CustomEvent<FileEventDetail>) {
 		const { file } = ev.detail;

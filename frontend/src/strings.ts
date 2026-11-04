@@ -37,7 +37,8 @@ export const strings = {
 	transferCancelling: "Cancelling…",
 	transferCancelFailed: (message: string) =>
 		`Couldn't cancel the transfer: ${message}`,
-	transferBusy: "Files can't be played or deleted until the transfer is done.",
+	transferBusy:
+		"Files can't be played, edited or deleted until the transfer is done.",
 	transferFailed: (name: string | null, error: string | null) =>
 		`Sending ${name ?? "the file"} failed${error ? `: ${error}` : "."}`,
 	transferCancelled: (name: string | null) =>
@@ -77,6 +78,31 @@ export const strings = {
 	deleteFailed: (name: string, message: string) =>
 		`Couldn't delete ${name}: ${message}`,
 	deleted: (name: string) => `Deleted ${name}`,
+	edit: "Edit",
+	// Edit dialog
+	editTitle: (name: string) => `Edit ${name}`,
+	editEye: "Eye icon",
+	editAllTitle: "Everything moves; turns the single parts off",
+	editBrightness: "Brightness",
+	editColor: "Color",
+	editEffect: "Effect",
+	editSpeed: "Effect speed",
+	editColorCycle: "Color cycle",
+	editPreview: "Preview",
+	editPreviewTitle: "Play the file with its saved settings",
+	editNothing: "Nothing changed yet",
+	editChanged:
+		"This file's settings changed on the Skelly since you opened it.",
+	editReload: "Use the new settings",
+	editGone: "This file is no longer on the Skelly.",
+	editDisconnected: "The Skelly is not connected, so changes can't be saved.",
+	editWaiting: "Waiting for the Skelly's files…",
+	editFailed: (message: string) => `Couldn't save: ${message}`,
+	editFailedFor: (name: string, message: string) =>
+		`Couldn't save ${name}: ${message}`,
+	save: "Save",
+	saving: "Saving…",
+	saved: (name: string) => `Saved ${name}`,
 	// Delete confirmation
 	deleteTitle: "Delete file?",
 	deleteMessage: (name: string) =>

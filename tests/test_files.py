@@ -291,6 +291,21 @@ async def test_edit_file_refused_while_playing(hass, setup_integration, device):
     coordinator(hass, setup_integration).mark_playback_inactive()
 
 
+async def test_edit_file_works_right_after_stop_file(
+    hass, setup_integration, device
+):
+    # The panel stops a playing file and saves right away, before the
+    # device's "stopped" event arrives
+    from .conftest import coordinator
+
+    coordinator(hass, setup_integration).mark_playback_active(30)
+    f = device.file("hello.mp3")
+    await action(hass, "stop_file", file_index=f.index)
+    assert not coordinator(hass, setup_integration).playback_active
+    await action(hass, "edit_file", filename="hello.mp3", eye_icon=2)
+    assert device.file("hello.mp3").eye_icon == 2
+
+
 # ---- play order ------------------------------------------------------------
 
 

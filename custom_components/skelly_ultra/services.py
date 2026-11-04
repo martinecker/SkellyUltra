@@ -290,6 +290,11 @@ async def async_stop_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
         _LOGGER.exception("Failed to stop file %s", file_index)
         raise HomeAssistantError(f"Failed to stop file {file_index}: {exc}") from exc
     _LOGGER.info("Requested stop file %s for entry %s", file_index, entry_id)
+    # As the media player's Stop does: don't wait for the device's "stopped"
+    # event before files can be changed again (edit_file right after a stop)
+    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+    if coordinator is not None:
+        coordinator.mark_playback_inactive()
 
 
 async def async_cancel_file_transfer_service(
