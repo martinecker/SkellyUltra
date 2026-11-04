@@ -4,15 +4,32 @@
 // every registration checks first.
 
 import { CARD_PICKER_ENTRY, SkellyUltraCard } from "./card/skelly-ultra-card";
-import { CARD_ELEMENT, PANEL_ELEMENT } from "./constants";
+import { SkConfirm } from "./components/sk-confirm";
+import { SkFileTable } from "./components/sk-file-table";
+import { SkTransferBar } from "./components/sk-transfer-bar";
+import {
+	CARD_ELEMENT,
+	CONFIRM_ELEMENT,
+	FILE_TABLE_ELEMENT,
+	PANEL_ELEMENT,
+	TRANSFER_BAR_ELEMENT,
+} from "./constants";
 import { SkellyUltraPanel } from "./panel/skelly-ultra-panel";
 
+const ELEMENTS: [string, CustomElementConstructor][] = [
+	[FILE_TABLE_ELEMENT, SkFileTable],
+	[TRANSFER_BAR_ELEMENT, SkTransferBar],
+	[CONFIRM_ELEMENT, SkConfirm],
+	[PANEL_ELEMENT, SkellyUltraPanel],
+	[CARD_ELEMENT, SkellyUltraCard],
+];
+
 export function register(): void {
-	if (!customElements.get(PANEL_ELEMENT)) {
-		customElements.define(PANEL_ELEMENT, SkellyUltraPanel);
-	}
-	if (!customElements.get(CARD_ELEMENT)) {
-		customElements.define(CARD_ELEMENT, SkellyUltraCard);
+	// The panel's parts first, so they're ready when the panel renders
+	for (const [name, element] of ELEMENTS) {
+		if (!customElements.get(name)) {
+			customElements.define(name, element);
+		}
 	}
 
 	window.customCards = window.customCards ?? [];

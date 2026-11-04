@@ -1,9 +1,24 @@
 import { css, html, LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
-import { errorMessage } from "../api/actions";
+import {
+	type ActionTarget,
+	cancelTransfer,
+	deleteFile,
+	errorMessage,
+	playFile,
+	stopFile,
+} from "../api/actions";
 import { listDevices } from "../api/devices";
-import { FilesSubscription } from "../api/files-subscription";
-import { type SkellyDevice, targetOf } from "../api/types";
+import { formatFree, orderedFiles, refreshFiles } from "../api/files";
+import { FilesSubscription, RETRY_DELAYS } from "../api/files-subscription";
+import {
+	type FileEntry,
+	type FilesPayload,
+	type SkellyDevice,
+	targetOf,
+} from "../api/types";
+import type { SkConfirm } from "../components/sk-confirm";
+import type { FileEventDetail } from "../components/sk-file-table";
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
@@ -18,9 +33,32 @@ export interface PanelConfig {
 // so a dashboard card can link to its Skelly
 const DEVICE_PARAM = "device";
 
+// Below this width (in px) the files are a list instead of a table
+const COMPACT_WIDTH = 600;
+
+interface PlayingFile {
+	entry_id: string;
+	file_index: number;
+	name: string;
+}
+
+const busyKey = (entryId: string, fileIndex: number) =>
+	`${entryId}:${fileIndex}`;
+
+// localStorage key remembering whether the Details columns are shown
+const DETAILS_KEY = "skelly_ultra.panel.details";
+
+function storedDetails(): boolean {
+	try {
+		return localStorage.getItem(DETAILS_KEY) === "1";
+	} catch {
+		return false;
+	}
+}
+
 // The Skelly sidebar panel. Home Assistant creates it and sets hass, narrow,
-// route and panel. For now it shows a device picker and the live files
-// payload; the file table replaces the raw data in the next phase.
+// route and panel. It shows the chosen Skelly's files, live, and plays,
+// stops and deletes them.
 export class SkellyUltraPanel extends LitElement {
 	@property({ attribute: false }) hass?: HomeAssistant;
 	@property({ type: Boolean, reflect: true }) narrow = false;
@@ -30,24 +68,56 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _devicesError?: string;
 	// device_id or entry_id of the chosen Skelly
 	@state() private _selected?: string;
+	// The file last played; the device doesn't report playback
+	@state() private _playing?: PlayingFile;
+	// busyKey()s of files with an action in progress
+	@state() private _busy: ReadonlySet<string> = new Set();
+	// Lists files instead of a table: the panel is less than 600 px wide
+	@state() private _compact = false;
+	@state() private _refreshing = false;
+	@state() private _cancelling = false;
+	@state() private _details = storedDetails();
 
 	private readonly _files = new FilesSubscription(this);
 	private _loadingDevices = false;
+	private _devicesAttempted = false;
+	private _devicesRetryTimer?: ReturnType<typeof setTimeout>;
+	private _devicesRetries = 0;
+	private _resizeObserver?: ResizeObserver;
 
 	connectedCallback(): void {
 		super.connectedCallback();
 		this._selected =
 			new URLSearchParams(window.location.search).get(DEVICE_PARAM) ??
 			undefined;
+		if (typeof ResizeObserver !== "undefined") {
+			this._resizeObserver = new ResizeObserver((entries) => {
+				const width = entries[0]?.contentRect.width ?? 0;
+				// 0: not laid out (yet); keep what we have
+				if (width > 0) {
+					this._compact = width < COMPACT_WIDTH;
+				}
+			});
+			this._resizeObserver.observe(this);
+		}
+		// Back on the page after an error or with no Skelly: look again
+		if (this.hass && !this._devices?.length && !this._loadingDevices) {
+			this._loadDevices();
+		}
+	}
+
+	disconnectedCallback(): void {
+		super.disconnectedCallback();
+		this._resizeObserver?.disconnect();
+		this._resizeObserver = undefined;
+		clearTimeout(this._devicesRetryTimer);
+		this._devicesRetryTimer = undefined;
 	}
 
 	protected willUpdate(changed: PropertyValues<this>): void {
-		if (
-			changed.has("hass") &&
-			this.hass &&
-			!this._devices &&
-			!this._loadingDevices
-		) {
+		// Only the first attempt starts here (HA sets hass on every state
+		// change); later ones come from the retry timer or connectedCallback
+		if (changed.has("hass") && this.hass && !this._devicesAttempted) {
 			this._loadDevices();
 		}
 		const device = this._device;
@@ -55,6 +125,27 @@ export class SkellyUltraPanel extends LitElement {
 			device ? this.hass : undefined,
 			device ? targetOf(device) : {},
 		);
+		this._forgetEndedPlayback();
+	}
+
+	// The playing state is a guess (the device doesn't report playback). Drop
+	// it once it can't be true any more: the Skelly disconnected, the
+	// integration reloaded, or the file is gone.
+	private _forgetEndedPlayback(): void {
+		const playing = this._playing;
+		const payload = this._files.payload;
+		if (!playing || !payload || payload.entry_id !== playing.entry_id) {
+			return;
+		}
+		if (
+			!payload.available ||
+			payload.unloaded ||
+			!payload.files.some(
+				(f) => f.file_index === playing.file_index && f.name === playing.name,
+			)
+		) {
+			this._playing = undefined;
+		}
 	}
 
 	// The chosen Skelly, or the first one
@@ -73,6 +164,9 @@ export class SkellyUltraPanel extends LitElement {
 		if (!this.hass) {
 			return;
 		}
+		clearTimeout(this._devicesRetryTimer);
+		this._devicesRetryTimer = undefined;
+		this._devicesAttempted = true;
 		this._loadingDevices = true;
 		try {
 			this._devices = await listDevices(this.hass);
@@ -81,6 +175,19 @@ export class SkellyUltraPanel extends LitElement {
 			this._devicesError = errorMessage(err);
 		} finally {
 			this._loadingDevices = false;
+		}
+		// During HA startup the integration may not be loaded yet: look again
+		// later, with the subscription's backoff
+		if (this._devices?.length && !this._devicesError) {
+			this._devicesRetries = 0;
+		} else if (this.isConnected) {
+			const delay =
+				RETRY_DELAYS[Math.min(this._devicesRetries, RETRY_DELAYS.length - 1)];
+			this._devicesRetries++;
+			this._devicesRetryTimer = setTimeout(
+				() => this._loadDevices(),
+				delay * 1000,
+			);
 		}
 	}
 
@@ -143,7 +250,15 @@ export class SkellyUltraPanel extends LitElement {
 			}
 
 			ha-card {
-				padding: 16px;
+				padding: 8px 16px 16px;
+			}
+
+			:host([narrow]) .content {
+				padding: 8px;
+			}
+
+			:host([narrow]) ha-card {
+				padding: 8px 12px 12px;
 			}
 
 			.status {
@@ -165,6 +280,11 @@ export class SkellyUltraPanel extends LitElement {
 				background: var(--success-color, #4caf50);
 			}
 
+			.dot.unavailable,
+			.dot.reloading {
+				background: var(--warning-color, #ffa600);
+			}
+
 			.dot.error {
 				background: var(--error-color, #db4437);
 			}
@@ -177,19 +297,63 @@ export class SkellyUltraPanel extends LitElement {
 				color: var(--error-color, #db4437);
 			}
 
-			h2 {
-				font-size: 16px;
-				font-weight: 500;
-				margin: 16px 0 8px;
+			.spacer {
+				flex: 1;
 			}
 
-			pre {
-				margin: 0;
-				padding: 8px;
-				overflow: auto;
-				font-size: 12px;
-				background: var(--secondary-background-color);
+			.toggle {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font-size: 14px;
+				cursor: pointer;
+			}
+
+			button.refresh {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font: inherit;
+				font-size: 14px;
+				color: var(--primary-color);
+				background: transparent;
+				border: 1px solid var(--divider-color);
 				border-radius: 4px;
+				padding: 4px 12px 4px 8px;
+				cursor: pointer;
+			}
+
+			:host([narrow]) button.refresh {
+				padding: 4px;
+			}
+
+			:host([narrow]) button.refresh .label {
+				display: none;
+			}
+
+			button.refresh:disabled {
+				color: var(--disabled-text-color, #999);
+				cursor: default;
+			}
+
+			@media (prefers-reduced-motion: no-preference) {
+				.spin {
+					animation: spin 1s linear infinite;
+				}
+			}
+
+			@keyframes spin {
+				to {
+					transform: rotate(360deg);
+				}
+			}
+
+			.notice {
+				margin: 8px 0;
+			}
+
+			sk-file-table.stale {
+				opacity: 0.5;
 			}
 		`,
 	];
@@ -245,26 +409,281 @@ export class SkellyUltraPanel extends LitElement {
 		if (!device) {
 			return html`<p>${strings.noDevices}</p>`;
 		}
-		const { status, payload, error } = this._files;
+		const { status, error } = this._files;
+		const payload = this._payload;
+		const live = status === "live" && payload !== undefined;
+		const transfer = payload?.transfer;
+		const transferring = transfer?.in_progress === true;
+		const readOnly = !live || !payload.available || !this._actionTarget;
 		return html`
 			<div class="status">
-				<span class="dot ${status === "live" && !payload?.available ? "unavailable" : status}"></span>
+				<span class="dot ${live && !payload.available ? "unavailable" : status}"></span>
 				<strong>${payload?.name ?? device.name}</strong>
 				<span class="secondary">${strings.status[status]}</span>
+				<span class="spacer"></span>
+				${payload ? this._renderStorage(payload) : nothing}
+				<label class="toggle" title=${strings.detailsTitle}>
+					<input
+						type="checkbox"
+						.checked=${this._details}
+						@change=${this._onDetailsChange}
+					/>
+					${strings.details}
+				</label>
+				<button
+					class="refresh"
+					title=${strings.refreshTitle}
+					aria-label=${strings.refresh}
+					?disabled=${!live || this._refreshing || transferring}
+					@click=${this._refresh}
+				>
+					<ha-icon
+						class=${this._refreshing ? "spin" : ""}
+						icon="mdi:refresh"
+					></ha-icon>
+					<span class="label">${strings.refresh}</span>
+				</button>
 			</div>
 			${error ? html`<p class="error">${error}</p>` : nothing}
 			${
-				payload && !payload.available && status === "live"
-					? html`<p class="warning">${strings.unavailable}</p>`
+				status === "reloading"
+					? html`<p class="notice warning">${strings.reloadingNotice}</p>`
 					: nothing
 			}
 			${
-				payload
-					? html`<h2>${strings.rawPayloadHeading}</h2>
-							<pre>${JSON.stringify(payload, null, 2)}</pre>`
+				live && !payload.available
+					? html`<p class="notice warning">${strings.unavailable}</p>`
 					: nothing
 			}
+			${
+				live && payload.available && !this._actionTarget
+					? html`<p class="notice warning">${strings.noDeviceId}</p>`
+					: nothing
+			}
+			<sk-transfer-bar
+				.transfer=${transfer}
+				?cancelling=${this._cancelling}
+				?disabled=${readOnly}
+				@sk-cancel=${this._cancelTransfer}
+			></sk-transfer-bar>
+			${
+				payload
+					? html`<sk-file-table
+							class=${live ? "" : "stale"}
+							.profile=${payload.device_profile}
+							.rows=${orderedFiles(payload)}
+							.playing=${this._playingIndex(payload)}
+							.busy=${this._busyIndices(payload)}
+							?disabled=${readOnly}
+							.disabledReason=${transferring ? strings.transferBusy : undefined}
+							?narrow=${this._compact}
+							?details=${this._details}
+							@sk-play=${this._onPlay}
+							@sk-stop=${this._onStop}
+							@sk-delete=${this._onDelete}
+						></sk-file-table>`
+					: nothing
+			}
+			<sk-confirm></sk-confirm>
 		`;
+	}
+
+	private _renderStorage(payload: FilesPayload) {
+		const free = formatFree(payload.capacity.free_kb);
+		return html`<span class="secondary storage">
+			${free ? strings.freeSpace(free) : strings.freeSpaceUnknown} ·
+			${strings.fileCount(payload.files.length)}
+		</span>`;
+	}
+
+	// The payload of the chosen Skelly (the subscription may still hold the
+	// previous one's for a moment)
+	private get _payload(): FilesPayload | undefined {
+		const payload = this._files.payload;
+		const device = this._device;
+		return payload && device && payload.entry_id === device.entry_id
+			? payload
+			: undefined;
+	}
+
+	// The actions need a device_id
+	private get _actionTarget(): ActionTarget | undefined {
+		const deviceId = this._payload?.device_id ?? this._device?.device_id;
+		return deviceId ? { device_id: deviceId } : undefined;
+	}
+
+	private _playingIndex(payload: FilesPayload): number | null {
+		const playing = this._playing;
+		return playing && playing.entry_id === payload.entry_id
+			? playing.file_index
+			: null;
+	}
+
+	// The files of this Skelly with an action in progress
+	private _busyIndices(payload: FilesPayload): ReadonlySet<number> {
+		return new Set(
+			payload.files
+				.filter((f) => this._busy.has(busyKey(payload.entry_id, f.file_index)))
+				.map((f) => f.file_index),
+		);
+	}
+
+	private _setBusy(key: string, busy: boolean) {
+		const next = new Set(this._busy);
+		if (busy) {
+			next.add(key);
+		} else {
+			next.delete(key);
+		}
+		this._busy = next;
+	}
+
+	// Runs an action on one file; the row is disabled meanwhile, and a failure
+	// is shown as a toast
+	// Runs an action on one file of the shown Skelly; the row is disabled
+	// meanwhile, and a failure is shown as a toast. Resolves to the Skelly's
+	// entry_id if the action succeeded.
+	private async _fileAction(
+		file: FileEntry,
+		action: (hass: HomeAssistant, target: ActionTarget) => Promise<unknown>,
+		failed: (name: string, message: string) => string,
+	): Promise<string | undefined> {
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			return undefined;
+		}
+		const key = busyKey(entryId, file.file_index);
+		if (this._busy.has(key)) {
+			return undefined;
+		}
+		this._setBusy(key, true);
+		try {
+			await action(hass, target);
+			return entryId;
+		} catch (err) {
+			this._toast(failed(file.name, errorMessage(err)));
+			return undefined;
+		} finally {
+			this._setBusy(key, false);
+		}
+	}
+
+	private async _onPlay(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => playFile(hass, target, file.file_index),
+			strings.playFailed,
+		);
+		if (entryId) {
+			// The device doesn't say when a file ends, so this stays until
+			// another file is played, Stop is pressed or the Skelly disconnects
+			this._playing = {
+				entry_id: entryId,
+				file_index: file.file_index,
+				name: file.name,
+			};
+		}
+	}
+
+	private async _onStop(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => stopFile(hass, target, file.file_index),
+			strings.stopFailed,
+		);
+		if (entryId) {
+			this._clearPlaying(entryId, file);
+		}
+	}
+
+	private async _onDelete(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const confirm = this.renderRoot.querySelector<SkConfirm>("sk-confirm");
+		if (
+			!confirm ||
+			!(await confirm.ask({
+				title: strings.deleteTitle,
+				message: strings.deleteMessage(file.name),
+				confirmLabel: strings.delete,
+				destructive: true,
+			}))
+		) {
+			return;
+		}
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => deleteFile(hass, target, file.name),
+			strings.deleteFailed,
+		);
+		if (entryId) {
+			this._clearPlaying(entryId, file);
+			this._toast(strings.deleted(file.name));
+		}
+	}
+
+	private _clearPlaying(entryId: string, file: FileEntry) {
+		const playing = this._playing;
+		if (
+			playing?.entry_id === entryId &&
+			playing.file_index === file.file_index
+		) {
+			this._playing = undefined;
+		}
+	}
+
+	private async _refresh() {
+		const device = this._device;
+		if (!this.hass || !device || this._refreshing) {
+			return;
+		}
+		this._refreshing = true;
+		try {
+			// The new list arrives through the subscription as well
+			await refreshFiles(this.hass, targetOf(device));
+		} catch (err) {
+			this._toast(strings.refreshFailed(errorMessage(err)));
+		} finally {
+			this._refreshing = false;
+		}
+	}
+
+	private async _cancelTransfer() {
+		const target = this._actionTarget;
+		if (!this.hass || !target || this._cancelling) {
+			return;
+		}
+		this._cancelling = true;
+		try {
+			await cancelTransfer(this.hass, target);
+		} catch (err) {
+			this._toast(strings.transferCancelFailed(errorMessage(err)));
+		} finally {
+			this._cancelling = false;
+		}
+	}
+
+	private _onDetailsChange(ev: Event) {
+		this._details = (ev.target as HTMLInputElement).checked;
+		try {
+			localStorage.setItem(DETAILS_KEY, this._details ? "1" : "0");
+		} catch {
+			// Not remembered, e.g. in a private window
+		}
+	}
+
+	// HA's own toast, at the bottom of the screen
+	private _toast(message: string) {
+		this.dispatchEvent(
+			new CustomEvent("hass-notification", {
+				detail: { message },
+				bubbles: true,
+				composed: true,
+			}),
+		);
 	}
 
 	// What HA's own menu button does: the sidebar is hidden on narrow screens

@@ -5,17 +5,43 @@ import { PANEL_ELEMENT } from "../src/constants";
 import devicesFixture from "./fixtures/devices.json";
 import filesFixture from "./fixtures/files-payload.json";
 
-type Panel = HTMLElement & { hass: unknown; updateComplete: Promise<boolean> };
+type Panel = HTMLElement & {
+	hass: unknown;
+	narrow: boolean;
+	updateComplete: Promise<boolean>;
+};
+
+const DEVICE_ID = devicesFixture[0].device_id;
+
+// The fixture, with no transfer running
+const idlePayload: FilesPayload = {
+	...(filesFixture as FilesPayload),
+	transfer: {
+		status: "idle",
+		in_progress: false,
+		progress: 0,
+		filename: null,
+		error: null,
+	},
+};
 
 const settle = async (panel: Panel) => {
 	for (let i = 0; i < 5; i++) {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		await panel.updateComplete;
+		const table = panel.shadowRoot?.querySelector("sk-file-table") as
+			| (HTMLElement & { updateComplete: Promise<boolean> })
+			| null;
+		await table?.updateComplete;
 	}
 };
 
-function fakeHass(devices: SkellyDevice[]) {
+function fakeHass(
+	devices: SkellyDevice[],
+	payload: FilesPayload = idlePayload,
+) {
 	const subscribed: Record<string, unknown>[] = [];
+	const callbacks: ((p: FilesPayload) => void)[] = [];
 	const unsubscribe = vi.fn().mockResolvedValue(undefined);
 	const connection = {
 		connected: true,
@@ -27,13 +53,19 @@ function fakeHass(devices: SkellyDevice[]) {
 				message: Record<string, unknown>,
 			) => {
 				subscribed.push(message);
-				const name = devices.find(
+				callbacks.push(callback);
+				const device = devices.find(
 					(d) =>
 						d.device_id === message.device_id ||
 						d.entry_id === message.entry_id,
-				)?.name;
+				);
 				setTimeout(() =>
-					callback({ ...(filesFixture as FilesPayload), name: name ?? "?" }),
+					callback({
+						...payload,
+						entry_id: device?.entry_id ?? "?",
+						device_id: device?.device_id ?? null,
+						name: device?.name ?? "?",
+					}),
 				);
 				return unsubscribe;
 			},
@@ -41,13 +73,34 @@ function fakeHass(devices: SkellyDevice[]) {
 	};
 	const hass = {
 		connection,
-		user: { name: "Martin" },
-		callWS: vi.fn().mockResolvedValue(devices),
+		user: { name: "Martin", is_admin: true },
+		callWS: vi.fn(async (msg: Record<string, unknown>) =>
+			msg.type === "skelly_ultra/devices/list" ? devices : payload,
+		),
+		callService: vi.fn().mockResolvedValue({ context: {} }),
 	};
-	return { hass, subscribed, unsubscribe };
+	// Sends the latest subscription a new payload
+	const send = (p: FilesPayload) => callbacks.at(-1)?.(p);
+	return { hass, subscribed, unsubscribe, send };
 }
 
-async function showPanel(hass: unknown): Promise<Panel> {
+// The panel's width, as the stubbed ResizeObserver reports it
+let panelWidth = 1000;
+
+class FakeResizeObserver {
+	constructor(private readonly callback: ResizeObserverCallback) {}
+	observe() {
+		this.callback(
+			[{ contentRect: { width: panelWidth } } as ResizeObserverEntry],
+			this as unknown as ResizeObserver,
+		);
+	}
+	disconnect() {}
+}
+vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+async function showPanel(hass: unknown, width = 1000): Promise<Panel> {
+	panelWidth = width;
 	const panel = document.createElement(PANEL_ELEMENT) as Panel;
 	panel.hass = hass;
 	document.body.append(panel);
@@ -55,7 +108,39 @@ async function showPanel(hass: unknown): Promise<Panel> {
 	return panel;
 }
 
-const text = (panel: Panel) => panel.shadowRoot?.textContent ?? "";
+const text = (panel: Panel) =>
+	(panel.shadowRoot?.textContent ?? "") +
+	(panel.shadowRoot?.querySelector("sk-file-table")?.shadowRoot?.textContent ??
+		"") +
+	(panel.shadowRoot?.querySelector("sk-transfer-bar")?.shadowRoot
+		?.textContent ?? "");
+
+const table = (panel: Panel) =>
+	panel.shadowRoot?.querySelector("sk-file-table")?.shadowRoot as ShadowRoot;
+
+const row = (panel: Panel, fileIndex: number) =>
+	table(panel).querySelector(`[data-file-index="${fileIndex}"]`) as HTMLElement;
+
+const button = (panel: Panel, fileIndex: number, cls: string) =>
+	row(panel, fileIndex).querySelector(`button.${cls}`) as HTMLButtonElement;
+
+const refreshButton = (panel: Panel) =>
+	(panel.shadowRoot as ShadowRoot).querySelector(
+		"button.refresh",
+	) as HTMLButtonElement;
+
+const confirmDialog = (panel: Panel) =>
+	panel.shadowRoot?.querySelector("sk-confirm")?.shadowRoot as ShadowRoot;
+
+function toasts(): string[] {
+	const messages: string[] = [];
+	window.addEventListener("hass-notification", (ev) => {
+		messages.push((ev as CustomEvent<{ message: string }>).detail.message);
+	});
+	return messages;
+}
+
+const one = devicesFixture as SkellyDevice[];
 
 describe("panel", () => {
 	afterEach(() => {
@@ -63,24 +148,288 @@ describe("panel", () => {
 		history.replaceState(null, "", "/");
 	});
 
-	it("shows the live files of the only Skelly", async () => {
-		const { hass, subscribed } = fakeHass(devicesFixture as SkellyDevice[]);
+	it("shows the files of the only Skelly, enabled ones first in play order", async () => {
+		const { hass, subscribed } = fakeHass(one);
 		const panel = await showPanel(hass);
 
 		expect(hass.callWS).toHaveBeenCalledWith({
 			type: "skelly_ultra/devices/list",
 		});
 		expect(subscribed).toEqual([
-			{
-				type: "skelly_ultra/files/subscribe",
-				device_id: devicesFixture[0].device_id,
-			},
+			{ type: "skelly_ultra/files/subscribe", device_id: DEVICE_ID },
 		]);
 		expect(text(panel)).toContain("Skelly Santa");
 		expect(text(panel)).toContain("Live");
-		expect(text(panel)).toContain('"file_order"');
+		expect(text(panel)).toContain("3.9 MB free");
+		expect(text(panel)).toContain("2 files");
 		// One Skelly: no picker
 		expect(panel.shadowRoot?.querySelector("select")).toBeNull();
+
+		const rows = [...table(panel).querySelectorAll("tbody tr")];
+		expect(rows.map((r) => r.getAttribute("data-file-index"))).toEqual([
+			"1",
+			"2",
+		]);
+		expect(rows[0].querySelector(".position")?.textContent?.trim()).toBe("1");
+		expect(rows[1].querySelector(".position")?.textContent?.trim()).toBe("–");
+		expect(rows[1].classList.contains("off")).toBe(true);
+
+		// Movement icons and the eye icon come from the profile
+		const images = [...rows[0].querySelectorAll(".glyph")].map((i) =>
+			i.getAttribute("data-src"),
+		);
+		expect(images).toEqual([
+			"/skelly_ultra/images/skelly/movement_head.png",
+			"/skelly_ultra/images/skelly/movement_torso.png",
+		]);
+		// eye_icon 7 isn't in the fixture's profile: shown as a number
+		expect(rows[0].textContent).toContain("7");
+		expect(row(panel, 2).querySelector("img")?.getAttribute("src")).toBe(
+			"/skelly_ultra/images/skelly/eye_icon_1.png",
+		);
+
+		// One swatch per light channel, styled by its effect mode
+		const swatches = [...rows[0].querySelectorAll(".swatch")];
+		expect(swatches).toHaveLength(2);
+		expect(swatches[0].getAttribute("title")).toBe(
+			"Torso Light: Static, RGB 255, 0, 0, brightness 255",
+		);
+		expect(swatches[1].classList.contains("pulse")).toBe(true);
+		expect(swatches[1].classList.contains("cycle")).toBe(true);
+	});
+
+	it("plays and stops a file", async () => {
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass);
+
+		button(panel, 1, "play").click();
+		await settle(panel);
+		expect(hass.callService).toHaveBeenLastCalledWith(
+			"skelly_ultra",
+			"play_file",
+			{ device_id: DEVICE_ID, file_index: 1 },
+			undefined,
+			false,
+			false,
+		);
+		expect(row(panel, 1).classList.contains("playing")).toBe(true);
+
+		// Playing another file moves the playing state
+		button(panel, 2, "play").click();
+		await settle(panel);
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+		expect(row(panel, 2).classList.contains("playing")).toBe(true);
+
+		button(panel, 2, "stop").click();
+		await settle(panel);
+		expect(hass.callService).toHaveBeenLastCalledWith(
+			"skelly_ultra",
+			"stop_file",
+			{ device_id: DEVICE_ID, file_index: 2 },
+			undefined,
+			false,
+			false,
+		);
+		expect(row(panel, 2).classList.contains("playing")).toBe(false);
+		expect(button(panel, 2, "play")).not.toBeNull();
+	});
+
+	it("shows a failed action as a toast", async () => {
+		const messages = toasts();
+		const { hass } = fakeHass(one);
+		hass.callService.mockRejectedValueOnce({
+			code: "home_assistant_error",
+			message: "Device not connected",
+		});
+		const panel = await showPanel(hass);
+
+		button(panel, 1, "play").click();
+		await settle(panel);
+		expect(messages).toContain("Couldn't play hello.mp3: Device not connected");
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+		expect(button(panel, 1, "play").disabled).toBe(false);
+	});
+
+	it("deletes a file only after confirming", async () => {
+		const messages = toasts();
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass);
+		const dialog = () =>
+			confirmDialog(panel).querySelector("dialog") as HTMLDialogElement;
+
+		button(panel, 2, "delete").click();
+		await settle(panel);
+		expect(dialog().open).toBe(true);
+		expect(dialog().textContent).toContain("Delete laugh.mp3 from the Skelly?");
+		(
+			confirmDialog(panel).querySelector("button.cancel") as HTMLElement
+		).click();
+		await settle(panel);
+		expect(dialog().open).toBe(false);
+		expect(hass.callService).not.toHaveBeenCalled();
+
+		button(panel, 2, "delete").click();
+		await settle(panel);
+		(
+			confirmDialog(panel).querySelector("button.confirm") as HTMLElement
+		).click();
+		await settle(panel);
+		expect(hass.callService).toHaveBeenCalledWith(
+			"skelly_ultra",
+			"delete_file",
+			{ device_id: DEVICE_ID, filename: "laugh.mp3" },
+			undefined,
+			false,
+			false,
+		);
+		expect(messages).toContain("Deleted laugh.mp3");
+	});
+
+	it("reads the files from the device again on Refresh", async () => {
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass);
+		refreshButton(panel).click();
+		await settle(panel);
+		expect(hass.callWS).toHaveBeenLastCalledWith({
+			type: "skelly_ultra/files/list",
+			device_id: DEVICE_ID,
+			refresh: true,
+		});
+	});
+
+	it("is read-only except Refresh while the Skelly is disconnected", async () => {
+		const { hass } = fakeHass(one, { ...idlePayload, available: false });
+		const panel = await showPanel(hass);
+		expect(text(panel)).toContain("The Skelly is not connected");
+		expect(button(panel, 1, "play").disabled).toBe(true);
+		expect(button(panel, 1, "delete").disabled).toBe(true);
+		expect(refreshButton(panel).disabled).toBe(false);
+	});
+
+	it("shows a transfer's progress and cancels it", async () => {
+		const { hass, send } = fakeHass(one, filesFixture as FilesPayload);
+		const panel = await showPanel(hass);
+		expect(text(panel)).toContain("Sending boo.mp3");
+		expect(text(panel)).toContain("42%");
+		// The device does one thing at a time
+		expect(button(panel, 1, "play").disabled).toBe(true);
+		expect(button(panel, 1, "play").title).toBe(
+			"Files can't be played or deleted until the transfer is done.",
+		);
+		expect(text(panel)).toContain("can't be played or deleted");
+
+		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
+			?.shadowRoot as ShadowRoot;
+		(bar.querySelector("button") as HTMLButtonElement).click();
+		await settle(panel);
+		expect(hass.callService).toHaveBeenLastCalledWith(
+			"skelly_ultra",
+			"cancel_file_transfer",
+			{ device_id: DEVICE_ID },
+			undefined,
+			false,
+			false,
+		);
+
+		send({
+			...(filesFixture as FilesPayload),
+			transfer: { ...idlePayload.transfer, status: "cancelled" },
+		});
+		await settle(panel);
+		expect(text(panel)).not.toContain("Sending boo.mp3");
+		expect(button(panel, 1, "play").disabled).toBe(false);
+	});
+
+	it("shows that the integration is reloading", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const { hass, send } = fakeHass(one);
+			const panel = document.createElement(PANEL_ELEMENT) as Panel;
+			panel.hass = hass;
+			document.body.append(panel);
+			await vi.advanceTimersByTimeAsync(0);
+			await vi.advanceTimersByTimeAsync(0);
+			send({ ...idlePayload, unloaded: true });
+			await vi.advanceTimersByTimeAsync(0);
+			await panel.updateComplete;
+			expect(text(panel)).toContain("The integration is reloading");
+			expect(button(panel, 1, "play").disabled).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("leaves out the eye column on profiles without eye icons", async () => {
+		const lily: FilesPayload = {
+			...idlePayload,
+			device_profile: { ...idlePayload.device_profile, eye_icons: [] },
+			files: idlePayload.files.map((f) => ({ ...f, eye_icon: null })),
+		};
+		const { hass } = fakeHass(one, lily);
+		const panel = await showPanel(hass);
+		const headers = [...table(panel).querySelectorAll("th")].map((th) =>
+			th.textContent?.trim(),
+		);
+		expect(headers).not.toContain("Eye");
+		expect(headers).toContain("Movement");
+	});
+
+	it("shows the file index and cluster with Details", async () => {
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass);
+		expect(text(panel)).not.toContain("1010");
+		const toggle = panel.shadowRoot?.querySelector(
+			".toggle input",
+		) as HTMLInputElement;
+		toggle.checked = true;
+		toggle.dispatchEvent(new Event("change"));
+		await settle(panel);
+		expect(text(panel)).toContain("1010");
+		expect(localStorage.getItem("skelly_ultra.panel.details")).toBe("1");
+		localStorage.removeItem("skelly_ultra.panel.details");
+	});
+
+	it("lists the files with a menu on narrow screens", async () => {
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass, 400);
+		expect(table(panel).querySelector("table")).toBeNull();
+		expect(table(panel).querySelectorAll("li")).toHaveLength(2);
+
+		const menu = row(panel, 2).querySelector("details") as HTMLDetailsElement;
+		menu.open = true;
+		button(panel, 2, "delete").click();
+		await settle(panel);
+		expect(menu.open).toBe(false);
+		expect(
+			(confirmDialog(panel).querySelector("dialog") as HTMLDialogElement).open,
+		).toBe(true);
+	});
+
+	it("closes a narrow menu on Escape or a click elsewhere", async () => {
+		const { hass } = fakeHass(one);
+		const panel = await showPanel(hass, 400);
+		const menu = row(panel, 1).querySelector("details") as HTMLDetailsElement;
+
+		menu.open = true;
+		menu.dispatchEvent(
+			new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+		);
+		expect(menu.open).toBe(false);
+
+		menu.open = true;
+		document.body.click();
+		expect(menu.open).toBe(false);
+	});
+
+	it("shows a table on a wide panel even if HA calls the screen narrow", async () => {
+		const { hass } = fakeHass(one);
+		const panel = document.createElement(PANEL_ELEMENT) as Panel;
+		panelWidth = 800;
+		panel.hass = hass;
+		panel.narrow = true;
+		document.body.append(panel);
+		await settle(panel);
+		expect(table(panel).querySelector("table")).not.toBeNull();
 	});
 
 	it("picks the Skelly from the URL and switches on request", async () => {
@@ -100,20 +449,212 @@ describe("panel", () => {
 		expect(subscribed.at(-1)).toMatchObject({ device_id: "d2" });
 		expect(text(panel)).toContain("Lily");
 
+		// Playing state belongs to the Skelly it was played on
+		button(panel, 1, "play").click();
+		await settle(panel);
+		expect(row(panel, 1).classList.contains("playing")).toBe(true);
+
 		const select = panel.shadowRoot?.querySelector(
 			"select",
 		) as HTMLSelectElement;
-		select.value = devicesFixture[0].device_id;
+		select.value = DEVICE_ID;
 		select.dispatchEvent(new Event("change"));
 		await settle(panel);
 
 		expect(unsubscribe).toHaveBeenCalled();
-		expect(subscribed.at(-1)).toMatchObject({
-			device_id: devicesFixture[0].device_id,
-		});
+		expect(subscribed.at(-1)).toMatchObject({ device_id: DEVICE_ID });
 		expect(new URL(window.location.href).searchParams.get("device")).toBe(
-			devicesFixture[0].device_id,
+			DEVICE_ID,
 		);
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+	});
+
+	it("keeps Stop working during a transfer", async () => {
+		const { hass, send } = fakeHass(one);
+		const panel = await showPanel(hass);
+		button(panel, 1, "play").click();
+		await settle(panel);
+		send({
+			...(filesFixture as FilesPayload),
+			entry_id: devicesFixture[0].entry_id,
+		});
+		await settle(panel);
+		expect(button(panel, 1, "stop").disabled).toBe(false);
+		expect(button(panel, 2, "play").disabled).toBe(true);
+	});
+
+	it("forgets the playing file when the Skelly disconnects or it's replaced", async () => {
+		const { hass, send } = fakeHass(one);
+		const panel = await showPanel(hass);
+		const entry = { ...idlePayload, entry_id: devicesFixture[0].entry_id };
+
+		button(panel, 1, "play").click();
+		await settle(panel);
+		send({ ...entry, available: false });
+		await settle(panel);
+		send(entry);
+		await settle(panel);
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+
+		button(panel, 1, "play").click();
+		await settle(panel);
+		// Another file now has the same index
+		send({
+			...entry,
+			files: entry.files.map((f) =>
+				f.file_index === 1 ? { ...f, name: "other.mp3" } : f,
+			),
+		});
+		await settle(panel);
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+	});
+
+	it("keeps a pending action to the Skelly it was started on", async () => {
+		const second = {
+			...devicesFixture[0],
+			entry_id: "e2",
+			device_id: "d2",
+			name: "Lily",
+		};
+		const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+		let finish = () => {};
+		hass.callService.mockImplementationOnce(
+			() =>
+				new Promise((resolve) => {
+					finish = () => resolve({ context: {} });
+				}),
+		);
+		const panel = await showPanel(hass);
+		button(panel, 1, "play").click();
+		await settle(panel);
+		expect(button(panel, 1, "play").disabled).toBe(true);
+
+		const select = panel.shadowRoot?.querySelector(
+			"select",
+		) as HTMLSelectElement;
+		select.value = "d2";
+		select.dispatchEvent(new Event("change"));
+		await settle(panel);
+		// Lily's file 1 isn't busy, and isn't playing once Santa's play returns
+		expect(button(panel, 1, "play").disabled).toBe(false);
+		finish();
+		await settle(panel);
+		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+	});
+
+	it("says when a transfer failed or was cancelled", async () => {
+		const { hass, send } = fakeHass(one);
+		const panel = await showPanel(hass);
+		const entry = { ...idlePayload, entry_id: devicesFixture[0].entry_id };
+		send({
+			...entry,
+			transfer: {
+				...entry.transfer,
+				status: "error",
+				filename: "boo.mp3",
+				error: "Not enough space",
+			},
+		});
+		await settle(panel);
+		expect(text(panel)).toContain("Sending boo.mp3 failed: Not enough space");
+		send({
+			...entry,
+			transfer: { ...entry.transfer, status: "cancelled", filename: "boo.mp3" },
+		});
+		await settle(panel);
+		expect(text(panel)).toContain("Sending boo.mp3 was cancelled.");
+	});
+
+	it("shows a failed cancel and doesn't cancel twice", async () => {
+		const messages = toasts();
+		const { hass } = fakeHass(one, filesFixture as FilesPayload);
+		let fail = (_err: unknown) => {};
+		hass.callService.mockImplementationOnce(
+			() =>
+				new Promise((_resolve, reject) => {
+					fail = reject;
+				}),
+		);
+		const panel = await showPanel(hass);
+		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
+			?.shadowRoot as ShadowRoot;
+		const cancel = () => bar.querySelector("button") as HTMLButtonElement;
+		cancel().click();
+		await settle(panel);
+		expect(cancel().disabled).toBe(true);
+		expect(cancel().textContent).toContain("Cancelling");
+		fail({ message: "No file transfer currently in progress" });
+		await settle(panel);
+		expect(messages).toContain(
+			"Couldn't cancel the transfer: No file transfer currently in progress",
+		);
+		expect(cancel().disabled).toBe(false);
+		expect(hass.callService).toHaveBeenCalledTimes(1);
+	});
+
+	it("animates lights by mode name, which differs on Lethal Lily", async () => {
+		const lily: FilesPayload = {
+			...idlePayload,
+			device_profile: {
+				...idlePayload.device_profile,
+				light_modes: ["Flickering", "Pulsing", "Chasing"],
+			},
+		};
+		const { hass } = fakeHass(one, lily);
+		const panel = await showPanel(hass);
+		const modes = (fileIndex: number) =>
+			[...row(panel, fileIndex).querySelectorAll(".swatch")].map((sw) =>
+				["strobe", "pulse"].filter((c) => sw.classList.contains(c)).join(),
+			);
+		// File 1: Flickering (1) and Chasing (3); file 2: Flickering twice
+		expect(modes(1)).toEqual(["strobe", ""]);
+		expect(modes(2)).toEqual(["strobe", "strobe"]);
+	});
+
+	it("looks for Skellies again while none is loaded", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const { hass } = fakeHass(one);
+			hass.callWS
+				.mockRejectedValueOnce({ code: "unknown_command", message: "Unknown" })
+				.mockResolvedValueOnce([]);
+			const panel = document.createElement(PANEL_ELEMENT) as Panel;
+			panel.hass = hass;
+			document.body.append(panel);
+			await vi.advanceTimersByTimeAsync(0);
+			expect(text(panel)).toContain("Couldn't list your Skellies");
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(text(panel)).toContain("No Skelly is set up");
+			await vi.advanceTimersByTimeAsync(2000);
+			await vi.advanceTimersByTimeAsync(0);
+			await panel.updateComplete;
+			expect(text(panel)).toContain("Skelly Santa");
+			expect(hass.callWS).toHaveBeenCalledTimes(3);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("retries the Skelly list on its backoff, not on every hass update", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		try {
+			const { hass } = fakeHass(one);
+			hass.callWS.mockRejectedValue({ code: "unknown_command", message: "x" });
+			const panel = document.createElement(PANEL_ELEMENT) as Panel;
+			panel.hass = hass;
+			document.body.append(panel);
+			await vi.advanceTimersByTimeAsync(0);
+			// HA sets a new hass object on every state change
+			for (let i = 0; i < 5; i++) {
+				panel.hass = { ...hass };
+				await vi.advanceTimersByTimeAsync(100);
+			}
+			expect(hass.callWS).toHaveBeenCalledTimes(1);
+			await vi.advanceTimersByTimeAsync(1000);
+			expect(hass.callWS).toHaveBeenCalledTimes(2);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("says so when no Skelly is loaded", async () => {
@@ -124,7 +665,7 @@ describe("panel", () => {
 	});
 
 	it("unsubscribes when it leaves the page", async () => {
-		const { hass, unsubscribe } = fakeHass(devicesFixture as SkellyDevice[]);
+		const { hass, unsubscribe } = fakeHass(one);
 		const panel = await showPanel(hass);
 		panel.remove();
 		expect(unsubscribe).toHaveBeenCalled();

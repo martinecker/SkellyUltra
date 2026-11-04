@@ -245,43 +245,51 @@ async def async_enable_classic_bt_service(
 async def async_play_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Play a file on the device by file index.
 
+    Raises HomeAssistantError if the device can't be reached or rejects the
+    command, so callers (the panel, automations) see the failure.
+
     The service accepts either `device_id` or `entity_id`. If neither is
     provided and there is exactly one configured entry for this
     integration, that entry will be used.
     """
-    result = get_adapter_from_service_call(hass, call)
-    if not result:
-        return
-
-    adapter, entry_id = result
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
     file_index = call.data["file_index"]
 
     try:
         await adapter.client.play_file(file_index)
-        _LOGGER.info("Requested play file %s for entry %s", file_index, entry_id)
-    except Exception:
+    except ConnectionLostError:
+        raise HomeAssistantError(
+            "Lost connection to device while trying to play the file"
+        ) from None
+    except Exception as exc:
         _LOGGER.exception("Failed to play file %s", file_index)
+        raise HomeAssistantError(f"Failed to play file {file_index}: {exc}") from exc
+    _LOGGER.info("Requested play file %s for entry %s", file_index, entry_id)
 
 
 async def async_stop_file_service(hass: HomeAssistant, call: ServiceCall) -> None:
     """Stop a file on the device by file index.
 
+    Raises HomeAssistantError if the device can't be reached or rejects the
+    command.
+
     The service accepts either `device_id` or `entity_id`. If neither is
     provided and there is exactly one configured entry for this
     integration, that entry will be used.
     """
-    result = get_adapter_from_service_call(hass, call)
-    if not result:
-        return
-
-    adapter, entry_id = result
+    adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
     file_index = call.data["file_index"]
 
     try:
         await adapter.client.stop_file(file_index)
-        _LOGGER.info("Requested stop file %s for entry %s", file_index, entry_id)
-    except Exception:
+    except ConnectionLostError:
+        raise HomeAssistantError(
+            "Lost connection to device while trying to stop the file"
+        ) from None
+    except Exception as exc:
         _LOGGER.exception("Failed to stop file %s", file_index)
+        raise HomeAssistantError(f"Failed to stop file {file_index}: {exc}") from exc
+    _LOGGER.info("Requested stop file %s for entry %s", file_index, entry_id)
 
 
 async def async_cancel_file_transfer_service(

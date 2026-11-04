@@ -648,6 +648,8 @@ data:
   file_index: 1  # File index (1-based, must be ≥ 1)
 ```
 
+Both actions fail with an error if the Skelly can't be reached or rejects the command, so an automation stops there (add `continue_on_error: true` to the step to carry on anyway).
+
 ### 📤 Uploading Audio Files to Device
 
 The integration provides file transfer services to upload audio files to the device's internal storage. Audio files are automatically converted to 8kHz mono MP3 format for compatibility with the device.

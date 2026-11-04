@@ -4,8 +4,10 @@ The real device aborts a file it plays when it gets the coordinator's
 status queries, so polling must pause while a file plays.
 """
 
+import pytest
 from homeassistant.components.media_player import MediaPlayerState
 from homeassistant.const import ATTR_ENTITY_ID
+from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.skelly_ultra.const import DOMAIN
 
@@ -118,3 +120,31 @@ async def test_play_file_action_after_drop_reconnects(hass, setup_integration, d
     )
     assert device.is_connected
     assert device.playback[-1] == Playback(f.index, True)
+
+
+@pytest.mark.parametrize("service", ["play_file", "stop_file"])
+async def test_play_and_stop_report_failures(
+    hass, setup_integration, device, monkeypatch, service
+):
+    # The panel shows these errors; they used to be logged and swallowed
+    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+
+    async def reject(file_index):
+        raise RuntimeError("device said no")
+
+    monkeypatch.setattr(client, service, reject)
+    f = device.file("hello.mp3")
+    with pytest.raises(HomeAssistantError, match="device said no"):
+        await hass.services.async_call(
+            DOMAIN, service, {"file_index": f.index}, blocking=True
+        )
+
+
+async def test_play_file_needs_a_known_skelly(hass, setup_integration):
+    with pytest.raises(HomeAssistantError, match="not found"):
+        await hass.services.async_call(
+            DOMAIN,
+            "play_file",
+            {"entity_id": "media_player.nobody", "file_index": 1},
+            blocking=True,
+        )
