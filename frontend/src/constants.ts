@@ -9,3 +9,5 @@ export const FILE_TABLE_ELEMENT = "sk-file-table";
 export const TRANSFER_BAR_ELEMENT = "sk-transfer-bar";
 export const CONFIRM_ELEMENT = "sk-confirm";
 export const EDIT_DIALOG_ELEMENT = "sk-edit-dialog";
+export const ADD_FILE_DIALOG_ELEMENT = "sk-add-file-dialog";
+export const MEDIA_BROWSER_ELEMENT = "sk-media-browser";

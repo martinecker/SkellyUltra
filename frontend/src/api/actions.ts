@@ -12,10 +12,11 @@ export interface ActionTarget {
 }
 
 // What send_file and send_file_from_tts return: the file's name on the
-// device and its index, for play_file
+// device and its index, for play_file (null if the file list couldn't be
+// read afterwards)
 export interface SentFile {
 	filename: string;
-	file_index: number;
+	file_index: number | null;
 }
 
 // edit_file's settings; anything left out keeps its current value

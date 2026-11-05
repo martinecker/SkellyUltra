@@ -5,6 +5,7 @@ media-source:// ID. These tests pin down what resolves, and that paths can't
 escape the media folders.
 """
 
+import json
 from pathlib import Path
 from unittest.mock import patch
 
@@ -14,6 +15,9 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.setup import async_setup_component
 
 from custom_components.skelly_ultra import uploads
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import (
+    MAX_FILENAME_LENGTH,
+)
 
 
 @pytest.fixture
@@ -151,3 +155,33 @@ def test_filename_rules():
         uploads.tts_filename_from_message("\ua62a") == "tts.mp3"
     )  # untransliterable letter
     assert uploads.tts_filename_from_message("Unknown visitor") == "unknown_visitor.mp3"
+
+
+# The frontend checks target filenames before sending (frontend/src/api/
+# filename.ts); these shared cases keep both sides to the same rules
+FILENAME_CASES = json.loads(
+    (
+        Path(__file__).parents[1]
+        / "frontend"
+        / "test"
+        / "fixtures"
+        / "filename-cases.json"
+    ).read_text(encoding="utf-8")
+)
+
+
+def test_filename_cases_use_the_device_limit():
+    assert FILENAME_CASES["max_filename_length"] == MAX_FILENAME_LENGTH
+
+
+@pytest.mark.parametrize(
+    "case", FILENAME_CASES["cases"], ids=lambda case: repr(case["stem"])
+)
+def test_filename_rules_match_the_frontend(case):
+    name = f"{case['stem']}.mp3"
+    try:
+        stored = uploads.normalize_target_filename(name)
+    except HomeAssistantError:
+        stored = None
+    # Valid means: accepted, and stored under the name the UI shows
+    assert (stored == name) is case["valid"]

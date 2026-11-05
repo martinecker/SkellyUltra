@@ -1,4 +1,4 @@
-import { css, html, LitElement, nothing } from "lit";
+import { css, html, LitElement, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
@@ -45,6 +45,8 @@ export class SkFileTable extends LitElement {
 	@property({ attribute: false }) rows: FileRow[] = [];
 	// file_index of the file that is (thought to be) playing
 	@property({ attribute: false }) playing: number | null = null;
+	// file_index of a file just added, to point it out
+	@property({ attribute: false }) highlight: number | null = null;
 	// file_index of files with an action in progress
 	@property({ attribute: false }) busy: ReadonlySet<number> = new Set();
 	// Everything is read-only, e.g. while the Skelly is disconnected
@@ -60,6 +62,8 @@ export class SkFileTable extends LitElement {
 	// Where the dragged row was, to put it back for Lit (see _onDragEnd)
 	private _dragAnchor: Node | null = null;
 	private _dragging = false;
+	// The highlighted row has been scrolled into view
+	private _shownHighlight: number | null = null;
 
 	static styles = [
 		sharedStyles,
@@ -97,6 +101,27 @@ export class SkFileTable extends LitElement {
 			tr.playing td,
 			li.playing {
 				background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.12);
+			}
+
+			tr.new td,
+			li.new {
+				background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.25);
+			}
+
+			@media (prefers-reduced-motion: no-preference) {
+				tr.new td,
+				li.new {
+					animation: new-row 5s ease-out forwards;
+				}
+			}
+
+			@keyframes new-row {
+				from {
+					background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.35);
+				}
+				to {
+					background: transparent;
+				}
 			}
 
 			.position {
@@ -533,6 +558,7 @@ export class SkFileTable extends LitElement {
 		return [
 			position === null ? "off" : "on",
 			file.file_index === this.playing ? "playing" : "",
+			file.file_index === this.highlight ? "new" : "",
 		]
 			.filter(Boolean)
 			.join(" ");
@@ -668,7 +694,20 @@ export class SkFileTable extends LitElement {
 
 	// Sortable works on the rows' container, which changes when the table
 	// turns into a list or the files come and go
-	protected updated(): void {
+	protected updated(changed: PropertyValues<this>): void {
+		if (changed.has("highlight")) {
+			this._shownHighlight = null;
+		}
+		// The new file's row may come with a later file list
+		if (this.highlight !== null && this._shownHighlight !== this.highlight) {
+			const row = this.renderRoot.querySelector(
+				`.new[data-file-index="${this.highlight}"]`,
+			);
+			if (row) {
+				this._shownHighlight = this.highlight;
+				row.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+			}
+		}
 		const container =
 			this.renderRoot.querySelector<HTMLElement>("tbody") ??
 			this.renderRoot.querySelector<HTMLElement>("ul");

@@ -116,6 +116,51 @@ export const strings = {
 	save: "Save",
 	saving: "Saving…",
 	saved: (name: string) => `Saved ${name}`,
+	// Add file
+	addFile: "Add file",
+	addFileTitle: "Send a new file to the Skelly",
+	addBusy: "A file is being sent to the Skelly",
+	addDisconnected: "The Skelly is not connected, so files can't be added.",
+	addDialogTitle: "Add a file",
+	tabUpload: "Upload",
+	tabMedia: "Media library",
+	tabUrl: "URL",
+	filenameLabel: "Name on the Skelly",
+	filenameEmpty: "Enter a name",
+	filenameSlash: "The name can't contain /",
+	filenameLong: (max: number) =>
+		`The name can be at most ${max} characters long, .mp3 included`,
+	filenameReplaces:
+		"Will replace the existing file; its lights, eye and movement settings are kept.",
+	uploadChoose: "Choose an audio file, or drop one here",
+	uploadChosen: (name: string, size: string) => `${name} (${size})`,
+	uploadType: "That isn't an audio file.",
+	uploadName:
+		"Home Assistant doesn't take file names with ~, .. or slashes. Rename the file first.",
+	uploadRefused: "Home Assistant refused the file or its name.",
+	uploadSize: (max: string) =>
+		`The file is larger than ${max}, the most Home Assistant takes.`,
+	uploadNoFolder:
+		"Home Assistant has no local media folder to upload to. Pick a file from the media library or enter a URL instead.",
+	uploadSaved:
+		"Uploaded files are kept in Media › My media › skelly_ultra, so you can send them again from the media library.",
+	uploadNotAllowed: "Only administrators can upload files.",
+	uploadTooLarge: "Home Assistant refused the file as too large.",
+	uploadFailed: (message: string) => `Couldn't upload the file: ${message}`,
+	uploading: "Uploading…",
+	urlLabel: "Address of an audio file",
+	urlInvalid: "Enter an address that starts with http:// or https://",
+	mediaHome: "Media",
+	mediaUp: "Back",
+	mediaEmpty: "No folders or audio files here.",
+	mediaLoading: "Loading…",
+	mediaFailed: (message: string) => `Couldn't open the folder: ${message}`,
+	mediaPick: "Pick an audio file",
+	send: "Send",
+	sendFailed: (name: string, message: string) =>
+		`Couldn't send ${name}: ${message}`,
+	sent: (name: string) => `Sent ${name} to the Skelly`,
+	playNow: "Play",
 	// Delete confirmation
 	deleteTitle: "Delete file?",
 	deleteMessage: (name: string) =>

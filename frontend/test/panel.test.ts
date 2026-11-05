@@ -1538,4 +1538,167 @@ describe("panel", () => {
 		panel.remove();
 		expect(unsubscribe).toHaveBeenCalled();
 	});
+
+	describe("adding a file", () => {
+		const addButton = (panel: Panel) =>
+			(panel.shadowRoot as ShadowRoot).querySelector(
+				"button.add",
+			) as HTMLButtonElement;
+		const addDialog = (panel: Panel) =>
+			panel.shadowRoot?.querySelector("sk-add-file-dialog") as HTMLElement & {
+				updateComplete: Promise<boolean>;
+			};
+		const inDialog = (panel: Panel) =>
+			addDialog(panel).shadowRoot as ShadowRoot;
+
+		// Opens the dialog and sends a URL as "Scream.mp3"
+		async function sendUrl(panel: Panel) {
+			addButton(panel).click();
+			await settle(panel);
+			await addDialog(panel).updateComplete;
+			const urlTab = [
+				...inDialog(panel).querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+			].find((t) => t.textContent?.trim() === "URL") as HTMLButtonElement;
+			urlTab.click();
+			await addDialog(panel).updateComplete;
+			const url = inDialog(panel).querySelector("#url") as HTMLInputElement;
+			url.value = "https://x.org/Scream.mp3";
+			url.dispatchEvent(new Event("input"));
+			await addDialog(panel).updateComplete;
+			(
+				inDialog(panel).querySelector("button.send") as HTMLButtonElement
+			).click();
+			await settle(panel);
+		}
+
+		it("sends the picked file, points it out and offers to play it", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			const notes: { message: string; action?: { action: () => void } }[] = [];
+			window.addEventListener("hass-notification", (ev) => {
+				notes.push((ev as CustomEvent).detail);
+			});
+			expect(addButton(panel).disabled).toBe(false);
+			hass.callService.mockResolvedValueOnce({
+				context: {},
+				response: { filename: "Scream.mp3", file_index: 2 },
+			});
+			await sendUrl(panel);
+			expect(hass.callService).toHaveBeenLastCalledWith(
+				"skelly_ultra",
+				"send_file",
+				{
+					device_id: DEVICE_ID,
+					file_path: "https://x.org/Scream.mp3",
+					target_filename: "Scream.mp3",
+				},
+				undefined,
+				false,
+				true,
+			);
+			expect(row(panel, 2).classList.contains("new")).toBe(true);
+			expect(row(panel, 1).classList.contains("new")).toBe(false);
+			expect(notes.at(-1)?.message).toBe("Sent Scream.mp3 to the Skelly");
+
+			notes.at(-1)?.action?.action();
+			await settle(panel);
+			expect(hass.callService).toHaveBeenLastCalledWith(
+				"skelly_ultra",
+				"play_file",
+				{ device_id: DEVICE_ID, file_index: 2 },
+				undefined,
+				false,
+				false,
+			);
+		});
+
+		it("can't add while sending or during a transfer", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			let finish: (value: unknown) => void = () => {};
+			hass.callService.mockImplementationOnce(
+				() => new Promise((resolve) => (finish = resolve)),
+			);
+			await sendUrl(panel);
+			expect(addButton(panel).disabled).toBe(true);
+			expect(addButton(panel).title).toBe("A file is being sent to the Skelly");
+			finish({
+				context: {},
+				response: { filename: "Scream.mp3", file_index: null },
+			});
+			await settle(panel);
+			expect(addButton(panel).disabled).toBe(false);
+
+			send({
+				...idlePayload,
+				entry_id: one[0].entry_id,
+				device_id: DEVICE_ID,
+				transfer: {
+					...idlePayload.transfer,
+					status: "uploading",
+					in_progress: true,
+				},
+			});
+			await settle(panel);
+			expect(addButton(panel).disabled).toBe(true);
+		});
+
+		it("sends one file at a time, also to another Skelly", async () => {
+			const second = {
+				...devicesFixture[0],
+				entry_id: "e2",
+				device_id: "d2",
+				name: "Lily",
+			};
+			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+			const panel = await showPanel(hass);
+			const notes: { message: string }[] = [];
+			window.addEventListener("hass-notification", (ev) => {
+				notes.push((ev as CustomEvent).detail);
+			});
+			let finish: (value: unknown) => void = () => {};
+			hass.callService.mockImplementationOnce(
+				() => new Promise((resolve) => (finish = resolve)),
+			);
+			await sendUrl(panel);
+			const select = panel.shadowRoot?.querySelector(
+				"select",
+			) as HTMLSelectElement;
+			select.value = "d2";
+			select.dispatchEvent(new Event("change"));
+			await settle(panel);
+			// Lily can't get a file while Santa's is sent
+			expect(addButton(panel).disabled).toBe(true);
+			finish({
+				context: {},
+				response: { filename: "Scream.mp3", file_index: 2 },
+			});
+			await settle(panel);
+			expect(addButton(panel).disabled).toBe(false);
+			expect(notes.at(-1)?.message).toBe("Sent Scream.mp3 to the Skelly");
+			// Santa's new file isn't pointed out in Lily's table
+			expect(row(panel, 2).classList.contains("new")).toBe(false);
+		});
+
+		it("says why sending failed", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			const messages = toasts();
+			hass.callService.mockRejectedValueOnce({
+				code: "home_assistant_error",
+				message: "The device is not connected",
+			});
+			await sendUrl(panel);
+			expect(messages.at(-1)).toBe(
+				"Couldn't send Scream.mp3: The device is not connected",
+			);
+			expect(addButton(panel).disabled).toBe(false);
+		});
+
+		it("can't add while the Skelly is disconnected", async () => {
+			const { hass } = fakeHass(one, { ...idlePayload, available: false });
+			const panel = await showPanel(hass);
+			expect(addButton(panel).disabled).toBe(true);
+		});
+	});
 });

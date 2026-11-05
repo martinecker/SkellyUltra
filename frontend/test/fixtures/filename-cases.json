@@ -1,0 +1,53 @@
+{
+	"max_filename_length": 33,
+	"cases": [
+		{
+			"stem": "boo",
+			"valid": true
+		},
+		{
+			"stem": "Happy Halloween",
+			"valid": true
+		},
+		{
+			"stem": "a.b",
+			"valid": true
+		},
+		{
+			"stem": "x.",
+			"valid": true
+		},
+		{
+			"stem": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"valid": true
+		},
+		{
+			"stem": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"valid": false,
+			"problem": "long"
+		},
+		{
+			"stem": "Grüße aus dem Grab",
+			"valid": true
+		},
+		{
+			"stem": "🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃",
+			"valid": true
+		},
+		{
+			"stem": "🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃🎃",
+			"valid": false,
+			"problem": "long"
+		},
+		{
+			"stem": "songs/boo",
+			"valid": false,
+			"problem": "slash"
+		},
+		{
+			"stem": "",
+			"valid": false,
+			"problem": "empty"
+		}
+	]
+}

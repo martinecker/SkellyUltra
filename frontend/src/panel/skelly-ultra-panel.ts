@@ -7,6 +7,7 @@ import {
 	editFile,
 	errorMessage,
 	playFile,
+	sendFile,
 	setFileOrder,
 	stopFile,
 } from "../api/actions";
@@ -25,12 +26,17 @@ import {
 	type SkellyDevice,
 	targetOf,
 } from "../api/types";
+import type {
+	SendHandler,
+	SkAddFileDialog,
+} from "../components/sk-add-file-dialog";
 import type { SkConfirm } from "../components/sk-confirm";
 import type { SaveHandler, SkEditDialog } from "../components/sk-edit-dialog";
 import type {
 	DragEventDetail,
 	FileEventDetail,
 	OrderEventDetail,
+	SkFileTable,
 } from "../components/sk-file-table";
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
@@ -70,6 +76,14 @@ interface PendingOrder {
 	// Written; shown until the next file list (or ORDER_SETTLE_MS)
 	written?: { seen: FilesPayload | undefined };
 }
+
+// How long (in ms) a file just added stays highlighted
+export const HIGHLIGHT_MS = 5000;
+// How long (in ms) the toast for a sent file, with its Play button, shows
+const SENT_TOAST_MS = 8000;
+
+// What a file action needs of a file
+type FileRef = Pick<FileEntry, "file_index" | "name">;
 
 const busyKey = (entryId: string, fileIndex: number) =>
 	`${entryId}:${fileIndex}`;
@@ -112,6 +126,10 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _order?: PendingOrder;
 	// entry_id of the Skelly whose play order is being written
 	@state() private _orderSaving?: string;
+	// entry_id of the Skelly a new file is being sent to
+	@state() private _sending?: string;
+	// The file just added, pointed out in the table for a moment
+	@state() private _highlight?: { entry_id: string; file_index: number };
 
 	private readonly _files = new FilesSubscription(this);
 	private _loadingDevices = false;
@@ -123,6 +141,7 @@ export class SkellyUltraPanel extends LitElement {
 	private _settleTimer?: ReturnType<typeof setTimeout>;
 	// A row is being dragged: the play order isn't written meanwhile
 	private _dragging = false;
+	private _highlightTimer?: ReturnType<typeof setTimeout>;
 
 	connectedCallback(): void {
 		super.connectedCallback();
@@ -151,6 +170,9 @@ export class SkellyUltraPanel extends LitElement {
 		this._resizeObserver = undefined;
 		clearTimeout(this._devicesRetryTimer);
 		this._devicesRetryTimer = undefined;
+		clearTimeout(this._highlightTimer);
+		this._highlightTimer = undefined;
+		this._highlight = undefined;
 		// Leaving the panel: write a waiting play order change now
 		this._writeOrder();
 	}
@@ -250,8 +272,9 @@ export class SkellyUltraPanel extends LitElement {
 	private _onDeviceChange(ev: Event): void {
 		const value = (ev.target as HTMLSelectElement).value;
 		this._selected = value;
-		// The edit dialog belongs to the Skelly it was opened on
+		// The dialogs belong to the Skelly they were opened on
 		this._closeEditor();
+		this._addDialog?.close();
 		// A waiting play order change goes to its own Skelly, now
 		this._writeOrder();
 		const url = new URL(window.location.href);
@@ -369,7 +392,8 @@ export class SkellyUltraPanel extends LitElement {
 				cursor: pointer;
 			}
 
-			button.refresh {
+			button.refresh,
+			button.add {
 				display: inline-flex;
 				align-items: center;
 				gap: 4px;
@@ -383,15 +407,18 @@ export class SkellyUltraPanel extends LitElement {
 				cursor: pointer;
 			}
 
-			:host([narrow]) button.refresh {
+			:host([narrow]) button.refresh,
+			:host([narrow]) button.add {
 				padding: 4px;
 			}
 
-			:host([narrow]) button.refresh .label {
+			:host([narrow]) button.refresh .label,
+			:host([narrow]) button.add .label {
 				display: none;
 			}
 
-			button.refresh:disabled {
+			button.refresh:disabled,
+			button.add:disabled {
 				color: var(--disabled-text-color, #999);
 				cursor: default;
 			}
@@ -475,6 +502,7 @@ export class SkellyUltraPanel extends LitElement {
 		const transfer = payload?.transfer;
 		const transferring = transfer?.in_progress === true;
 		const readOnly = !live || !payload.available || !this._actionTarget;
+		const addBlocked = this._addBlockedReason(live, payload);
 		return html`
 			<div class="status">
 				<span class="dot ${live && !payload.available ? "unavailable" : status}"></span>
@@ -502,6 +530,16 @@ export class SkellyUltraPanel extends LitElement {
 						icon="mdi:refresh"
 					></ha-icon>
 					<span class="label">${strings.refresh}</span>
+				</button>
+				<button
+					class="add"
+					title=${addBlocked ?? strings.addFileTitle}
+					aria-label=${strings.addFile}
+					?disabled=${addBlocked !== undefined}
+					@click=${this._openAddDialog}
+				>
+					<ha-icon icon="mdi:plus"></ha-icon>
+					<span class="label">${strings.addFile}</span>
 				</button>
 			</div>
 			${error ? html`<p class="error">${error}</p>` : nothing}
@@ -533,6 +571,11 @@ export class SkellyUltraPanel extends LitElement {
 							.profile=${payload.device_profile}
 							.rows=${orderedFiles(this._shownPayload(payload))}
 							.playing=${this._playingIndex(payload)}
+							.highlight=${
+								this._highlight?.entry_id === payload.entry_id
+									? this._highlight.file_index
+									: null
+							}
 							.busy=${this._busyIndices(payload)}
 							?disabled=${readOnly}
 							.disabledReason=${transferring ? strings.transferBusy : undefined}
@@ -562,6 +605,14 @@ export class SkellyUltraPanel extends LitElement {
 				@sk-preview-stop=${this._onStop}
 				@sk-edit-closed=${this._onEditClosed}
 			></sk-edit-dialog>
+			<sk-add-file-dialog
+				.hass=${this.hass}
+				.profile=${payload?.device_profile}
+				.files=${payload?.files ?? []}
+				.uploadTarget=${device.upload_target}
+				.readOnlyReason=${addBlocked}
+				.send=${this._sendNew}
+			></sk-add-file-dialog>
 			<sk-confirm></sk-confirm>
 		`;
 	}
@@ -752,13 +803,11 @@ export class SkellyUltraPanel extends LitElement {
 		this._busy = next;
 	}
 
-	// Runs an action on one file; the row is disabled meanwhile, and a failure
-	// is shown as a toast
 	// Runs an action on one file of the shown Skelly; the row is disabled
 	// meanwhile, and a failure is shown as a toast. Resolves to the Skelly's
 	// entry_id if the action succeeded.
 	private async _fileAction(
-		file: FileEntry,
+		file: FileRef,
 		action: (hass: HomeAssistant, target: ActionTarget) => Promise<unknown>,
 		failed: (name: string, message: string) => string,
 	): Promise<string | undefined> {
@@ -784,8 +833,11 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
-	private async _onPlay(ev: CustomEvent<FileEventDetail>) {
-		const { file } = ev.detail;
+	private _onPlay(ev: CustomEvent<FileEventDetail>) {
+		void this._play(ev.detail.file);
+	}
+
+	private async _play(file: FileRef) {
 		// A waiting play order change goes first: writing it would stop the
 		// file again
 		if (this._order && !this._order.written) {
@@ -935,7 +987,7 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
-	private _clearPlaying(entryId: string, file: FileEntry) {
+	private _clearPlaying(entryId: string, file: FileRef) {
 		const playing = this._playing;
 		if (
 			playing?.entry_id === entryId &&
@@ -976,6 +1028,121 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
+	// Why no file can be added right now, if one can't
+	private _addBlockedReason(
+		live: boolean,
+		payload: FilesPayload | undefined,
+	): string | undefined {
+		if (!live || !payload) {
+			return this._files.status === "reloading"
+				? strings.reloadingNotice
+				: strings.editWaiting;
+		}
+		if (!payload.available) {
+			return strings.addDisconnected;
+		}
+		if (!this._actionTarget) {
+			return strings.noDeviceId;
+		}
+		// One send at a time, also to another Skelly: the panel waits for
+		// each one's result
+		if (payload.transfer.in_progress || this._sending !== undefined) {
+			return strings.addBusy;
+		}
+		return undefined;
+	}
+
+	private get _fileTable(): SkFileTable | null {
+		return this.renderRoot.querySelector<SkFileTable>("sk-file-table");
+	}
+
+	private get _addDialog(): SkAddFileDialog | null {
+		return this.renderRoot.querySelector<SkAddFileDialog>("sk-add-file-dialog");
+	}
+
+	private async _openAddDialog() {
+		await this._addDialog?.open();
+	}
+
+	// Sends the file picked in the add dialog. The service call lasts until
+	// the transfer ends; the transfer bar shows its progress meanwhile.
+	private readonly _sendNew: SendHandler = ({ filePath, filename }) => {
+		void this._send(filePath, filename);
+	};
+
+	private async _send(filePath: string, filename: string) {
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			return;
+		}
+		if (this._sending !== undefined) {
+			// The Add button is disabled meanwhile, so this is a rare race
+			this._toast(strings.sendFailed(filename, strings.addBusy));
+			return;
+		}
+		this._sending = entryId;
+		let sent: Awaited<ReturnType<typeof sendFile>>;
+		try {
+			sent = await sendFile(hass, target, filePath, filename);
+		} catch (err) {
+			this._toast(strings.sendFailed(filename, errorMessage(err)));
+			return;
+		} finally {
+			this._sending = undefined;
+		}
+		const name = sent?.filename ?? filename;
+		const fileIndex = sent?.file_index ?? null;
+		// Play needs the panel (and its Skelly's files) still open
+		if (fileIndex === null || !this.isConnected) {
+			this._toast(strings.sent(name));
+			return;
+		}
+		void this._showNew(entryId, fileIndex);
+		this._toast(
+			strings.sent(name),
+			{
+				text: strings.playNow,
+				action: () => this._playSent(entryId, fileIndex, name),
+			},
+			SENT_TOAST_MS,
+		);
+	}
+
+	// Points out a file just added, for a moment
+	private async _showNew(entryId: string, fileIndex: number) {
+		clearTimeout(this._highlightTimer);
+		this._highlightTimer = undefined;
+		// Cleared for one update first, so the same row's highlight (a file
+		// replaced twice in a row) starts over
+		if (this._highlight) {
+			this._highlight = undefined;
+			await this.updateComplete;
+			await this._fileTable?.updateComplete;
+		}
+		// Left meanwhile: disconnectedCallback has cleaned up already
+		if (!this.isConnected) {
+			return;
+		}
+		this._highlight = { entry_id: entryId, file_index: fileIndex };
+		this._highlightTimer = setTimeout(() => {
+			this._highlight = undefined;
+			this._highlightTimer = undefined;
+		}, HIGHLIGHT_MS);
+	}
+
+	// The sent toast's Play: only while that Skelly is still shown
+	private _playSent(entryId: string, fileIndex: number, name: string) {
+		if (this._payload?.entry_id !== entryId) {
+			return;
+		}
+		const file = this._payload.files.find(
+			(f) => f.file_index === fileIndex,
+		) ?? { file_index: fileIndex, name };
+		void this._play(file);
+	}
+
 	private _onDetailsChange(ev: Event) {
 		this._details = (ev.target as HTMLInputElement).checked;
 		try {
@@ -985,11 +1152,23 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
-	// HA's own toast, at the bottom of the screen
-	private _toast(message: string) {
-		this.dispatchEvent(
+	// HA's own toast, at the bottom of the screen, with a button if given
+	private _toast(
+		message: string,
+		action?: { text: string; action: () => void },
+		duration?: number,
+	) {
+		// A send can end after the panel was left: HA's root shows it then
+		const target: EventTarget = this.isConnected
+			? this
+			: (document.querySelector("home-assistant") ?? this);
+		target.dispatchEvent(
 			new CustomEvent("hass-notification", {
-				detail: { message },
+				detail: {
+					message,
+					...(action ? { action } : {}),
+					...(duration ? { duration } : {}),
+				},
 				bubbles: true,
 				composed: true,
 			}),
