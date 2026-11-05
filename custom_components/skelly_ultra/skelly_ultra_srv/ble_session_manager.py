@@ -203,6 +203,18 @@ async def _stop_bleak_discovery(
         _LOGGER.debug("StopDiscovery on bleak's connection failed", exc_info=True)
 
 
+async def _acquire_mtu(client: BleakClient) -> None:
+    """Read the negotiated MTU on backends that need it (BlueZ)."""
+    backend = getattr(client, "_backend", None)
+    acquire = getattr(backend, "_acquire_mtu", None)
+    if acquire is None or getattr(backend, "_mtu_size", None) is not None:
+        return
+    try:
+        await acquire()
+    except Exception as err:  # noqa: BLE001 - keep the connection, use the default
+        _LOGGER.debug("Could not read the negotiated MTU: %s", err)
+
+
 @dataclass
 class RawNotification:
     """Raw BLE notification with metadata."""
@@ -1270,7 +1282,9 @@ class BLESessionManager:
         if session.adapter:
             self._last_adapter[discovered_address.upper()] = session.adapter
 
-        # Get MTU size if available
+        # Get MTU size if available. On Linux, Bleak reports the default of 23
+        # until the negotiated MTU is read from BlueZ.
+        await _acquire_mtu(client)
         mtu = None
         try:
             if hasattr(client, "mtu_size"):
