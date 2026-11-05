@@ -8,7 +8,7 @@ import aiohttp
 import pytest
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.setup import async_setup_component
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -224,8 +224,10 @@ async def test_subscribe_pushes_changes(
     assert first["file_order"] == [1, 2, 3]
 
     await action(hass, "set_file_order", filenames=["scream.mp3", "hello.mp3"])
+    # (after the events of the file list read that setup started)
     event = await next_event(client)
-    assert event["file_order"] == [3, 1]
+    while event["file_order"] != [3, 1]:
+        event = await next_event(client)
     assert {f["name"]: f["enabled"] for f in event["files"]}["laugh.mp3"] is False
 
     await action(hass, "edit_file", filename="hello.mp3", eye_icon=9)
@@ -251,6 +253,74 @@ async def test_subscribe_pushes_changes(
     device.drop_connection()
     await hass.async_block_till_done()
     assert (await next_event(client))["available"] is False
+
+
+async def test_transfer_settings_follow_the_override_entities(
+    hass, setup_integration, device, hass_ws_client
+):
+    """The payload shows the overrides, and the entities that change them."""
+    entry = setup_integration
+    client = await hass_ws_client(hass)
+    settings = (await ws_list(client))["transfer_settings"]
+    chunk = settings["chunk_size"]
+    bitrate = settings["bitrate"]
+    # The simulator's MTU of 247 allows 244-byte chunks
+    assert chunk["override"] is False
+    assert chunk["auto"] == 244
+    assert (chunk["min"], chunk["max"]) == (20, 500)
+    assert bitrate["override"] is False
+    assert bitrate["default"] == bitrate["value"] == "32k"
+    assert "250k" not in bitrate["options"] and "64k" in bitrate["options"]
+    registry = er.async_get(hass)
+    for key, domain, unique_id in (
+        ("switch_entity", "switch", "override_chunk_size"),
+        ("value_entity", "number", "chunk_size"),
+    ):
+        assert chunk[key] == registry.async_get_entity_id(
+            domain, DOMAIN, f"{entry.entry_id}_{unique_id}"
+        )
+        assert chunk[key].startswith(f"{domain}.")
+    for key, domain, unique_id in (
+        ("switch_entity", "switch", "override_bitrate"),
+        ("value_entity", "select", "bitrate"),
+    ):
+        assert bitrate[key] == registry.async_get_entity_id(
+            domain, DOMAIN, f"{entry.entry_id}_{unique_id}"
+        )
+
+    # What the panel does: the switch first, then the value
+    await client.send_json_auto_id(
+        {"type": "skelly_ultra/files/subscribe", "entry_id": entry.entry_id}
+    )
+    assert (await client.receive_json())["success"]
+    await next_event(client)
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": chunk["switch_entity"]}, blocking=True
+    )
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": chunk["value_entity"], "value": 300},
+        blocking=True,
+    )
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": bitrate["switch_entity"]}, blocking=True
+    )
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": bitrate["value_entity"], "option": "64k"},
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    event = await next_event(client)
+    while (
+        event["transfer_settings"]["chunk_size"]["value"] != 300
+        or event["transfer_settings"]["bitrate"]["value"] != "64k"
+    ):
+        event = await next_event(client)
+    assert event["transfer_settings"]["chunk_size"]["override"] is True
+    assert event["transfer_settings"]["bitrate"]["override"] is True
 
 
 async def test_unsubscribe_stops_events(
@@ -440,6 +510,16 @@ async def test_subscribe_reports_transfers(
         "error": None,
     }
     assert "boo.mp3" in [f["name"] for f in events[-1]["files"]]
+    # The file list is read before the transfer shows as done, so a UI never
+    # shows the old list as current
+    done = [e for e in events if e["transfer"]["status"] == "complete"]
+    assert done[0]["refreshing"] is True
+    assert all(
+        "boo.mp3" in [f["name"] for f in e["files"]]
+        for e in done
+        if not e["refreshing"]
+    )
+    assert events[-1]["refreshing"] is False
 
 
 async def test_failed_upload_shows_error(hass, setup_integration, hass_ws_client):

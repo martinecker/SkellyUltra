@@ -20,7 +20,7 @@ import {
 	uploadMedia,
 	uploadProblem,
 } from "../api/media";
-import type { DeviceProfile, FileEntry } from "../api/types";
+import type { DeviceProfile, FileEntry, TransferSettings } from "../api/types";
 import type { HomeAssistant } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
@@ -64,6 +64,8 @@ export class SkAddFileDialog extends LitElement {
 	// Why sending isn't possible right now (e.g. a transfer is running)
 	@property({ attribute: false }) readOnlyReason?: string;
 	@property({ attribute: false }) send?: SendHandler;
+	// The Skelly's chunk size and bitrate overrides, changed right here
+	@property({ attribute: false }) transferSettings?: TransferSettings;
 
 	@state() private _tab: AddFileTab = "media";
 	@state() private _stem = "";
@@ -375,6 +377,11 @@ export class SkAddFileDialog extends LitElement {
 			<div class="body" id="panel" role="tabpanel" aria-labelledby="tab-${tab}">
 				${this._renderSource(tab)}
 				${this._renderName(profile)}
+				<sk-transfer-settings
+					.hass=${this.hass}
+					.settings=${this.transferSettings}
+					?disabled=${this._uploading}
+				></sk-transfer-settings>
 				${
 					this._error
 						? html`<p class="notice error" role="alert">${this._error}</p>`

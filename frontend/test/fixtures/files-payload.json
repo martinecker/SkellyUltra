@@ -55,6 +55,7 @@
 		"max_filename_length": 33
 	},
 	"available": true,
+	"refreshing": false,
 	"capacity": {
 		"free_kb": 4000,
 		"file_count_reported": 3
@@ -122,5 +123,24 @@
 		"progress": 42,
 		"filename": "boo.mp3",
 		"error": null
+	},
+	"transfer_settings": {
+		"chunk_size": {
+			"override": false,
+			"value": 250,
+			"auto": 244,
+			"min": 20,
+			"max": 500,
+			"switch_entity": "switch.skelly_santa_override_chunk_size",
+			"value_entity": "number.skelly_santa_override_chunk_size_value"
+		},
+		"bitrate": {
+			"override": false,
+			"value": "32k",
+			"default": "32k",
+			"options": ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"],
+			"switch_entity": "switch.skelly_santa_override_bitrate",
+			"value_entity": "select.skelly_santa_override_bitrate_value"
+		}
 	}
 }

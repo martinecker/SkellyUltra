@@ -11,3 +11,4 @@ export const CONFIRM_ELEMENT = "sk-confirm";
 export const EDIT_DIALOG_ELEMENT = "sk-edit-dialog";
 export const ADD_FILE_DIALOG_ELEMENT = "sk-add-file-dialog";
 export const MEDIA_BROWSER_ELEMENT = "sk-media-browser";
+export const TRANSFER_SETTINGS_ELEMENT = "sk-transfer-settings";

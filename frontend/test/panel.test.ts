@@ -1695,6 +1695,77 @@ describe("panel", () => {
 			expect(addButton(panel).disabled).toBe(false);
 		});
 
+		it("points out small chunks", async () => {
+			const small = {
+				...idlePayload,
+				transfer_settings: {
+					...idlePayload.transfer_settings,
+					chunk_size: { ...idlePayload.transfer_settings.chunk_size, auto: 20 },
+				},
+			};
+			const { hass, send } = fakeHass(one, small);
+			const panel = await showPanel(hass);
+			expect(text(panel)).toContain("chunks of 20 bytes");
+			// Not with an override
+			send({
+				...small,
+				entry_id: one[0].entry_id,
+				device_id: DEVICE_ID,
+				transfer_settings: {
+					...small.transfer_settings,
+					chunk_size: { ...small.transfer_settings.chunk_size, override: true },
+				},
+			});
+			await settle(panel);
+			expect(text(panel)).not.toContain("chunks of 20 bytes");
+			// The dialog has the settings
+			addButton(panel).click();
+			await settle(panel);
+			expect(
+				inDialog(panel).querySelector("sk-transfer-settings"),
+			).not.toBeNull();
+		});
+
+		it("waits while the Skelly's files are read", async () => {
+			const reading = { ...idlePayload, refreshing: true };
+			const { hass, send } = fakeHass(one, reading);
+			const panel = await showPanel(hass);
+			expect(text(panel)).toContain("Reading the Skelly's files…");
+			expect(refreshButton(panel).disabled).toBe(true);
+			expect(refreshButton(panel).querySelector("ha-icon")?.className).toBe(
+				"spin",
+			);
+			expect(addButton(panel).disabled).toBe(true);
+			expect(button(panel, 1, "play").disabled).toBe(true);
+			expect(button(panel, 1, "play").title).toContain(
+				"until the Skelly's files have been read",
+			);
+
+			send({
+				...reading,
+				entry_id: one[0].entry_id,
+				device_id: DEVICE_ID,
+				refreshing: false,
+			});
+			await settle(panel);
+			expect(text(panel)).not.toContain("Reading the Skelly's files");
+			expect(refreshButton(panel).disabled).toBe(false);
+			expect(addButton(panel).disabled).toBe(false);
+			expect(button(panel, 1, "play").disabled).toBe(false);
+		});
+
+		it("doesn't say there are no files before they're read", async () => {
+			const { hass } = fakeHass(one, {
+				...idlePayload,
+				files: [],
+				file_order: [],
+				refreshing: true,
+			});
+			const panel = await showPanel(hass);
+			expect(text(panel)).toContain("Reading the Skelly's files…");
+			expect(text(panel)).not.toContain("There are no files");
+		});
+
 		it("can't add while the Skelly is disconnected", async () => {
 			const { hass } = fakeHass(one, { ...idlePayload, available: false });
 			const panel = await showPanel(hass);

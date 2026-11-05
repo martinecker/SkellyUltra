@@ -387,7 +387,9 @@ async def async_upload_audio(
             if coordinator.data:
                 override_enabled = coordinator.data.get("override_chunk_size", False)
                 if override_enabled:
-                    override_chunk_size = coordinator.data.get("chunk_size_override")
+                    override_chunk_size = coordinator.data.get(
+                        "chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE
+                    )
                     _LOGGER.debug(
                         "Using chunk size override: %d bytes", override_chunk_size
                     )
@@ -428,6 +430,10 @@ async def async_upload_audio(
                 target_filename,
                 entry_id,
             )
+
+            # The file list is refreshed below; mark it first, so that UIs
+            # don't show the old list as current once the transfer is done
+            coordinator.mark_file_list_loading()
 
             # Update sensor to show completion
             if transfer_sensor:

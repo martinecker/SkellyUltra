@@ -16,13 +16,14 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS, DOMAIN
 from .file_settings import LIVE_SETTING_KEYS, async_push_live_settings
-from .helpers import DeviceLoggerAdapter, get_device_profile
+from .helpers import DeviceLoggerAdapter, files_updated_signal, get_device_profile
 from .skelly_ultra_pkg.client import ConnectionLostError
 
 
@@ -127,6 +128,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._playback_active = False
         self._playback_active_timer: asyncio.TimerHandle | None = None
         self._file_list: list[Any] = []
+        # Set while the file list is read from the device, for a UI
+        self._file_list_loading = False
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
         # Last live settings HA knew (see async_load_settings), and the
@@ -548,6 +551,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
         # Check if we have a connection before attempting to fetch
         if not self.adapter.client.is_connected:
             self._logger.debug("Skipping file list refresh - device not connected")
+            self._set_file_list_loading(False)
             return
 
         # Don't query the device mid-playback - the capacity query aborts it.
@@ -555,18 +559,43 @@ class SkellyCoordinator(DataUpdateCoordinator):
             self._logger.debug(
                 "Skipping file list refresh - internal file playback in progress"
             )
+            self._set_file_list_loading(False)
             return
 
-        if lock_held:
-            await self._async_load_file_list()
-            return
+        self.mark_file_list_loading()
+        try:
+            if lock_held:
+                await self._async_load_file_list()
+                return
 
-        async with self.action_lock:
-            self._logger.debug("Acquiring lock for file list refresh")
-            await self._async_load_file_list()
+            async with self.action_lock:
+                self._logger.debug("Acquiring lock for file list refresh")
+                await self._async_load_file_list()
+        finally:
+            self._set_file_list_loading(False)
+
+    def mark_file_list_loading(self) -> None:
+        """Mark the file list as being read, until the refresh is done.
+
+        Callers that are about to call async_refresh_file_list can mark it
+        early, so that UIs don't show the old list as current meanwhile.
+        """
+        self._set_file_list_loading(True)
+
+    def _set_file_list_loading(self, loading: bool) -> None:
+        """Set file_list_loading and tell the files subscriptions."""
+        if self._file_list_loading == loading:
+            return
+        self._file_list_loading = loading
+        async_dispatcher_send(self.hass, files_updated_signal(self._entry.entry_id))
+
+    @property
+    def file_list_loading(self) -> bool:
+        """Return True while the file list is read from the device."""
+        return self._file_list_loading
 
     async def _async_load_file_list(self) -> None:
-        """Fetch the file list, order and capacity. Caller holds action_lock."""
+        """Read the file list, order and capacity into the coordinator."""
         try:
             self._file_list = await self.adapter.client.get_file_list(timeout=20.0)
             self._logger.debug("Loaded %d files from device", len(self._file_list))

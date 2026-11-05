@@ -39,6 +39,9 @@ export const strings = {
 		`Couldn't cancel the transfer: ${message}`,
 	transferBusy:
 		"Files can't be played, edited, reordered or deleted until the transfer is done.",
+	readingFiles: "Reading the Skelly's files…",
+	readingBusy:
+		"Files can't be played, edited, reordered or deleted until the Skelly's files have been read.",
 	transferFailed: (name: string | null, error: string | null) =>
 		`Sending ${name ?? "the file"} failed${error ? `: ${error}` : "."}`,
 	transferCancelled: (name: string | null) =>
@@ -161,6 +164,24 @@ export const strings = {
 		`Couldn't send ${name}: ${message}`,
 	sent: (name: string) => `Sent ${name} to the Skelly`,
 	playNow: "Play",
+	// Transfer settings
+	transferSettings: "Transfer settings",
+	chunkOverride: "Override chunk size",
+	chunkAuto: (bytes: number | null) =>
+		bytes === null
+			? "Automatic: set by the connection once the Skelly is connected"
+			: `Automatic: ${bytes} bytes, set by the connection`,
+	chunkUnit: "bytes",
+	chunkSmall: (bytes: number) =>
+		`Chunks of ${bytes} bytes make transfers slow. An override of 250 is usually much faster; if transfers then fail, go lower.`,
+	smallChunksNotice: (bytes: number) =>
+		`Files are sent in chunks of ${bytes} bytes, which makes transfers slow. You can override the chunk size under Add file › Transfer settings.`,
+	bitrateOverride: "Override bitrate",
+	bitrateDefault: (bitrate: string) => `Automatic: ${bitrate}`,
+	settingsNotApplied:
+		"The Skelly didn't take the change. Check that it's connected.",
+	settingsFailed: (message: string) =>
+		`Couldn't change the transfer settings: ${message}`,
 	// Delete confirmation
 	deleteTitle: "Delete file?",
 	deleteMessage: (name: string) =>

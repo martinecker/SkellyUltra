@@ -20,6 +20,7 @@ import {
 	sameOrder,
 	withOrder,
 } from "../api/order";
+import { SMALL_CHUNK_SIZE } from "../api/transfer-settings";
 import {
 	type FileEntry,
 	type FilesPayload,
@@ -439,6 +440,10 @@ export class SkellyUltraPanel extends LitElement {
 				margin: 8px 0;
 			}
 
+			.notice.reading {
+				color: var(--secondary-text-color);
+			}
+
 			sk-file-table.stale {
 				opacity: 0.5;
 			}
@@ -501,6 +506,8 @@ export class SkellyUltraPanel extends LitElement {
 		const live = status === "live" && payload !== undefined;
 		const transfer = payload?.transfer;
 		const transferring = transfer?.in_progress === true;
+		// The backend is reading the file list (e.g. after a transfer)
+		const reading = live && payload.refreshing;
 		const readOnly = !live || !payload.available || !this._actionTarget;
 		const addBlocked = this._addBlockedReason(live, payload);
 		return html`
@@ -522,11 +529,11 @@ export class SkellyUltraPanel extends LitElement {
 					class="refresh"
 					title=${strings.refreshTitle}
 					aria-label=${strings.refresh}
-					?disabled=${!live || this._refreshing || transferring}
+					?disabled=${!live || this._refreshing || reading || transferring}
 					@click=${this._refresh}
 				>
 					<ha-icon
-						class=${this._refreshing ? "spin" : ""}
+						class=${this._refreshing || reading ? "spin" : ""}
 						icon="mdi:refresh"
 					></ha-icon>
 					<span class="label">${strings.refresh}</span>
@@ -558,6 +565,14 @@ export class SkellyUltraPanel extends LitElement {
 					? html`<p class="notice warning">${strings.noDeviceId}</p>`
 					: nothing
 			}
+			${
+				reading && payload.available
+					? html`<p class="notice reading" role="status">
+							${strings.readingFiles}
+						</p>`
+					: nothing
+			}
+			${this._renderSmallChunks(live, payload)}
 			<sk-transfer-bar
 				.transfer=${transfer}
 				?cancelling=${this._cancelling}
@@ -565,7 +580,8 @@ export class SkellyUltraPanel extends LitElement {
 				@sk-cancel=${this._cancelTransfer}
 			></sk-transfer-bar>
 			${
-				payload
+				// While reading, "no files" may just mean they're not read yet
+				payload && !(reading && payload.files.length === 0)
 					? html`<sk-file-table
 							class=${live ? "" : "stale"}
 							.profile=${payload.device_profile}
@@ -578,7 +594,13 @@ export class SkellyUltraPanel extends LitElement {
 							}
 							.busy=${this._busyIndices(payload)}
 							?disabled=${readOnly}
-							.disabledReason=${transferring ? strings.transferBusy : undefined}
+							.disabledReason=${
+								transferring
+									? strings.transferBusy
+									: reading
+										? strings.readingBusy
+										: undefined
+							}
 							?narrow=${this._compact}
 							?details=${this._details}
 							?ordering=${this._orderSaving === payload.entry_id}
@@ -612,9 +634,29 @@ export class SkellyUltraPanel extends LitElement {
 				.uploadTarget=${device.upload_target}
 				.readOnlyReason=${addBlocked}
 				.send=${this._sendNew}
+				.transferSettings=${payload?.transfer_settings}
 			></sk-add-file-dialog>
 			<sk-confirm></sk-confirm>
 		`;
+	}
+
+	// Small chunks (a connection with a small MTU) make transfers take
+	// minutes; the override is easy to miss
+	private _renderSmallChunks(live: boolean, payload: FilesPayload | undefined) {
+		const chunk = payload?.transfer_settings.chunk_size;
+		if (
+			!live ||
+			!payload?.available ||
+			!chunk ||
+			chunk.override ||
+			chunk.auto === null ||
+			chunk.auto >= SMALL_CHUNK_SIZE
+		) {
+			return nothing;
+		}
+		return html`<p class="notice warning small-chunks">
+			${strings.smallChunksNotice(chunk.auto)}
+		</p>`;
 	}
 
 	private _renderStorage(payload: FilesPayload) {
@@ -902,6 +944,9 @@ export class SkellyUltraPanel extends LitElement {
 		if (payload.transfer.in_progress) {
 			return strings.transferBusy;
 		}
+		if (payload.refreshing) {
+			return strings.readingBusy;
+		}
 		return undefined;
 	}
 
@@ -1048,6 +1093,9 @@ export class SkellyUltraPanel extends LitElement {
 		// each one's result
 		if (payload.transfer.in_progress || this._sending !== undefined) {
 			return strings.addBusy;
+		}
+		if (payload.refreshing) {
+			return strings.readingBusy;
 		}
 		return undefined;
 	}

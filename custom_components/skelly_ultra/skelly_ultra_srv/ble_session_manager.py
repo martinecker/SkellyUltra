@@ -23,6 +23,7 @@ from dbus_next.aio import MessageBus
 
 from .adapter_selection import AdapterChoice, LiveConstraints, choose_adapter
 from .bluez_discovery import run_discovery_call
+from .mtu import acquire_mtu
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -201,18 +202,6 @@ async def _stop_bleak_discovery(
                 await asyncio.sleep(0.5)
     except Exception:  # noqa: BLE001 - best effort
         _LOGGER.debug("StopDiscovery on bleak's connection failed", exc_info=True)
-
-
-async def _acquire_mtu(client: BleakClient) -> None:
-    """Read the negotiated MTU on backends that need it (BlueZ)."""
-    backend = getattr(client, "_backend", None)
-    acquire = getattr(backend, "_acquire_mtu", None)
-    if acquire is None or getattr(backend, "_mtu_size", None) is not None:
-        return
-    try:
-        await acquire()
-    except Exception as err:  # noqa: BLE001 - keep the connection, use the default
-        _LOGGER.debug("Could not read the negotiated MTU: %s", err)
 
 
 @dataclass
@@ -1223,6 +1212,11 @@ class BLESessionManager:
                 _LOGGER.error("Failed to connect to BLE device: %s", reason)
                 raise RuntimeError(f"Failed to connect to BLE device: {reason}") from exc
 
+            # On Linux, Bleak reports the default MTU of 23 until the
+            # negotiated one is read from BlueZ. Read it before notifications
+            # start (BlueZ may refuse AcquireNotify after StartNotify).
+            await acquire_mtu(client)
+
             # Create session and store reference for the disconnection callback
             session = BLESession(
                 session_id=session_id, client=client, address=discovered_address
@@ -1282,9 +1276,7 @@ class BLESessionManager:
         if session.adapter:
             self._last_adapter[discovered_address.upper()] = session.adapter
 
-        # Get MTU size if available. On Linux, Bleak reports the default of 23
-        # until the negotiated MTU is read from BlueZ.
-        await _acquire_mtu(client)
+        # Get MTU size if available (read from BlueZ right after connecting)
         mtu = None
         try:
             if hasattr(client, "mtu_size"):

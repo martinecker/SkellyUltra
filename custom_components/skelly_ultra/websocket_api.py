@@ -23,7 +23,7 @@ from homeassistant.components import websocket_api
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY, DOMAIN
@@ -35,7 +35,10 @@ from .helpers import (
     get_device_profile,
     movement_parts,
 )
+from .select import BITRATE_OPTIONS
 from .sensor import idle_transfer_state
+from .skelly_ultra_pkg.audio_processor import AudioProcessor
+from .skelly_ultra_pkg.file_transfer import FileTransferManager
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -240,6 +243,51 @@ def _device_name(entry: ConfigEntry, device: dr.DeviceEntry | None) -> str:
     return entry.title
 
 
+def _entity_id(hass: HomeAssistant, domain: str, unique_id: str) -> str | None:
+    """Return the entity_id of one of the integration's entities, if it exists."""
+    return er.async_get(hass).async_get_entity_id(domain, DOMAIN, unique_id)
+
+
+def _transfer_settings(
+    hass: HomeAssistant, entry: ConfigEntry, data: dict[str, Any]
+) -> dict[str, Any]:
+    """Return the file transfer overrides and the entities that change them.
+
+    A UI changes them through the entities (switch.turn_on, number.set_value,
+    select.select_option), like any automation. The value entities only take
+    a value while their override switch is on.
+    """
+    entry_id = entry.entry_id
+    chunk_override = bool(data.get("override_chunk_size", False))
+    bitrate_override = bool(data.get("override_bitrate", False))
+    return {
+        "chunk_size": {
+            "override": chunk_override,
+            "value": data.get(
+                "chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE
+            ),
+            # What the connection's MTU allows; used without the override
+            "auto": data.get("mtu_chunk_size"),
+            "min": FileTransferManager.MIN_CHUNK_SIZE,
+            "max": FileTransferManager.MAX_CHUNK_SIZE,
+            "switch_entity": _entity_id(
+                hass, "switch", f"{entry_id}_override_chunk_size"
+            ),
+            "value_entity": _entity_id(hass, "number", f"{entry_id}_chunk_size"),
+        },
+        "bitrate": {
+            "override": bitrate_override,
+            "value": data.get("bitrate_override", AudioProcessor.MP3_BITRATE),
+            "default": AudioProcessor.MP3_BITRATE,
+            "options": list(BITRATE_OPTIONS),
+            "switch_entity": _entity_id(
+                hass, "switch", f"{entry_id}_override_bitrate"
+            ),
+            "value_entity": _entity_id(hass, "select", f"{entry_id}_bitrate"),
+        },
+    }
+
+
 def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """Return the files payload of a loaded entry."""
     entry_data = hass.data[DOMAIN][entry.entry_id]
@@ -257,6 +305,8 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
         "unloaded": False,
         "device_profile": _profile_payload(entry, profile),
         "available": coordinator.last_update_success,
+        # The file list is being read from the device, so it may be outdated
+        "refreshing": coordinator.file_list_loading,
         "capacity": {
             "free_kb": data.get("capacity_kb"),
             "file_count_reported": data.get("file_count_reported"),
@@ -271,6 +321,7 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
             if transfer_sensor is not None
             else idle_transfer_state()
         ),
+        "transfer_settings": _transfer_settings(hass, entry, data),
     }
 
 
@@ -377,6 +428,7 @@ def ws_subscribe_files(
                         **last_sent,
                         "unloaded": True,
                         "available": False,
+                        "refreshing": False,
                         "transfer": idle_transfer_state(),
                     },
                 )

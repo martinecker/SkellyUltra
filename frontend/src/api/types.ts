@@ -75,6 +75,8 @@ export interface FilesPayload {
 	unloaded: boolean;
 	device_profile: DeviceProfile;
 	available: boolean;
+	// The file list is being read from the Skelly, so it may be outdated
+	refreshing: boolean;
 	capacity: {
 		free_kb: number | null;
 		file_count_reported: number | null;
@@ -82,6 +84,31 @@ export interface FilesPayload {
 	file_order: number[]; // file indices of the enabled files, in play order
 	files: FileEntry[];
 	transfer: TransferState;
+	transfer_settings: TransferSettings;
+}
+
+// One file transfer override. The entities change it (null: not found in
+// the entity registry); the value entity only takes a value while the
+// override switch is on.
+interface TransferOverride<T> {
+	override: boolean;
+	value: T;
+	switch_entity: string | null;
+	value_entity: string | null;
+}
+
+export interface TransferSettings {
+	chunk_size: TransferOverride<number> & {
+		// The chunk size the connection's MTU allows, used without the
+		// override; null until the Skelly has connected
+		auto: number | null;
+		min: number;
+		max: number;
+	};
+	bitrate: TransferOverride<string> & {
+		default: string;
+		options: string[];
+	};
 }
 
 // An entry of skelly_ultra/devices/list
