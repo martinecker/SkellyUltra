@@ -18,10 +18,12 @@
 		"check": "biome check . && tsc --noEmit && vitest run"
 	},
 	"dependencies": {
-		"lit": "3.3.3"
+		"lit": "3.3.3",
+		"sortablejs": "1.15.7"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.5.15",
+		"@types/sortablejs": "1.15.9",
 		"happy-dom": "21.0.4",
 		"typescript": "6.0.3",
 		"vite": "8.3.4",

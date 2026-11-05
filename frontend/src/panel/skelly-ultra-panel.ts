@@ -7,11 +7,18 @@ import {
 	editFile,
 	errorMessage,
 	playFile,
+	setFileOrder,
 	stopFile,
 } from "../api/actions";
 import { listDevices } from "../api/devices";
 import { formatFree, orderedFiles, refreshFiles } from "../api/files";
 import { FilesSubscription, RETRY_DELAYS } from "../api/files-subscription";
+import {
+	enabledIndices,
+	existingOnly,
+	sameOrder,
+	withOrder,
+} from "../api/order";
 import {
 	type FileEntry,
 	type FilesPayload,
@@ -20,7 +27,11 @@ import {
 } from "../api/types";
 import type { SkConfirm } from "../components/sk-confirm";
 import type { SaveHandler, SkEditDialog } from "../components/sk-edit-dialog";
-import type { FileEventDetail } from "../components/sk-file-table";
+import type {
+	DragEventDetail,
+	FileEventDetail,
+	OrderEventDetail,
+} from "../components/sk-file-table";
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
@@ -42,6 +53,22 @@ interface PlayingFile {
 	entry_id: string;
 	file_index: number;
 	name: string;
+}
+
+// Play order changes within this time (in ms) go out as one write
+export const ORDER_DEBOUNCE_MS = 600;
+// How long (in ms) the written order is shown before the Skelly's own
+// order, if no new file list arrives after the write
+export const ORDER_SETTLE_MS = 3000;
+
+// A play order change not yet confirmed by the Skelly's file list
+interface PendingOrder {
+	entry_id: string;
+	target: ActionTarget;
+	// file_index of each enabled file, in play order
+	order: number[];
+	// Written; shown until the next file list (or ORDER_SETTLE_MS)
+	written?: { seen: FilesPayload | undefined };
 }
 
 const busyKey = (entryId: string, fileIndex: number) =>
@@ -81,6 +108,10 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _refreshing = false;
 	@state() private _cancelling = false;
 	@state() private _details = storedDetails();
+	// The play order the table shows until the Skelly reports it
+	@state() private _order?: PendingOrder;
+	// entry_id of the Skelly whose play order is being written
+	@state() private _orderSaving?: string;
 
 	private readonly _files = new FilesSubscription(this);
 	private _loadingDevices = false;
@@ -88,6 +119,10 @@ export class SkellyUltraPanel extends LitElement {
 	private _devicesRetryTimer?: ReturnType<typeof setTimeout>;
 	private _devicesRetries = 0;
 	private _resizeObserver?: ResizeObserver;
+	private _orderTimer?: ReturnType<typeof setTimeout>;
+	private _settleTimer?: ReturnType<typeof setTimeout>;
+	// A row is being dragged: the play order isn't written meanwhile
+	private _dragging = false;
 
 	connectedCallback(): void {
 		super.connectedCallback();
@@ -116,6 +151,8 @@ export class SkellyUltraPanel extends LitElement {
 		this._resizeObserver = undefined;
 		clearTimeout(this._devicesRetryTimer);
 		this._devicesRetryTimer = undefined;
+		// Leaving the panel: write a waiting play order change now
+		this._writeOrder();
 	}
 
 	protected willUpdate(changed: PropertyValues<this>): void {
@@ -130,6 +167,21 @@ export class SkellyUltraPanel extends LitElement {
 			device ? targetOf(device) : {},
 		);
 		this._forgetEndedPlayback();
+		this._settleOrder();
+	}
+
+	// A written play order is shown until a newer file list arrives
+	private _settleOrder(): void {
+		const written = this._order?.written;
+		if (written && this._files.payload !== written.seen) {
+			this._dropOrder();
+		}
+	}
+
+	private _dropOrder(): void {
+		clearTimeout(this._settleTimer);
+		this._settleTimer = undefined;
+		this._order = undefined;
 	}
 
 	// The playing state is a guess (the device doesn't report playback). Drop
@@ -200,6 +252,8 @@ export class SkellyUltraPanel extends LitElement {
 		this._selected = value;
 		// The edit dialog belongs to the Skelly it was opened on
 		this._closeEditor();
+		// A waiting play order change goes to its own Skelly, now
+		this._writeOrder();
 		const url = new URL(window.location.href);
 		url.searchParams.set(DEVICE_PARAM, value);
 		history.replaceState(history.state, "", url);
@@ -477,13 +531,16 @@ export class SkellyUltraPanel extends LitElement {
 					? html`<sk-file-table
 							class=${live ? "" : "stale"}
 							.profile=${payload.device_profile}
-							.rows=${orderedFiles(payload)}
+							.rows=${orderedFiles(this._shownPayload(payload))}
 							.playing=${this._playingIndex(payload)}
 							.busy=${this._busyIndices(payload)}
 							?disabled=${readOnly}
 							.disabledReason=${transferring ? strings.transferBusy : undefined}
 							?narrow=${this._compact}
 							?details=${this._details}
+							?ordering=${this._orderSaving === payload.entry_id}
+							@sk-order=${this._onOrder}
+							@sk-order-drag=${this._onOrderDrag}
 							@sk-play=${this._onPlay}
 							@sk-stop=${this._onStop}
 							@sk-edit=${this._onEdit}
@@ -531,6 +588,142 @@ export class SkellyUltraPanel extends LitElement {
 	private get _actionTarget(): ActionTarget | undefined {
 		const deviceId = this._payload?.device_id ?? this._device?.device_id;
 		return deviceId ? { device_id: deviceId } : undefined;
+	}
+
+	// The payload with a play order change that the Skelly hasn't reported
+	// yet
+	private _shownPayload(payload: FilesPayload): FilesPayload {
+		const pending = this._order;
+		return pending && pending.entry_id === payload.entry_id
+			? withOrder(payload, pending.order)
+			: payload;
+	}
+
+	// The table changed the play order: show it, and write it once the
+	// changes stop for a moment
+	private _onOrder(ev: CustomEvent<OrderEventDetail>): void {
+		const payload = this._payload;
+		const target = this._actionTarget;
+		if (!payload || !target || this._orderSaving === payload.entry_id) {
+			return;
+		}
+		clearTimeout(this._settleTimer);
+		this._settleTimer = undefined;
+		this._order = {
+			entry_id: payload.entry_id,
+			target,
+			order: ev.detail.order,
+		};
+		this._scheduleOrder();
+	}
+
+	private _scheduleOrder(): void {
+		clearTimeout(this._orderTimer);
+		this._orderTimer = undefined;
+		if (!this._dragging) {
+			this._orderTimer = setTimeout(
+				() => this._writeOrder(),
+				ORDER_DEBOUNCE_MS,
+			);
+		}
+	}
+
+	// The wait for more changes doesn't run out while a row is dragged
+	private _onOrderDrag(ev: CustomEvent<DragEventDetail>): void {
+		this._dragging = ev.detail.dragging;
+		if (this._order && !this._order.written) {
+			this._scheduleOrder();
+		}
+	}
+
+	// Writes the waiting play order change, if there is one. On failure the
+	// table goes back to the Skelly's order.
+	private async _writeOrder(): Promise<void> {
+		clearTimeout(this._orderTimer);
+		this._orderTimer = undefined;
+		const pending = this._order;
+		const hass = this.hass;
+		// One write at a time; a change made meanwhile goes out after it
+		if (!pending || pending.written || this._orderSaving !== undefined) {
+			return;
+		}
+		const payload = this._files.payload;
+		const current =
+			payload?.entry_id === pending.entry_id ? payload : undefined;
+		const order = current
+			? existingOnly(pending.order, current)
+			: pending.order;
+		if (
+			!hass ||
+			!order.length ||
+			(current && sameOrder(order, enabledIndices(orderedFiles(current))))
+		) {
+			// Nothing to write (e.g. changed and changed back)
+			this._dropOrder();
+			return;
+		}
+		this._orderSaving = pending.entry_id;
+		try {
+			await this._sendOrder(hass, pending, order, payload);
+		} finally {
+			this._orderSaving = undefined;
+		}
+		// A change for another Skelly, made during the write, goes out now
+		// if its wait is over
+		const next = this._order;
+		if (next && next !== pending && !next.written && !this._orderTimer) {
+			void this._writeOrder();
+		}
+	}
+
+	// before: the payload when the write started
+	private async _sendOrder(
+		hass: HomeAssistant,
+		pending: PendingOrder,
+		order: number[],
+		before: FilesPayload | undefined,
+	): Promise<void> {
+		let reported: number[] | undefined;
+		try {
+			// The device can't change the order while it plays a file, so a
+			// file we started is stopped first
+			const playing = this._playing;
+			if (playing?.entry_id === pending.entry_id) {
+				try {
+					await stopFile(hass, pending.target, playing.file_index);
+				} catch {
+					// Writing says why, if the device is still busy
+				}
+				if (this._playing === playing) {
+					this._playing = undefined;
+				}
+			}
+			const response = await setFileOrder(hass, pending.target, {
+				file_indices: order,
+			});
+			reported = response?.file_order?.map((entry) => entry.file_index);
+		} catch (err) {
+			if (this._order === pending) {
+				this._dropOrder();
+			}
+			this._toast(strings.orderFailed(errorMessage(err)));
+			return;
+		}
+		if (this._order !== pending) {
+			return;
+		}
+		const latest = this._files.payload;
+		if (
+			// The Skelly's order differs from the one asked for
+			(reported && !sameOrder(order, reported)) ||
+			// The new file list came during the write
+			latest !== before
+		) {
+			this._dropOrder();
+			return;
+		}
+		this._order = { ...pending, order, written: { seen: latest } };
+		this._settleTimer = setTimeout(() => this._dropOrder(), ORDER_SETTLE_MS);
 	}
 
 	private _playingIndex(payload: FilesPayload): number | null {
@@ -593,6 +786,11 @@ export class SkellyUltraPanel extends LitElement {
 
 	private async _onPlay(ev: CustomEvent<FileEventDetail>) {
 		const { file } = ev.detail;
+		// A waiting play order change goes first: writing it would stop the
+		// file again
+		if (this._order && !this._order.written) {
+			await this._writeOrder();
+		}
 		const entryId = await this._fileAction(
 			file,
 			(hass, target) => playFile(hass, target, file.file_index),

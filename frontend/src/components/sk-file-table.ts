@@ -1,7 +1,10 @@
 import { css, html, LitElement, nothing } from "lit";
 import { property } from "lit/decorators.js";
+import { live } from "lit/directives/live.js";
 import { repeat } from "lit/directives/repeat.js";
+import Sortable, { type SortableEvent } from "sortablejs";
 import type { FileRow } from "../api/files";
+import { enabledIndices, sameOrder, toggleInOrder } from "../api/order";
 import type { DeviceProfile, FileEntry, LightSettings } from "../api/types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
@@ -21,9 +24,22 @@ export interface FileEventDetail {
 	file: FileEntry;
 }
 
+// Detail of sk-order: the new play order, as the file_index of each enabled
+// file
+export interface OrderEventDetail {
+	order: number[];
+}
+
+// Detail of sk-order-drag: a row is picked up (true) or put down (false)
+export interface DragEventDetail {
+	dragging: boolean;
+}
+
 // The files of one Skelly: a table on wide screens, a two-line list on narrow
 // ones. It only shows and asks; the panel does the actions, after an
-// sk-play, sk-stop, sk-edit or sk-delete event.
+// sk-play, sk-stop, sk-edit, sk-delete or sk-order event. Enabled files can
+// be dragged by their handle to change the play order, and the checkbox puts
+// a file in the play order or takes it out.
 export class SkFileTable extends LitElement {
 	@property({ attribute: false }) profile?: DeviceProfile;
 	@property({ attribute: false }) rows: FileRow[] = [];
@@ -37,6 +53,13 @@ export class SkFileTable extends LitElement {
 	@property({ attribute: false }) disabledReason?: string;
 	@property({ type: Boolean, reflect: true }) narrow = false;
 	@property({ type: Boolean }) details = false;
+	// The play order is being written: it can't be changed meanwhile
+	@property({ type: Boolean }) ordering = false;
+
+	private _sortable?: Sortable;
+	// Where the dragged row was, to put it back for Lit (see _onDragEnd)
+	private _dragAnchor: Node | null = null;
+	private _dragging = false;
 
 	static styles = [
 		sharedStyles,
@@ -261,6 +284,67 @@ export class SkFileTable extends LitElement {
 			.empty {
 				padding: 16px 0;
 			}
+
+			.visually-hidden {
+				position: absolute;
+				width: 1px;
+				height: 1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+			}
+
+			.handle-cell,
+			.enabled-cell {
+				width: 24px;
+				padding-right: 0;
+			}
+
+			.handle,
+			.grip {
+				display: inline-flex;
+				align-items: center;
+				justify-content: center;
+				width: 32px;
+				height: 40px;
+				color: var(--secondary-text-color);
+				cursor: grab;
+				/* A drag on the handle moves the row, not the page */
+				touch-action: none;
+			}
+
+			.handle.locked,
+			.grip.locked {
+				color: var(--disabled-text-color, #999);
+				cursor: default;
+			}
+
+			.handle.none {
+				visibility: hidden;
+			}
+
+			input.enabled {
+				width: 18px;
+				height: 18px;
+				margin: 0;
+				cursor: pointer;
+				accent-color: var(--primary-color);
+			}
+
+			input.enabled:disabled {
+				cursor: default;
+			}
+
+			.sortable-ghost td,
+			li.sortable-ghost {
+				background: rgba(var(--rgb-primary-color, 3, 169, 244), 0.2);
+			}
+
+			.sortable-fallback {
+				opacity: 0.8;
+				background: var(--card-background-color, #fff);
+				box-shadow: var(--ha-card-box-shadow, 0 2px 8px rgba(0, 0, 0, 0.3));
+			}
 		`,
 	];
 
@@ -281,6 +365,10 @@ export class SkFileTable extends LitElement {
 			<table>
 				<thead>
 					<tr>
+						<th class="handle-cell"></th>
+						<th class="enabled-cell" title=${strings.columnEnabledTitle}>
+							<span class="visually-hidden">${strings.columnEnabledTitle}</span>
+						</th>
 						<th class="position">${strings.columnPosition}</th>
 						<th>${strings.columnName}</th>
 						${profile.lights.map((light) => html`<th>${light.label}</th>`)}
@@ -304,6 +392,8 @@ export class SkFileTable extends LitElement {
 								class=${this._rowClass(file, position)}
 								data-file-index=${file.file_index}
 							>
+								<td class="handle-cell">${this._renderHandle(file, position)}</td>
+								<td class="enabled-cell">${this._renderEnabled(file, position)}</td>
 								<td class="position">${this._renderPosition(position)}</td>
 								<td class="name">${file.name}</td>
 								${profile.lights.map(
@@ -365,6 +455,8 @@ export class SkFileTable extends LitElement {
 							class=${this._rowClass(file, position)}
 							data-file-index=${file.file_index}
 						>
+							${this._renderHandle(file, position)}
+							${this._renderEnabled(file, position)}
 							<div class="main">
 								<div>
 									<span class="num">${this._renderPosition(position)}</span>
@@ -439,11 +531,257 @@ export class SkFileTable extends LitElement {
 
 	private _rowClass(file: FileEntry, position: number | null): string {
 		return [
-			position === null ? "off" : "",
+			position === null ? "off" : "on",
 			file.file_index === this.playing ? "playing" : "",
 		]
 			.filter(Boolean)
 			.join(" ");
+	}
+
+	// Enabled files are dragged by this handle; disabled ones have none
+	// (they aren't in the play order)
+	private _renderHandle(file: FileEntry, position: number | null) {
+		if (position === null) {
+			return html`<span class="handle none" aria-hidden="true"></span>`;
+		}
+		// The device can't order a file without a name: dragging it would only
+		// take it out. Its grip isn't a .handle, so Sortable won't pick it up.
+		if (!file.name.trim()) {
+			return html`<span
+				class="grip locked"
+				title=${strings.namelessInOrder}
+				aria-hidden="true"
+			>
+				<ha-icon icon="mdi:drag"></ha-icon>
+			</span>`;
+		}
+		const locked = this._dragLocked;
+		return html`<span
+			class="handle ${locked ? "locked" : ""}"
+			title=${this._title(strings.dragTitle)}
+			aria-hidden="true"
+			data-file-index=${file.file_index}
+		>
+			<ha-icon icon="mdi:drag"></ha-icon>
+		</span>`;
+	}
+
+	private _renderEnabled(file: FileEntry, position: number | null) {
+		const enabled = position !== null;
+		const named = file.name.trim() !== "";
+		// The device needs at least one enabled file, and addresses files by
+		// name when it orders them
+		const last =
+			enabled &&
+			this._writable(this._order.filter((i) => i !== file.file_index))
+				.length === 0;
+		const nameless = !enabled && !named;
+		const title = last
+			? strings.lastEnabled
+			: nameless
+				? strings.namelessFile
+				: enabled && !named && !this._orderLocked
+					? strings.namelessInOrder
+					: this._title(enabled ? strings.disableTitle : strings.enableTitle);
+		return html`<input
+			type="checkbox"
+			class="enabled"
+			title=${title}
+			aria-label=${strings.enabledLabel(file.name)}
+			.checked=${live(enabled)}
+			?disabled=${this._orderLocked || last || nameless}
+			@change=${(ev: Event) =>
+				this._onEnabledChange(
+					ev,
+					file,
+					(ev.target as HTMLInputElement).checked,
+				)}
+		/>`;
+	}
+
+	private get _enabledCount(): number {
+		return this.rows.filter((row) => row.position !== null).length;
+	}
+
+	// The play order the rows show
+	private get _order(): number[] {
+		return enabledIndices(this.rows);
+	}
+
+	// The order without files that have no name: the device can't order
+	// those, so any change takes them out of the play order
+	private _writable(order: readonly number[]): number[] {
+		const nameless = new Set(
+			this.rows
+				.filter((row) => !row.file.name.trim())
+				.map((row) => row.file.file_index),
+		);
+		return order.filter((i) => !nameless.has(i));
+	}
+
+	// Rows can't be dragged now
+	private get _dragLocked(): boolean {
+		return this._orderLocked || this._enabledCount < 2;
+	}
+
+	// The play order (and the other actions) can't be changed now
+	private get _orderLocked(): boolean {
+		return this.disabled || this.disabledReason !== undefined || this.ordering;
+	}
+
+	// Why a control is disabled, for its tooltip, or its label
+	private _title(label: string): string {
+		if (this.disabled) {
+			return label;
+		}
+		if (this.disabledReason !== undefined) {
+			return this.disabledReason;
+		}
+		return this.ordering ? strings.orderSaving : label;
+	}
+
+	private _onEnabledChange(ev: Event, file: FileEntry, enabled: boolean) {
+		const order = this._order;
+		const next = toggleInOrder(order, file.file_index, enabled);
+		if (next.length !== order.length) {
+			this._fireOrder(next);
+		}
+		// The rows change once the panel takes the new order; until then (or
+		// if it doesn't) the checkbox shows the rows' state again
+		(ev.target as HTMLInputElement).checked = !enabled;
+		this.requestUpdate();
+	}
+
+	private _fireOrder(proposed: number[]) {
+		const order = this._writable(proposed);
+		if (!order.length) {
+			return;
+		}
+		this.dispatchEvent(
+			new CustomEvent<OrderEventDetail>("sk-order", {
+				detail: { order },
+				bubbles: true,
+				composed: true,
+			}),
+		);
+	}
+
+	// Sortable works on the rows' container, which changes when the table
+	// turns into a list or the files come and go
+	protected updated(): void {
+		const container =
+			this.renderRoot.querySelector<HTMLElement>("tbody") ??
+			this.renderRoot.querySelector<HTMLElement>("ul");
+		if (this._sortable && this._sortable.el !== container) {
+			this._destroySortable();
+		}
+		if (container && !this._sortable) {
+			this._sortable = Sortable.create(container, {
+				handle: ".handle",
+				// Only enabled files are in the play order
+				draggable: ".on",
+				// Pointer events instead of HTML5 drag and drop, the same on
+				// touch screens and in the companion apps
+				forceFallback: true,
+				fallbackTolerance: 3,
+				animation: 150,
+				onChoose: (ev) => this._keepCellWidths(ev.item, true),
+				onUnchoose: (ev) => this._keepCellWidths(ev.item, false),
+				onStart: (ev) => this._onDragStart(ev),
+				onEnd: (ev) => this._onDragEnd(ev),
+			});
+		}
+		// Not while a row is dragged: Sortable would drop it on the spot
+		if (!this._dragging) {
+			this._sortable?.option("disabled", this._dragLocked);
+		}
+	}
+
+	// The dragged copy of a table row is taken out of the table, so its cells
+	// would lose their column widths: they're fixed while it's dragged
+	private _keepCellWidths(item: HTMLElement, keep: boolean) {
+		for (const cell of item.querySelectorAll<HTMLElement>(":scope > td")) {
+			cell.style.width = keep ? `${cell.getBoundingClientRect().width}px` : "";
+			cell.style.boxSizing = keep ? "border-box" : "";
+		}
+	}
+
+	private _onDragStart(ev: SortableEvent) {
+		this._dragAnchor = ev.item.nextSibling;
+		this._dragging = true;
+		this._fireDrag(true);
+	}
+
+	// The panel holds back its write while a row is dragged
+	private _fireDrag(dragging: boolean) {
+		this.dispatchEvent(
+			new CustomEvent<DragEventDetail>("sk-order-drag", {
+				detail: { dragging },
+				bubbles: true,
+				composed: true,
+			}),
+		);
+	}
+
+	// Sortable has moved the row in the DOM. Lit owns the rows, so the row
+	// goes back where it was and the panel's new order moves it for real.
+	private _onDragEnd(ev: SortableEvent) {
+		const { item, from } = ev;
+		// Where the rows are now, read before the row goes back. The rows may
+		// have changed during the drag, so this goes by file, not by place.
+		const dropped = this._droppedOrder(from, item);
+		const anchor = this._dragAnchor;
+		this._dragAnchor = null;
+		this._dragging = false;
+		if (!anchor) {
+			from.appendChild(item);
+		} else if (anchor.parentNode !== from) {
+			// The file went away during the drag, and Lit removed its row's
+			// place: the row goes too, and the drop counts for nothing
+			item.remove();
+			this._fireDrag(false);
+			this.requestUpdate();
+			return;
+		} else {
+			from.insertBefore(item, anchor);
+		}
+		// The new order first, so the panel's wait starts from it
+		if (dropped && !sameOrder(dropped, this._order)) {
+			this._fireOrder(dropped);
+		}
+		this._fireDrag(false);
+		// Sortable's disabled option may have to catch up
+		this.requestUpdate();
+	}
+
+	// The play order as the rows stand after a drop, or undefined if the
+	// dragged file isn't in the play order (any more)
+	private _droppedOrder(
+		container: HTMLElement,
+		item: HTMLElement,
+	): number[] | undefined {
+		const order = this._order;
+		const dragged = Number(item.dataset.fileIndex);
+		if (!order.includes(dragged)) {
+			return undefined;
+		}
+		const inOrder = new Set(order);
+		const seen = new Set<number>();
+		const dropped: number[] = [];
+		for (const el of container.children) {
+			const fileIndex = Number((el as HTMLElement).dataset.fileIndex);
+			// Skips Sortable's own copy of the row, and rows out of the order
+			if (
+				el.classList.contains("sortable-fallback") ||
+				!inOrder.has(fileIndex) ||
+				seen.has(fileIndex)
+			) {
+				continue;
+			}
+			seen.add(fileIndex);
+			dropped.push(fileIndex);
+		}
+		return dropped.length === order.length ? dropped : undefined;
 	}
 
 	private _renderPosition(position: number | null) {
@@ -549,16 +887,9 @@ export class SkFileTable extends LitElement {
 		</button>`;
 	}
 
+	// Play, edit and delete wait for a transfer or a play order write
 	private _isDisabled(file: FileEntry): boolean {
-		return (
-			this.disabled ||
-			this.disabledReason !== undefined ||
-			this.busy.has(file.file_index)
-		);
-	}
-
-	private _title(label: string): string {
-		return this.disabledReason && !this.disabled ? this.disabledReason : label;
+		return this._orderLocked || this.busy.has(file.file_index);
 	}
 
 	private _fire(
@@ -628,5 +959,17 @@ export class SkFileTable extends LitElement {
 	disconnectedCallback(): void {
 		super.disconnectedCallback();
 		window.removeEventListener("click", this._onWindowClick, true);
+		this._destroySortable();
+	}
+
+	// A drag that was going on ends with it
+	private _destroySortable() {
+		this._sortable?.destroy();
+		this._sortable = undefined;
+		this._dragAnchor = null;
+		if (this._dragging) {
+			this._dragging = false;
+			this._fireDrag(false);
+		}
 	}
 }

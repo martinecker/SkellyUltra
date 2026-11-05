@@ -92,15 +92,26 @@ export const editFile = (
 	changes: FileChanges,
 ) => call(hass, "edit_file", target, { filename, ...changes });
 
-// filenames: the enabled files, in play order
+// The play order the device reports after set_file_order
+export interface FileOrderEntry {
+	file_index: number;
+	// null if the file isn't in the file list
+	filename: string | null;
+}
+
+// files: the enabled files, in play order, by name or by file index (file
+// indices are unique, names need not be)
 export const setFileOrder = (
 	hass: HomeAssistant,
 	target: ActionTarget,
-	filenames: string[],
+	files: { filenames: string[] } | { file_indices: number[] },
 ) =>
-	callWithResponse<{ file_order: number[] }>(hass, "set_file_order", target, {
-		filenames,
-	});
+	callWithResponse<{ file_order: FileOrderEntry[] }>(
+		hass,
+		"set_file_order",
+		target,
+		{ ...files },
+	);
 
 // filePath: a media source ID, a URL or a path that HA may read
 export const sendFile = (

@@ -38,7 +38,7 @@ export const strings = {
 	transferCancelFailed: (message: string) =>
 		`Couldn't cancel the transfer: ${message}`,
 	transferBusy:
-		"Files can't be played, edited or deleted until the transfer is done.",
+		"Files can't be played, edited, reordered or deleted until the transfer is done.",
 	transferFailed: (name: string | null, error: string | null) =>
 		`Sending ${name ?? "the file"} failed${error ? `: ${error}` : "."}`,
 	transferCancelled: (name: string | null) =>
@@ -79,6 +79,19 @@ export const strings = {
 		`Couldn't delete ${name}: ${message}`,
 	deleted: (name: string) => `Deleted ${name}`,
 	edit: "Edit",
+	// Play order
+	columnEnabledTitle: "In the play order",
+	enabledLabel: (name: string) => `Play ${name} in the play order`,
+	enableTitle: "Add to the play order, at the end",
+	disableTitle: "Take out of the play order",
+	lastEnabled: "At least one file must stay in the play order",
+	namelessFile: "A file without a name can't be put in the play order",
+	namelessInOrder:
+		"This file has no name, so the Skelly can't order it: any change to the play order takes it out",
+	dragTitle: "Drag to change the play order",
+	orderSaving: "Saving the play order…",
+	orderFailed: (message: string) =>
+		`Couldn't change the play order: ${message}`,
 	// Edit dialog
 	editTitle: (name: string) => `Edit ${name}`,
 	editEye: "Eye icon",

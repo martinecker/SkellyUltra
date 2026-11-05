@@ -2,6 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/main";
 import type { FilesPayload, SkellyDevice } from "../src/api/types";
 import { PANEL_ELEMENT } from "../src/constants";
+import {
+	ORDER_DEBOUNCE_MS,
+	ORDER_SETTLE_MS,
+} from "../src/panel/skelly-ultra-panel";
 import devicesFixture from "./fixtures/devices.json";
 import filesFixture from "./fixtures/files-payload.json";
 
@@ -314,9 +318,11 @@ describe("panel", () => {
 		// The device does one thing at a time
 		expect(button(panel, 1, "play").disabled).toBe(true);
 		expect(button(panel, 1, "play").title).toBe(
-			"Files can't be played, edited or deleted until the transfer is done.",
+			"Files can't be played, edited, reordered or deleted until the transfer is done.",
 		);
-		expect(text(panel)).toContain("can't be played, edited or deleted");
+		expect(text(panel)).toContain(
+			"can't be played, edited, reordered or deleted",
+		);
 
 		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
 			?.shadowRoot as ShadowRoot;
@@ -993,6 +999,529 @@ describe("panel", () => {
 			select.dispatchEvent(new Event("change"));
 			await flush(panel);
 			expect(edDialog(panel).open).toBe(false);
+		});
+	});
+
+	describe("play order", () => {
+		const wait = (ms: number) =>
+			new Promise((resolve) => setTimeout(resolve, ms));
+		// Past the debounce of the play order writes
+		const pause = async (panel: Panel) => {
+			await wait(ORDER_DEBOUNCE_MS + 50);
+			await settle(panel);
+		};
+		const checkbox = (panel: Panel, fileIndex: number) =>
+			row(panel, fileIndex).querySelector("input.enabled") as HTMLInputElement;
+		const click = async (panel: Panel, fileIndex: number) => {
+			checkbox(panel, fileIndex).click();
+			await settle(panel);
+		};
+		const shownOrder = (panel: Panel) =>
+			[...table(panel).querySelectorAll("tbody tr")].map((r) => [
+				Number(r.getAttribute("data-file-index")),
+				r.querySelector(".position")?.textContent?.trim(),
+			]);
+		const orderCalls = (hass: ReturnType<typeof fakeHass>["hass"]) =>
+			hass.callService.mock.calls.filter((c) => c[1] === "set_file_order");
+		// Three files, all in the play order
+		const three: FilesPayload = {
+			...idlePayload,
+			files: [1, 2, 3].map((file_index) => ({
+				...idlePayload.files[0],
+				name: `f${file_index}.mp3`,
+				file_index,
+			})),
+			file_order: [1, 2, 3],
+		};
+
+		it("puts a file in the play order with its checkbox, after a pause", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showPanel(hass);
+			expect(checkbox(panel, 2).checked).toBe(false);
+
+			await click(panel, 2);
+			// Shown at once, written after the pause
+			expect(shownOrder(panel)).toEqual([
+				[1, "1"],
+				[2, "2"],
+			]);
+			expect(checkbox(panel, 2).checked).toBe(true);
+			expect(orderCalls(hass)).toEqual([]);
+
+			await pause(panel);
+			expect(orderCalls(hass)).toEqual([
+				[
+					"skelly_ultra",
+					"set_file_order",
+					{ device_id: DEVICE_ID, file_indices: [1, 2] },
+					undefined,
+					false,
+					true,
+				],
+			]);
+			// Shown until the Skelly's list comes, then that is shown
+			expect(shownOrder(panel)[1]).toEqual([2, "2"]);
+			send({
+				...idlePayload,
+				entry_id: devicesFixture[0].entry_id,
+				file_order: [1, 2],
+			});
+			await settle(panel);
+			expect(shownOrder(panel)[1]).toEqual([2, "2"]);
+			send({
+				...idlePayload,
+				entry_id: devicesFixture[0].entry_id,
+				file_order: [2],
+			});
+			await settle(panel);
+			expect(shownOrder(panel)).toEqual([
+				[2, "1"],
+				[1, "–"],
+			]);
+		});
+
+		it("writes quick changes as one, and nothing if they cancel out", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+
+			await click(panel, 2);
+			await click(panel, 3);
+			expect(shownOrder(panel)).toEqual([
+				[1, "1"],
+				[2, "–"],
+				[3, "–"],
+			]);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [1] },
+			]);
+		});
+
+		it("writes nothing when a change is undone before the pause", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			await click(panel, 3);
+			await pause(panel);
+			expect(orderCalls(hass)).toEqual([]);
+			expect(shownOrder(panel).map((r) => r[1])).toEqual(["1", "2", "3"]);
+		});
+
+		it("keeps the last file in the play order", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			expect(checkbox(panel, 1).disabled).toBe(true);
+			expect(checkbox(panel, 1).title).toBe(
+				"At least one file must stay in the play order",
+			);
+			expect(checkbox(panel, 2).disabled).toBe(false);
+			// A file without a name can't be ordered
+			const nameless = fakeHass(one, {
+				...idlePayload,
+				files: [idlePayload.files[0], { ...idlePayload.files[1], name: " " }],
+			});
+			const other = await showPanel(nameless.hass);
+			expect(checkbox(other, 2).disabled).toBe(true);
+		});
+
+		it("goes back to the Skelly's order and says why when the write fails", async () => {
+			const messages = toasts();
+			const { hass } = fakeHass(one);
+			hass.callService.mockRejectedValueOnce({
+				code: "home_assistant_error",
+				message: "The device is not connected",
+			});
+			const panel = await showPanel(hass);
+			await click(panel, 2);
+			await pause(panel);
+			expect(orderCalls(hass)).toHaveLength(1);
+			expect(shownOrder(panel)).toEqual([
+				[1, "1"],
+				[2, "–"],
+			]);
+			expect(checkbox(panel, 2).checked).toBe(false);
+			expect(messages).toContain(
+				"Couldn't change the play order: The device is not connected",
+			);
+		});
+
+		it("locks the files while the order is written, and stops a file it played first", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			button(panel, 1, "play").click();
+			await settle(panel);
+			let finish = () => {};
+			hass.callService.mockImplementation(async (_d, service) =>
+				service === "set_file_order"
+					? new Promise((resolve) => {
+							finish = () => resolve({ context: {}, response: {} });
+						})
+					: { context: {} },
+			);
+
+			await click(panel, 3);
+			await pause(panel);
+			expect(hass.callService.mock.calls.map((c) => c[1])).toEqual([
+				"play_file",
+				"stop_file",
+				"set_file_order",
+			]);
+			expect(row(panel, 1).classList.contains("playing")).toBe(false);
+			expect(checkbox(panel, 2).disabled).toBe(true);
+			expect(checkbox(panel, 2).title).toBe("Saving the play order…");
+			expect(button(panel, 2, "play").disabled).toBe(true);
+			expect(button(panel, 2, "edit").disabled).toBe(true);
+
+			finish();
+			await settle(panel);
+			expect(checkbox(panel, 2).disabled).toBe(false);
+			expect(button(panel, 2, "play").disabled).toBe(false);
+		});
+
+		it("can't be changed during a transfer or while disconnected", async () => {
+			const { hass, send } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			const entry = { ...three, entry_id: devicesFixture[0].entry_id };
+			send({
+				...entry,
+				transfer: { ...three.transfer, status: "uploading", in_progress: true },
+			});
+			await settle(panel);
+			expect(checkbox(panel, 2).disabled).toBe(true);
+			expect(checkbox(panel, 2).title).toContain("reordered");
+			send({ ...entry, available: false });
+			await settle(panel);
+			expect(checkbox(panel, 2).disabled).toBe(true);
+		});
+
+		it("moves a dragged file, by its handle", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			const sk = panel.shadowRoot?.querySelector(
+				"sk-file-table",
+			) as unknown as {
+				_sortable: {
+					el: HTMLElement;
+					options: Record<string, unknown> & {
+						onStart: (ev: unknown) => void;
+						onEnd: (ev: unknown) => void;
+					};
+				};
+			};
+			const sortable = sk._sortable;
+			const tbody = table(panel).querySelector("tbody") as HTMLElement;
+			expect(sortable.el).toBe(tbody);
+			expect(sortable.options).toMatchObject({
+				handle: ".handle",
+				draggable: ".on",
+				forceFallback: true,
+				disabled: false,
+			});
+
+			// What Sortable does: the first row is moved to the end
+			const item = row(panel, 1);
+			sortable.options.onStart({ item });
+			tbody.append(item);
+			sortable.options.onEnd({
+				item,
+				from: tbody,
+				oldDraggableIndex: 0,
+				newDraggableIndex: 2,
+			});
+			await settle(panel);
+			expect(shownOrder(panel)).toEqual([
+				[2, "1"],
+				[3, "2"],
+				[1, "3"],
+			]);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [2, 3, 1] },
+			]);
+		});
+
+		type SortableHooks = {
+			_sortable: {
+				options: Record<string, unknown> & {
+					onStart: (ev: unknown) => void;
+					onEnd: (ev: unknown) => void;
+				};
+			};
+		};
+		const hooks = (panel: Panel) =>
+			(
+				(panel.shadowRoot as ShadowRoot).querySelector(
+					"sk-file-table",
+				) as unknown as SortableHooks
+			)._sortable.options;
+
+		it("doesn't write while a row is still being dragged", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			const tbody = table(panel).querySelector("tbody") as HTMLElement;
+			const item = row(panel, 1);
+			hooks(panel).onStart({ item });
+			// Held past the wait: nothing goes out yet
+			await pause(panel);
+			expect(orderCalls(hass)).toEqual([]);
+			expect(hooks(panel).disabled).toBe(false);
+			tbody.append(item);
+			hooks(panel).onEnd({
+				item,
+				from: tbody,
+				oldDraggableIndex: 0,
+				newDraggableIndex: 1,
+			});
+			await settle(panel);
+			expect(orderCalls(hass)).toEqual([]);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [2, 1] },
+			]);
+		});
+
+		it("drops a row whose file went away during the drag", async () => {
+			const { hass, send } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			const tbody = table(panel).querySelector("tbody") as HTMLElement;
+			const item = row(panel, 1);
+			hooks(panel).onStart({ item });
+			tbody.append(item);
+			send({
+				...three,
+				entry_id: devicesFixture[0].entry_id,
+				files: three.files.slice(1),
+				file_order: [2, 3],
+			});
+			await settle(panel);
+			hooks(panel).onEnd({
+				item,
+				from: tbody,
+				oldDraggableIndex: 0,
+				newDraggableIndex: 1,
+			});
+			await settle(panel);
+			expect(item.isConnected).toBe(false);
+			expect(shownOrder(panel)).toEqual([
+				[2, "1"],
+				[3, "2"],
+			]);
+			await pause(panel);
+			expect(orderCalls(hass)).toEqual([]);
+		});
+
+		it("shows the Skelly's own order when it differs from the one written", async () => {
+			const { hass } = fakeHass(one, three);
+			hass.callService.mockImplementation(async (_d, service) =>
+				service === "set_file_order"
+					? {
+							context: {},
+							response: {
+								file_order: [
+									{ file_index: 1, filename: "f1.mp3" },
+									{ file_index: 2, filename: "f2.mp3" },
+									{ file_index: 3, filename: "f3.mp3" },
+								],
+							},
+						}
+					: { context: {} },
+			);
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			await pause(panel);
+			expect(orderCalls(hass)).toHaveLength(1);
+			expect(shownOrder(panel).map((r) => r[1])).toEqual(["1", "2", "3"]);
+		});
+
+		it("shows the Skelly's order again if no new file list comes", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			await pause(panel);
+			expect(shownOrder(panel)[2]).toEqual([3, "–"]);
+			await wait(ORDER_SETTLE_MS);
+			await settle(panel);
+			expect(shownOrder(panel)[2]).toEqual([3, "3"]);
+		});
+
+		it("writes a waiting change before playing a file, without stopping it", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			button(panel, 1, "play").click();
+			await settle(panel);
+			await click(panel, 3);
+			button(panel, 2, "play").click();
+			await settle(panel);
+			expect(hass.callService.mock.calls.map((c) => c[1])).toEqual([
+				"play_file",
+				"stop_file",
+				"set_file_order",
+				"play_file",
+			]);
+			expect(row(panel, 2).classList.contains("playing")).toBe(true);
+			await pause(panel);
+			expect(orderCalls(hass)).toHaveLength(1);
+		});
+
+		it("leaves nameless files out of the orders it writes", async () => {
+			const { hass } = fakeHass(one, {
+				...three,
+				files: three.files.map((f) =>
+					f.file_index === 2 ? { ...f, name: "" } : f,
+				),
+			});
+			const panel = await showPanel(hass);
+			expect(checkbox(panel, 2).title).toContain("takes it out");
+			// Its row can't be dragged
+			expect(row(panel, 2).querySelector(".handle")).toBeNull();
+			expect(row(panel, 2).querySelector(".grip.locked")).not.toBeNull();
+			expect(checkbox(panel, 1).disabled).toBe(false);
+			expect(hooks(panel).disabled).toBe(false);
+			await click(panel, 1);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [3] },
+			]);
+		});
+
+		it("can replace a nameless file that is the only one in the play order", async () => {
+			const { hass } = fakeHass(one, {
+				...three,
+				files: three.files.map((f) =>
+					f.file_index === 1 ? { ...f, name: " " } : f,
+				),
+				file_order: [1],
+			});
+			const panel = await showPanel(hass);
+			expect(checkbox(panel, 1).disabled).toBe(true);
+			expect(checkbox(panel, 2).disabled).toBe(false);
+			await click(panel, 2);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [2] },
+			]);
+		});
+
+		it("moves the dragged file even if the rows changed during the drag", async () => {
+			const { hass, send } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			const tbody = table(panel).querySelector("tbody") as HTMLElement;
+			const item = row(panel, 3);
+			hooks(panel).onStart({ item });
+			// Another file arrives at the top of the play order
+			send({
+				...three,
+				entry_id: devicesFixture[0].entry_id,
+				files: [
+					...three.files,
+					{ ...three.files[0], name: "f4.mp3", file_index: 4 },
+				],
+				file_order: [4, 1, 2, 3],
+			});
+			await settle(panel);
+			// Dropped at the very top
+			tbody.prepend(item);
+			hooks(panel).onEnd({
+				item,
+				from: tbody,
+				oldDraggableIndex: 2,
+				newDraggableIndex: 0,
+			});
+			await settle(panel);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [3, 4, 1, 2] },
+			]);
+		});
+
+		it("ends a drag when the table turns into a list", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			hooks(panel).onStart({ item: row(panel, 1) });
+			(panel as unknown as { _compact: boolean })._compact = true;
+			await settle(panel);
+			await pause(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [1, 2] },
+			]);
+		});
+
+		it("drops the shown order once a file list came during the write", async () => {
+			const { hass, send } = fakeHass(one, three);
+			hass.callService.mockImplementation(async (_d, service) => {
+				if (service === "set_file_order") {
+					// The Skelly's list arrives before the reply, with its own order
+					send({
+						...three,
+						entry_id: devicesFixture[0].entry_id,
+						file_order: [2, 1],
+					});
+				}
+				return { context: {} };
+			});
+			const panel = await showPanel(hass);
+			await click(panel, 3);
+			await pause(panel);
+			expect(shownOrder(panel)).toEqual([
+				[2, "1"],
+				[1, "2"],
+				[3, "–"],
+			]);
+		});
+
+		it("can't drag with one file in the play order, and has no handle for files out of it", async () => {
+			const { hass } = fakeHass(one);
+			const panel = await showPanel(hass);
+			const sk = panel.shadowRoot?.querySelector(
+				"sk-file-table",
+			) as unknown as {
+				_sortable: { options: { disabled: boolean } };
+			};
+			expect(sk._sortable.options.disabled).toBe(true);
+			expect(row(panel, 2).querySelector(".handle.none")).not.toBeNull();
+		});
+
+		it("has handles and checkboxes in the narrow list too", async () => {
+			const { hass } = fakeHass(one, three);
+			const panel = await showPanel(hass, 400);
+			const sk = panel.shadowRoot?.querySelector(
+				"sk-file-table",
+			) as unknown as {
+				_sortable: { el: HTMLElement };
+			};
+			expect(sk._sortable.el.tagName).toBe("UL");
+			expect(row(panel, 2).querySelector(".handle")).not.toBeNull();
+			checkbox(panel, 2).click();
+			await settle(panel);
+			expect(row(panel, 2).classList.contains("off")).toBe(true);
+		});
+
+		it("writes a waiting change at once when another Skelly is picked", async () => {
+			const second = {
+				...devicesFixture[0],
+				entry_id: "e2",
+				device_id: "d2",
+				name: "Lily",
+			};
+			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+			const panel = await showPanel(hass);
+			await click(panel, 2);
+			const select = panel.shadowRoot?.querySelector(
+				"select",
+			) as HTMLSelectElement;
+			select.value = "d2";
+			select.dispatchEvent(new Event("change"));
+			await settle(panel);
+			expect(orderCalls(hass).map((c) => c[2])).toEqual([
+				{ device_id: DEVICE_ID, file_indices: [1, 2] },
+			]);
+			// Lily's table shows Lily's own order
+			expect(shownOrder(panel)).toEqual([
+				[1, "1"],
+				[2, "–"],
+			]);
 		});
 	});
 

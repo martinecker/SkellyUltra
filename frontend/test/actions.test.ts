@@ -116,14 +116,30 @@ describe("actions", () => {
 			],
 		]);
 
-		const order = fakeHass({ file_order: [2, 1] });
-		expect(await setFileOrder(order.hass, target, ["b.mp3", "a.mp3"])).toEqual({
-			file_order: [2, 1],
-		});
+		const reported = {
+			file_order: [
+				{ file_index: 2, filename: "b.mp3" },
+				{ file_index: 1, filename: "a.mp3" },
+			],
+		};
+		const order = fakeHass(reported);
+		expect(
+			await setFileOrder(order.hass, target, { filenames: ["b.mp3", "a.mp3"] }),
+		).toEqual(reported);
 		expect(order.callService.mock.calls[0][2]).toEqual({
 			device_id: "dev1",
 			filenames: ["b.mp3", "a.mp3"],
 		});
+		const byIndex = fakeHass(reported);
+		await setFileOrder(byIndex.hass, target, { file_indices: [2, 1] });
+		expect(byIndex.callService.mock.calls[0]).toEqual([
+			"skelly_ultra",
+			"set_file_order",
+			{ device_id: "dev1", file_indices: [2, 1] },
+			undefined,
+			false,
+			true,
+		]);
 	});
 
 	it("pass errors on to the caller", async () => {
