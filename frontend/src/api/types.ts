@@ -77,6 +77,17 @@ export interface FilesPayload {
 	available: boolean;
 	// The file list is being read from the Skelly, so it may be outdated
 	refreshing: boolean;
+	// HA's clock (ms since the epoch) when the payload was sent
+	sent_at: number;
+	// The file the Skelly reported playing, or null. duration is in seconds
+	// (0 if unknown), started in ms since the epoch (HA's clock); report is
+	// new for every report, also of the same file.
+	playback: {
+		file_index: number;
+		duration: number;
+		started: number;
+		report: number;
+	} | null;
 	capacity: {
 		free_kb: number | null;
 		file_count_reported: number | null;

@@ -45,6 +45,8 @@ export class SkFileTable extends LitElement {
 	@property({ attribute: false }) rows: FileRow[] = [];
 	// file_index of the file that is (thought to be) playing
 	@property({ attribute: false }) playing: number | null = null;
+	// Seconds left of the playing file, if known
+	@property({ attribute: false }) remaining: number | null = null;
 	// file_index of a file just added, to point it out
 	@property({ attribute: false }) highlight: number | null = null;
 	// file_index of files with an action in progress
@@ -245,6 +247,13 @@ export class SkFileTable extends LitElement {
 
 			button.play {
 				color: var(--primary-color);
+			}
+
+			.remaining {
+				margin-right: 4px;
+				font-size: 13px;
+				color: var(--primary-color);
+				vertical-align: middle;
 			}
 
 			ul {
@@ -910,9 +919,17 @@ export class SkFileTable extends LitElement {
 	private _renderPlayButton(file: FileEntry) {
 		const playing = file.file_index === this.playing;
 		const label = playing ? strings.stop : strings.play;
-		return html`<button
+		const left =
+			playing && this.remaining !== null
+				? strings.remaining(this.remaining)
+				: undefined;
+		return html`${
+			left !== undefined
+				? html`<span class="remaining num" aria-hidden="true">${left}</span>`
+				: nothing
+		}<button
 			class=${playing ? "stop" : "play"}
-			title=${playing ? label : this._title(label)}
+			title=${playing ? (left !== undefined ? strings.stopRemaining(left) : label) : this._title(label)}
 			aria-label=${label}
 			?disabled=${
 				// Stopping is always allowed, also during a transfer

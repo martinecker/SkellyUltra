@@ -255,8 +255,9 @@ async def async_play_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
     file_index = call.data["file_index"]
 
+    coordinator = hass.data[DOMAIN][entry_id]["coordinator"]
     try:
-        await adapter.client.play_file(file_index)
+        await coordinator.async_play_file(file_index)
     except ConnectionLostError:
         raise HomeAssistantError(
             "Lost connection to device while trying to play the file"

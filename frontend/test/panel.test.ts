@@ -5,6 +5,7 @@ import { PANEL_ELEMENT } from "../src/constants";
 import {
 	ORDER_DEBOUNCE_MS,
 	ORDER_SETTLE_MS,
+	PLAY_CONFIRM_MS,
 } from "../src/panel/skelly-ultra-panel";
 import devicesFixture from "./fixtures/devices.json";
 import filesFixture from "./fixtures/files-payload.json";
@@ -236,6 +237,151 @@ describe("panel", () => {
 		);
 		expect(row(panel, 2).classList.contains("playing")).toBe(false);
 		expect(button(panel, 2, "play")).not.toBeNull();
+	});
+
+	describe("playback the Skelly reports", () => {
+		// Timers, intervals and the clock are fake; settle with these
+		const fakeSettle = async (panel: Panel) => {
+			for (let i = 0; i < 5; i++) {
+				await vi.advanceTimersByTimeAsync(0);
+				await panel.updateComplete;
+			}
+		};
+		const showWithFakeTimers = async (hass: unknown) => {
+			vi.useFakeTimers({
+				toFake: [
+					"setTimeout",
+					"clearTimeout",
+					"setInterval",
+					"clearInterval",
+					"Date",
+				],
+			});
+			panelWidth = 1000;
+			const panel = document.createElement(PANEL_ELEMENT) as Panel;
+			panel.hass = hass;
+			document.body.append(panel);
+			await fakeSettle(panel);
+			return panel;
+		};
+		const reported = (
+			file_index: number,
+			duration: number,
+			report: number,
+			started = Date.now(),
+			// HA's clock as it sends the payload
+			sent_at = Date.now(),
+		): FilesPayload => ({
+			...idlePayload,
+			entry_id: one[0].entry_id,
+			device_id: DEVICE_ID,
+			playback: { file_index, duration, started, report },
+			sent_at,
+		});
+		const remaining = (panel: Panel) =>
+			table(panel).querySelector(".remaining")?.textContent ?? null;
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it("counts down a file once the Skelly reports it playing", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showWithFakeTimers(hass);
+			button(panel, 1, "play").click();
+			await fakeSettle(panel);
+			expect(row(panel, 1).classList.contains("playing")).toBe(true);
+			expect(remaining(panel)).toBeNull();
+
+			send(reported(1, 65, 1));
+			await fakeSettle(panel);
+			expect(remaining(panel)).toBe("1:05");
+			expect(button(panel, 1, "stop").title).toBe("Stop (1:05 left)");
+			await vi.advanceTimersByTimeAsync(2000);
+			await fakeSettle(panel);
+			expect(remaining(panel)).toBe("1:03");
+
+			// The Skelly says it ended
+			send({ ...reported(1, 65, 1), playback: null });
+			await fakeSettle(panel);
+			expect(row(panel, 1).classList.contains("playing")).toBe(false);
+			expect(remaining(panel)).toBeNull();
+			// No message about a file that didn't start
+			await vi.advanceTimersByTimeAsync(PLAY_CONFIRM_MS);
+			expect(document.body.textContent).not.toContain("didn't start");
+		});
+
+		it("counts from when the Skelly reported the file", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showWithFakeTimers(hass);
+			// Opened 50 s into a one-minute file
+			send(reported(1, 60, 3, Date.now() - 50_000));
+			await fakeSettle(panel);
+			expect(remaining(panel)).toBe("0:10");
+			// HA's clock 100 s behind this browser's: just started all the same
+			const ha = Date.now() - 100_000;
+			send(reported(1, 60, 4, ha, ha));
+			await fakeSettle(panel);
+			expect(remaining(panel)).toBe("1:00");
+			// A report of a file that ended already (its end was missed)
+			send(reported(2, 60, 5, Date.now() - 70_000));
+			await fakeSettle(panel);
+			expect(table(panel).querySelector(".playing")).toBeNull();
+		});
+
+		it("shows a report for a file once it's in the list", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showWithFakeTimers(hass);
+			const later = reported(9, 30, 5);
+			send({ ...later, files: idlePayload.files });
+			await fakeSettle(panel);
+			expect(table(panel).querySelector(".playing")).toBeNull();
+			send({
+				...later,
+				files: [
+					...idlePayload.files,
+					{ ...idlePayload.files[0], file_index: 9, name: "new.mp3" },
+				],
+			});
+			await fakeSettle(panel);
+			expect(row(panel, 9).classList.contains("playing")).toBe(true);
+		});
+
+		it("says when the Skelly doesn't start a file", async () => {
+			const messages = toasts();
+			const { hass } = fakeHass(one);
+			const panel = await showWithFakeTimers(hass);
+			button(panel, 1, "play").click();
+			await fakeSettle(panel);
+			expect(button(panel, 1, "stop")).not.toBeNull();
+			await vi.advanceTimersByTimeAsync(PLAY_CONFIRM_MS);
+			await fakeSettle(panel);
+			expect(button(panel, 1, "play")).not.toBeNull();
+			expect(messages).toContain(
+				"The Skelly didn't start playing hello.mp3. Try again.",
+			);
+		});
+
+		it("ends at zero if the Skelly's report of the end is missed", async () => {
+			const { hass, send } = fakeHass(one);
+			const panel = await showWithFakeTimers(hass);
+			send(reported(2, 2, 7));
+			await fakeSettle(panel);
+			// Played from somewhere else: shown all the same
+			expect(row(panel, 2).classList.contains("playing")).toBe(true);
+			expect(remaining(panel)).toBe("0:02");
+			await vi.advanceTimersByTimeAsync(2000);
+			await fakeSettle(panel);
+			expect(row(panel, 2).classList.contains("playing")).toBe(false);
+
+			// The same report again changes nothing; a new one plays again
+			send(reported(2, 2, 7));
+			await fakeSettle(panel);
+			expect(row(panel, 2).classList.contains("playing")).toBe(false);
+			send(reported(2, 2, 8));
+			await fakeSettle(panel);
+			expect(row(panel, 2).classList.contains("playing")).toBe(true);
+		});
 	});
 
 	it("shows a failed action as a toast", async () => {

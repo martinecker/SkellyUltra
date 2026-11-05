@@ -41,6 +41,12 @@ _LOGGER = logging.getLogger(__name__)
 # duration.
 PLAYBACK_ACTIVE_MARGIN_SECONDS = 10.0
 PLAYBACK_ACTIVE_FALLBACK_SECONDS = 60.0
+# After a Play from HA, how long the device has to report playing before
+# polling resumes
+PLAY_REPORT_TIMEOUT_SECONDS = 10.0
+# The device reports the end of the previous file when switching files; such
+# "stopped" reports this soon after a Play keep polling held off
+PLAY_SWITCH_GRACE_SECONDS = 2.0
 
 # The last live light, eye and volume settings HA knew, kept across restarts
 # so they can be sent to the device on connect (ha_controls_settings option).
@@ -127,6 +133,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
         # device plays an internal file, to hold off BLE polling.
         self._playback_active = False
         self._playback_active_timer: asyncio.TimerHandle | None = None
+        # The file the device reported playing, for UIs: file_index,
+        # duration (seconds, 0 if unknown) and a number that tells the
+        # reports apart (the same file can be played again)
+        self._playback: dict[str, int] | None = None
+        self._playback_reports = 0
+        # loop.time() of the last Play sent from HA
+        self._play_sent_at: float | None = None
         self._file_list: list[Any] = []
         # Set while the file list is read from the device, for a UI
         self._file_list_loading = False
@@ -488,7 +501,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._logger.info("Resuming coordinator updates")
         self._updates_paused = False
 
-    def mark_playback_active(self, duration_seconds: float | None = None) -> None:
+    def mark_playback_active(
+        self, duration_seconds: float | None = None, *, timeout: float | None = None
+    ) -> None:
         """Suppress device polling while the device plays an internal file.
 
         The Skelly aborts internal-file playback if it receives the coordinator's
@@ -500,11 +515,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
         margin) so polling can't get stuck off if the device's "playback
         stopped" notification is never received. When the duration is known it
         is used as-is with no upper cap, so long files are not cut short.
+        An explicit timeout (in seconds) replaces both.
         """
-        if duration_seconds and duration_seconds > 0:
-            timeout = duration_seconds + PLAYBACK_ACTIVE_MARGIN_SECONDS
-        else:
-            timeout = PLAYBACK_ACTIVE_FALLBACK_SECONDS
+        if timeout is None:
+            if duration_seconds and duration_seconds > 0:
+                timeout = duration_seconds + PLAYBACK_ACTIVE_MARGIN_SECONDS
+            else:
+                timeout = PLAYBACK_ACTIVE_FALLBACK_SECONDS
 
         self._playback_active = True
         if self._playback_active_timer is not None:
@@ -516,8 +533,67 @@ class SkellyCoordinator(DataUpdateCoordinator):
             "Playback active - suppressing device polling for up to %.0fs", timeout
         )
 
+    @property
+    def playback(self) -> dict[str, int] | None:
+        """Return the file the device reported playing, or None.
+
+        A dict with file_index, duration (seconds, 0 if unknown), started
+        (when the report came, in ms since the epoch) and report, which is
+        new for every "playing" report.
+        """
+        return self._playback
+
+    def set_playback(self, file_index: int, playing: bool, duration: int) -> None:
+        """Record the device's report that a file started or stopped playing."""
+        if playing:
+            self._play_sent_at = None
+            self.mark_playback_active(duration)
+            self._playback_reports += 1
+            self._set_playback(
+                {
+                    "file_index": file_index,
+                    "duration": duration,
+                    "started": int(time.time() * 1000),
+                    "report": self._playback_reports,
+                }
+            )
+        elif self._playback is not None and self._playback["file_index"] != file_index:
+            pass  # The end of a file played before the one now playing
+        elif (
+            self._play_sent_at is not None
+            and self.hass.loop.time() - self._play_sent_at < PLAY_SWITCH_GRACE_SECONDS
+        ):
+            # Likely the end of the file played before, while the one just
+            # sent starts: keep polling held off for it
+            self._set_playback(None)
+        else:
+            self.mark_playback_inactive()
+
+    def _set_playback(self, playback: dict[str, int] | None) -> None:
+        if playback != self._playback:
+            self._playback = playback
+            async_dispatcher_send(self.hass, files_updated_signal(self._entry.entry_id))
+
+    async def async_play_file(self, file_index: int) -> None:
+        """Play a file stored on the device.
+
+        Waits for a poll or file list read in progress to end and holds off
+        new ones first: their queries would stop the file right away.
+        """
+        async with self.action_lock:
+            # Until the device reports playing (which sets the file's length)
+            self.mark_playback_active(timeout=PLAY_REPORT_TIMEOUT_SECONDS)
+            self._play_sent_at = self.hass.loop.time()
+            try:
+                await self.adapter.client.play_file(file_index)
+            except BaseException:
+                self.mark_playback_inactive()
+                raise
+
     def mark_playback_inactive(self) -> None:
         """Re-enable device polling after internal-file playback ends."""
+        self._play_sent_at = None
+        self._set_playback(None)
         if self._playback_active_timer is not None:
             self._playback_active_timer.cancel()
             self._playback_active_timer = None
@@ -529,6 +605,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
     def _on_playback_active_timeout(self) -> None:
         """Force-resume polling if no 'playback stopped' event arrived in time."""
         self._playback_active_timer = None
+        self._set_playback(None)
         if self._playback_active:
             self._logger.warning(
                 "Playback-active flag timed out without a stop event; "
@@ -570,6 +647,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
             async with self.action_lock:
                 self._logger.debug("Acquiring lock for file list refresh")
+                # A file may have started playing while this waited
+                if self._playback_active:
+                    self._logger.debug(
+                        "Skipping file list refresh - internal file playback started"
+                    )
+                    return
                 await self._async_load_file_list()
         finally:
             self._set_file_list_loading(False)
@@ -763,6 +846,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:
+            # A file may have started playing while this poll waited
+            if self._playback_active and self.data is not None:
+                self._logger.debug(
+                    "Coordinator poll skipped - internal file playback started"
+                )
+                return self.data
+
             # Capture counters before starting the update to detect optimistic updates
             # that happen while we are querying the device.
             start_counters = self._data_counters.copy()

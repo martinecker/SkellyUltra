@@ -3,6 +3,7 @@
 import asyncio
 import shutil
 import subprocess
+import time
 
 import aiohttp
 import pytest
@@ -691,3 +692,47 @@ def test_every_image_url_has_a_file():
             assert url.startswith(f"{IMAGE_URL}/")
             path = IMAGE_DIR / url.removeprefix(f"{IMAGE_URL}/")
             assert path.is_file(), f"{device_type}: no {path}"
+
+
+async def test_subscribe_reports_playback(
+    hass, setup_integration, device, hass_ws_client
+):
+    """The panel shows what the Skelly says it plays, and for how long."""
+    client = await hass_ws_client(hass)
+    assert (await ws_list(client))["playback"] is None
+    await client.send_json_auto_id({"type": "skelly_ultra/files/subscribe"})
+    await client.receive_json()
+    await next_event(client)
+
+    f = device.file("laugh.mp3")
+    f.duration = 75
+    await hass.services.async_call(
+        DOMAIN, "play_file", {"file_index": f.index}, blocking=True
+    )
+    event = await next_event(client)
+    while event["playback"] is None:
+        event = await next_event(client)
+    playback = event["playback"]
+    assert playback == {
+        "file_index": f.index,
+        "duration": 75,
+        "started": playback["started"],
+        "report": playback["report"],
+    }
+    assert abs(playback["started"] / 1000 - time.time()) < 5
+    # HA's clock as it sends, for a UI's own clock
+    assert abs(event["sent_at"] / 1000 - time.time()) < 5
+    first = event["playback"]["report"]
+
+    # Each report is new, even for the same file
+    await hass.services.async_call(
+        DOMAIN, "play_file", {"file_index": f.index}, blocking=True
+    )
+    event = await next_event(client)
+    while event["playback"] is None or event["playback"]["report"] == first:
+        event = await next_event(client)
+
+    device.finish_playback(f.index)
+    event = await next_event(client)
+    while event["playback"] is not None:
+        event = await next_event(client)

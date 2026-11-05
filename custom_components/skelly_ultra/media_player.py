@@ -637,6 +637,15 @@ class SkellyInternalFilesPlayer(
                                     event.duration,
                                 )
 
+                                # The end of a file played before the one
+                                # now playing (reported after it started)
+                                if (
+                                    not event.playing
+                                    and self._is_playing
+                                    and event.file_index != self._current_file_index
+                                ):
+                                    continue
+
                                 # Update our state to match the device
                                 self._current_file_index = event.file_index
                                 self._current_file_duration = event.duration
@@ -644,12 +653,9 @@ class SkellyInternalFilesPlayer(
 
                                 # Suppress / resume coordinator BLE polling so
                                 # its query burst doesn't abort device-side playback.
-                                if event.playing:
-                                    self.coordinator.mark_playback_active(
-                                        event.duration
-                                    )
-                                else:
-                                    self.coordinator.mark_playback_inactive()
+                                self.coordinator.set_playback(
+                                    event.file_index, event.playing, event.duration
+                                )
 
                                 # Update Home Assistant immediately
                                 self.async_write_ha_state()
@@ -790,12 +796,11 @@ class SkellyInternalFilesPlayer(
 
         if self._current_file_index is not None:
             try:
-                await self.adapter.client.play_file(self._current_file_index)
+                # Holds off coordinator polling right away, before the
+                # device's PlaybackEvent arrives; that event refines the
+                # timeout with the real duration.
+                await self.coordinator.async_play_file(self._current_file_index)
                 self._is_playing = True
-                # Hold off coordinator polling right away, before the device's
-                # PlaybackEvent arrives; that event refines the timeout with the
-                # real duration.
-                self.coordinator.mark_playback_active()
                 self.async_write_ha_state()
             except Exception:
                 _LOGGER.exception("Failed to play file %d", self._current_file_index)

@@ -13,6 +13,7 @@ so automations and the UI share one path.
 from __future__ import annotations
 
 import logging
+import time
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -280,12 +281,19 @@ def _transfer_settings(
             "value": data.get("bitrate_override", AudioProcessor.MP3_BITRATE),
             "default": AudioProcessor.MP3_BITRATE,
             "options": list(BITRATE_OPTIONS),
-            "switch_entity": _entity_id(
-                hass, "switch", f"{entry_id}_override_bitrate"
-            ),
+            "switch_entity": _entity_id(hass, "switch", f"{entry_id}_override_bitrate"),
             "value_entity": _entity_id(hass, "select", f"{entry_id}_bitrate"),
         },
     }
+
+
+def _stamped(payload: dict[str, Any]) -> dict[str, Any]:
+    """Add sent_at, HA's clock (ms since the epoch) as the payload is sent.
+
+    A UI compares it with its own clock to show playback.started in its
+    time. It isn't part of the payload compared to skip unchanged ones.
+    """
+    return {**payload, "sent_at": int(time.time() * 1000)}
 
 
 def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
@@ -307,6 +315,10 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
         "available": coordinator.last_update_success,
         # The file list is being read from the device, so it may be outdated
         "refreshing": coordinator.file_list_loading,
+        # The file the Skelly reported playing: file_index, duration
+        # (seconds, 0 if unknown), started (ms since the epoch) and report
+        # (new for each report), or None
+        "playback": coordinator.playback,
         "capacity": {
             "free_kb": data.get("capacity_kb"),
             "file_count_reported": data.get("file_count_reported"),
@@ -356,7 +368,7 @@ async def ws_list_files(
                 msg["id"], websocket_api.ERR_NOT_FOUND, "No loaded Skelly found"
             )
             return
-    connection.send_result(msg["id"], build_files_payload(hass, entry))
+    connection.send_result(msg["id"], _stamped(build_files_payload(hass, entry)))
 
 
 @websocket_api.websocket_command(
@@ -396,7 +408,9 @@ def ws_subscribe_files(
         if payload == last_sent:
             return
         last_sent = payload
-        connection.send_message(websocket_api.event_message(msg["id"], payload))
+        connection.send_message(
+            websocket_api.event_message(msg["id"], _stamped(payload))
+        )
 
     unsub_coordinator = coordinator.async_add_listener(send_if_changed)
     unsub_signal = async_dispatcher_connect(
@@ -425,10 +439,11 @@ def ws_subscribe_files(
                 websocket_api.event_message(
                     msg["id"],
                     {
-                        **last_sent,
+                        **_stamped(last_sent),
                         "unloaded": True,
                         "available": False,
                         "refreshing": False,
+                        "playback": None,
                         "transfer": idle_transfer_state(),
                     },
                 )

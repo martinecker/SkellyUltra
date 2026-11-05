@@ -4,14 +4,17 @@ The real device aborts a file it plays when it gets the coordinator's
 status queries, so polling must pause while a file plays.
 """
 
+import asyncio
+
 import pytest
 from homeassistant.components.media_player import MediaPlayerState
 from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.skelly_ultra.const import DOMAIN
+from custom_components.skelly_ultra.skelly_ultra_pkg import parser
 
-from .conftest import advance, entity_id, wait_for
+from .conftest import advance, coordinator, entity_id, wait_for
 from .device_sim import Playback
 
 QUERY_TAGS = (b"\xaa\xe0", b"\xaa\xe1", b"\xaa\xd0", b"\xaa\xd1", b"\xaa\xd2")
@@ -80,6 +83,8 @@ async def test_no_polling_while_a_file_plays(hass, setup_integration, device):
         },
         blocking=True,
     )
+    # The device's "playing" report sets how long polling stays off
+    await wait_for(hass, lambda: coordinator(hass, entry).playback is not None)
     before = queries(device)
     await advance(hass, 31)
     await advance(hass, 31)
@@ -148,3 +153,107 @@ async def test_play_file_needs_a_known_skelly(hass, setup_integration):
             {"entity_id": "media_player.nobody", "file_index": 1},
             blocking=True,
         )
+
+
+async def test_play_waits_for_a_poll_and_holds_off_the_next(
+    hass, setup_integration, device
+):
+    """A poll's queries right after Play would stop the file again."""
+    coord = coordinator(hass, setup_integration)
+    f = device.file("laugh.mp3")
+    f.duration = 120
+    await coord.action_lock.acquire()  # a poll in progress
+    play = hass.async_create_task(
+        hass.services.async_call(
+            DOMAIN, "play_file", {"file_index": f.index}, blocking=True
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert Playback(f.index, True) not in device.playback, "waits for the poll"
+    # The next poll starts while the first one still runs
+    poll = hass.async_create_task(coord._async_update_data())
+    await asyncio.sleep(0.05)
+    before = queries(device)
+    coord.action_lock.release()
+    await play
+    await poll
+    assert device.playback[-1] == Playback(f.index, True)
+    assert queries(device) == before, "the waiting poll sends no queries"
+
+
+async def test_failed_play_lets_polls_run(hass, setup_integration, device, monkeypatch):
+    coord = coordinator(hass, setup_integration)
+    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+
+    async def reject(file_index):
+        raise RuntimeError("device said no")
+
+    monkeypatch.setattr(client, "play_file", reject)
+    with pytest.raises(HomeAssistantError):
+        await hass.services.async_call(
+            DOMAIN, "play_file", {"file_index": 1}, blocking=True
+        )
+    before = queries(device)
+    await advance(hass, 31)
+    assert queries(device) > before
+    assert coord.playback is None
+
+
+async def test_failed_or_unreported_play_holds_off_polling_briefly(
+    hass, setup_integration, device, monkeypatch
+):
+    """A Play the device ignores doesn't keep edits and polls waiting long."""
+    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+
+    async def ignore(file_index):
+        return None  # sent, but the device never plays it
+
+    monkeypatch.setattr(client, "play_file", ignore)
+    await hass.services.async_call(
+        DOMAIN, "play_file", {"file_index": 1}, blocking=True
+    )
+    before = queries(device)
+    await advance(hass, 31)
+    assert queries(device) > before, "polling resumed after the report timeout"
+
+
+async def test_end_of_the_previous_file_keeps_polling_held_off(
+    hass, setup_integration, device
+):
+    """Switching files, the device reports the old one ended."""
+    coord = coordinator(hass, setup_integration)
+    a = device.file("laugh.mp3")
+    b = device.file("scream.mp3")
+    b.duration = 120
+    await hass.services.async_call(
+        DOMAIN, "play_file", {"file_index": a.index}, blocking=True
+    )
+    await wait_for(hass, lambda: coord.playback is not None)
+    await hass.services.async_call(
+        DOMAIN, "play_file", {"file_index": b.index}, blocking=True
+    )
+    # The "ended" report of A comes before B's "playing"
+    coord.set_playback(a.index, False, 0)
+    assert coord.playback is None
+    assert coord._playback_active, "a poll now would stop B"
+    await wait_for(
+        hass, lambda: coord.playback and coord.playback["file_index"] == b.index
+    )
+    # ... or after it, as the media player hears it
+    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+    client.events.put_nowait(parser.PlaybackEvent(a.index, False, 0))
+    await wait_for(
+        hass,
+        lambda: (
+            not any(
+                isinstance(e, parser.PlaybackEvent)
+                for e in list(client.events._queue)  # noqa: SLF001
+            )
+        ),
+    )
+    assert coord.playback["file_index"] == b.index
+    eid = player(hass, setup_integration)
+    assert hass.states.get(eid).state == MediaPlayerState.PLAYING
+    before = queries(device)
+    await advance(hass, 31)
+    assert queries(device) == before, "a poll now would stop B"

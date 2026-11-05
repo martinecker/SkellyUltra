@@ -74,6 +74,11 @@ export const strings = {
 	delete: "Delete",
 	moreActions: "More actions",
 	playing: "Playing",
+	remaining: (seconds: number) =>
+		`${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`,
+	stopRemaining: (left: string) => `Stop (${left} left)`,
+	playNotStarted: (name: string) =>
+		`The Skelly didn't start playing ${name}. Try again.`,
 	playFailed: (name: string, message: string) =>
 		`Couldn't play ${name}: ${message}`,
 	stopFailed: (name: string, message: string) =>
