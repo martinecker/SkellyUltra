@@ -131,6 +131,18 @@ class KeepAliveEvent:
     payload: bytes
 
 
+_FILENAME_MARKER = bytes.fromhex(const.PROTOCOL_MARKER_FILENAME)
+
+
+def _find_filename_marker(data: bytes) -> int:
+    """Return the offset of a file info response's name marker, or -1."""
+    # Byte 58 on real devices (two-byte db_pos), 57 with a one-byte db_pos
+    for offset in (58, 57):
+        if data[offset : offset + 2] == _FILENAME_MARKER:
+            return offset
+    return data.find(_FILENAME_MARKER, 57)
+
+
 def get_utf16le_from_bytes(b: bytes) -> str:
     try:
         return b.decode("utf-16le").strip("\x00")
@@ -309,12 +321,9 @@ def parse_notification(
         action = int(hexstr[24:26], 16)
         lights = _parse_lights(hexstr, offset=26)
         eye_icon = int(hexstr[110:112], 16)
-        db_pos = int(hexstr[112:114], 16)
-        try:
-            name_utf16 = data[59:-1]
-            name = get_utf16le_from_bytes(name_utf16)
-        except Exception:
-            name = ""
+        marker = _find_filename_marker(data)
+        db_pos = int.from_bytes(data[56:marker], "big") if marker > 56 else 0
+        name = get_utf16le_from_bytes(data[marker + 2 : -1]) if marker >= 0 else ""
         return FileInfoEvent(
             file_index=file_index,
             cluster=cluster,

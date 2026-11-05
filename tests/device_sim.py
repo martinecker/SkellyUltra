@@ -263,7 +263,8 @@ class FakeSkellyDevice:
                 + bytes(2)
                 + bytes([f.action])
                 + b"".join(light.to_bytes() for light in f.lights)
-                + bytes([f.eye_icon, pos])
+                + bytes([f.eye_icon])
+                + pos.to_bytes(2, "big") # db_pos is two bytes
                 + b"\x5c\x55"
                 + name
                 + b"\x00"
