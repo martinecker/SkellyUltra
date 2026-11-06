@@ -334,6 +334,17 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
             else idle_transfer_state()
         ),
         "transfer_settings": _transfer_settings(hass, entry, data),
+        # The live mode entities (None: not in the entity registry). A UI
+        # reads their states: the switch is on while live mode is on (or
+        # being restored), the speaker is available while it's connected.
+        "live_mode": {
+            "switch_entity": _entity_id(
+                hass, "switch", f"{entry.entry_id}_live_mode"
+            ),
+            "speaker_entity": _entity_id(
+                hass, "media_player", f"{entry.entry_id}_live_mode_speaker"
+            ),
+        },
     }
 
 

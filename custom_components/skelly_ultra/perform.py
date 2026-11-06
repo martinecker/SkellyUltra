@@ -19,7 +19,7 @@ import voluptuous as vol
 
 from homeassistant.components import tts
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
@@ -49,7 +49,7 @@ LIVE_MODE_POLL_INTERVAL = 0.5
 
 
 # Optional fields a blueprint may pass as empty when its input is left blank
-_BLANKABLE = ("camera_entity", "ai_task_entity", "tts_options")
+_BLANKABLE = ("camera_entity", "ai_task_entity", "language", "tts_options")
 
 
 def _validate_perform(data: dict[str, Any]) -> dict[str, Any]:
@@ -81,6 +81,7 @@ SERVICE_PERFORM = vol.Schema(
                 None, "", cv.entity_domain("ai_task")
             ),
             vol.Required("tts_entity"): cv.entity_domain("tts"),
+            vol.Optional("language"): vol.Any(None, vol.All(cv.string, vol.Strip)),
             vol.Optional("tts_options"): vol.Any(None, dict),
             vol.Optional("mood"): vol.In([MOOD_AUTO, MOOD_NONE, *MOODS]),
             vol.Optional("movement", default=[MOVEMENT_MOOD]): vol.All(
@@ -190,6 +191,9 @@ class _Perform:
         # AI request or device change rather than after.
         if self.hass.data[DOMAIN][self.entry_id].get("live_media_player") is None:
             raise HomeAssistantError("Live Mode Speaker entity not found")
+        # A language or options the TTS entity doesn't take, before live mode
+        # is turned on for nothing
+        self._check_tts()
 
         # Live mode and the AI line in parallel
         live_task = asyncio.create_task(
@@ -414,6 +418,19 @@ class _Perform:
         finally:
             unsub()
 
+    def _check_tts(self) -> None:
+        """Raise if the TTS entity doesn't take the language or options."""
+        try:
+            tts.generate_media_source_id(
+                self.hass,
+                "check",
+                engine=self.data["tts_entity"],
+                language=self.data.get("language"),
+                options=self.data.get("tts_options"),
+            )
+        except HomeAssistantError as err:
+            raise ServiceValidationError(f"Text-to-speech: {err}") from err
+
     async def _async_generate_audio(self, line: str) -> Path:
         """Render the line with the TTS entity into a temporary file."""
         try:
@@ -421,6 +438,7 @@ class _Perform:
                 self.hass,
                 line,
                 engine=self.data["tts_entity"],
+                language=self.data.get("language"),
                 options=self.data.get("tts_options"),
             )
             extension, audio = await tts.async_get_media_source_audio(

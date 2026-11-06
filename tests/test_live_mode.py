@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
 from custom_components.skelly_ultra import perform as perform_module
 from custom_components.skelly_ultra import uploads
@@ -88,6 +88,25 @@ async def test_perform_without_mood_leaves_look_alone(
     look = rest_server.plays[-1]
     assert look.eye_icon == 1 and look.lights[0] == Light()
     assert look.action == 0x01
+
+
+async def test_perform_speaks_in_the_given_language(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    """The dashboard card passes the language picked in its TTS form."""
+    await perform(hass, message="Hallo", language="de", mood="none", movement=["none"])
+    assert tts_entity.spoken[-1][:2] == ("Hallo", "de")
+    # Blank: the entity's default
+    await perform(hass, message="Hi", language="", mood="none", movement=["none"])
+    assert tts_entity.spoken[-1][:2] == ("Hi", "en")
+    # One the entity doesn't speak: refused before live mode is turned on
+    switch = entity_id(hass, setup_integration, "switch", "live_mode")
+    await hass.services.async_call(
+        "switch", "turn_off", {ATTR_ENTITY_ID: switch}, blocking=True
+    )
+    with pytest.raises(ServiceValidationError, match="(?i)language"):
+        await perform(hass, message="Bonjour", language="fr")
+    assert not rest_server.connected
 
 
 async def test_perform_rejects_parts_the_model_lacks(

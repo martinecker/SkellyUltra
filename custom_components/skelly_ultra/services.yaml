@@ -347,6 +347,12 @@ perform:
       selector:
         entity:
           domain: tts
+    language:
+      name: Language
+      description: Language code exactly as the TTS entity lists it (for example en, en-US or en_US). Defaults to the entity's default language.
+      example: "en-US"
+      selector:
+        text:
     tts_options:
       name: TTS options
       description: Options for the TTS entity, such as voice.

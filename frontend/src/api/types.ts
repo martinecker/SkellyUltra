@@ -96,6 +96,13 @@ export interface FilesPayload {
 	files: FileEntry[];
 	transfer: TransferState;
 	transfer_settings: TransferSettings;
+	// The live mode entities (null: not in the entity registry). The switch
+	// is on while live mode is on (or being restored); the speaker is
+	// available while live mode is connected.
+	live_mode: {
+		switch_entity: string | null;
+		speaker_entity: string | null;
+	};
 }
 
 // One file transfer override. The entities change it (null: not found in

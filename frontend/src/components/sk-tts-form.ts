@@ -1,4 +1,4 @@
-import { css, html, LitElement, nothing } from "lit";
+import { css, html, LitElement, nothing, type PropertyValues } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
 import { live } from "lit/directives/live.js";
@@ -26,6 +26,8 @@ import { sharedStyles } from "../styles";
 export interface TtsChangeDetail {
 	speech?: TtsSpeech;
 	problem?: string;
+	// The form shows the problem itself (loading, or no engines to use)
+	problemShown?: boolean;
 	message: string;
 }
 
@@ -71,6 +73,14 @@ export class SkTtsForm extends LitElement {
 	@property({ type: Boolean }) disabled = false;
 	// Shown: the engines are listed the first time it is
 	@property({ type: Boolean }) active = false;
+	// Only the message: the engine, language and voice stay as picked
+	// (the card's quick box)
+	@property({ type: Boolean }) compact = false;
+	// The engine to start with instead of the last one used (the card's
+	// tts_entity), if HA has it
+	@property({ attribute: false }) preferredEngine?: string;
+	// Only tts.* entities, no legacy engines (live mode's perform needs one)
+	@property({ type: Boolean, attribute: "entities-only" }) entitiesOnly = false;
 
 	// undefined while loading
 	@state() private _engines?: TtsEngine[];
@@ -152,6 +162,22 @@ export class SkTtsForm extends LitElement {
 				margin-top: 12px;
 			}
 
+			.part[hidden] {
+				display: none;
+			}
+
+			.visually-hidden {
+				position: absolute;
+				margin: -1px;
+				padding: 0;
+				border: 0;
+				width: 1px;
+				height: 1px;
+				overflow: hidden;
+				clip-path: inset(50%);
+				white-space: nowrap;
+			}
+
 			ha-yaml-editor.locked {
 				opacity: 0.6;
 				pointer-events: none;
@@ -210,6 +236,15 @@ export class SkTtsForm extends LitElement {
 		`,
 	];
 
+	// Empties the message after it was sent (the rest stays as it is)
+	clearMessage(): void {
+		this.stopPreview();
+		this._message = "";
+		this._previewError = undefined;
+		this._previewed = undefined;
+		this._changed();
+	}
+
 	// Starts over with an empty message (the remembered engine, language
 	// and voice stay). The engines are listed again when next shown, so
 	// new ones appear and a failed listing is retried.
@@ -243,11 +278,30 @@ export class SkTtsForm extends LitElement {
 		this.renderRoot.querySelector("audio")?.pause();
 	}
 
-	protected willUpdate(): void {
+	protected willUpdate(changed: PropertyValues<this>): void {
 		if (this.active && this.hass && this._engines === undefined) {
 			void this._loadEngines();
 		}
-		if (this.active && this.hass && !this._yamlEditor) {
+		// The card's engine changed in its editor
+		if (changed.has("preferredEngine") && this._engines?.length) {
+			const choice = loadChoice(this.hass?.user?.id);
+			// Cleared: back to the last one used
+			const wanted = this.preferredEngine ?? choice.engine;
+			const engine =
+				this._engines.find((e) => e.engine_id === wanted) ??
+				(this.preferredEngine ? undefined : this._engines[0]);
+			if (engine && engine.engine_id !== this._engine) {
+				this._selectEngine(
+					engine,
+					engine.engine_id === choice.engine ? choice : {},
+				);
+			}
+		}
+		// Collapsed to the message: a preview playing in the hidden part stops
+		if (changed.has("compact") && this.compact) {
+			this.stopPreview();
+		}
+		if (this.active && !this.compact && this.hass && !this._yamlEditor) {
 			if (customElements.get(YAML_EDITOR)) {
 				this._yamlEditor = true;
 			} else if (!this._yamlEditorWait) {
@@ -286,13 +340,22 @@ export class SkTtsForm extends LitElement {
 		this._loading = true;
 		this._loadError = undefined;
 		try {
-			const engines = await listEngines(hass);
+			const listed = await listEngines(hass);
+			const engines = this.entitiesOnly
+				? listed.filter((e) => e.engine_id.startsWith("tts."))
+				: listed;
 			const choice = loadChoice(hass.user?.id);
 			const engine =
-				engines.find((e) => e.engine_id === choice.engine) ?? engines[0];
+				engines.find((e) => e.engine_id === this.preferredEngine) ??
+				engines.find((e) => e.engine_id === choice.engine) ??
+				engines[0];
 			this._engines = engines;
 			if (engine) {
-				this._selectEngine(engine, choice);
+				// The remembered language and voice are another engine's
+				this._selectEngine(
+					engine,
+					engine.engine_id === choice.engine ? choice : {},
+				);
 			} else {
 				this._voicesRequest++; // An answer still coming is for an old engine
 				this._voicesLoading = false;
@@ -310,9 +373,12 @@ export class SkTtsForm extends LitElement {
 		}
 	}
 
+	// remember: the user picked it (the first pick, or the card's engine,
+	// isn't remembered)
 	private _selectEngine(
 		engine: TtsEngine,
 		choice: { language?: string; voice?: string } = {},
+		remember = false,
 	) {
 		this._engine = engine.engine_id;
 		this._language = pickLanguage(
@@ -320,10 +386,10 @@ export class SkTtsForm extends LitElement {
 			[choice.language, this.hass?.language],
 			this.hass?.config?.country ?? undefined,
 		);
-		void this._loadVoices(choice.voice);
+		void this._loadVoices(choice.voice, remember);
 	}
 
-	private async _loadVoices(voice?: string) {
+	private async _loadVoices(voice?: string, remember = false) {
 		const hass = this.hass;
 		const engine = this._engine;
 		const language = this._language;
@@ -349,7 +415,9 @@ export class SkTtsForm extends LitElement {
 		this._voicesLoading = false;
 		this._voices = voices;
 		this._voice = voices.some((v) => v.voice_id === voice) ? (voice ?? "") : "";
-		this._remember();
+		if (remember) {
+			this._remember();
+		}
 		this._changed();
 	}
 
@@ -366,13 +434,33 @@ export class SkTtsForm extends LitElement {
 			return html`<p class="error" role="alert">${this._loadError}</p>`;
 		}
 		if (!engines.length) {
-			return html`<p class="hint">${strings.ttsNoEngines}</p>`;
+			return html`<p class="hint">${this._noEngines}</p>`;
 		}
-		const engine = this._currentEngine;
-		const languages = engine?.languages ?? [];
 		const parsed = this._options();
 		const optionsProblem = "problem" in parsed ? parsed.problem : undefined;
-		const speech = this.speech;
+		return html`
+			<div class="part" ?hidden=${this.compact}>${this._renderChoices()}</div>
+			<label class="field ${this.compact ? "visually-hidden" : ""}" for="message"
+				>${strings.ttsMessage}</label
+			>
+			<textarea
+				id="message"
+				class="message"
+				rows=${this.compact ? 2 : 3}
+				.value=${live(this._message)}
+				?disabled=${this.disabled}
+				@input=${this._onMessage}
+			></textarea>
+			${this.compact ? this._renderCompactOptions(optionsProblem) : nothing}
+			<div class="part" ?hidden=${this.compact}>${this._renderMore(optionsProblem)}</div>
+		`;
+	}
+
+	// Engine, language and voice
+	private _renderChoices() {
+		const engines = this._engines ?? [];
+		const engine = this._currentEngine;
+		const languages = engine?.languages ?? [];
 		return html`
 			<div class="row">
 				<div>
@@ -441,15 +529,24 @@ export class SkTtsForm extends LitElement {
 						: nothing
 				}
 			</div>
-			<label class="field" for="message">${strings.ttsMessage}</label>
-			<textarea
-				id="message"
-				class="message"
-				rows="3"
-				.value=${live(this._message)}
-				?disabled=${this.disabled}
-				@input=${this._onMessage}
-			></textarea>
+		`;
+	}
+
+	// In the quick box: extra options set in the full form still apply
+	private _renderCompactOptions(problem: OptionsProblem | undefined) {
+		const parsed = this._options();
+		if (problem) {
+			return html`<p class="hint problem" role="status">${optionsMessage(problem)}</p>`;
+		}
+		return "options" in parsed && Object.keys(parsed.options).length
+			? html`<p class="hint">${strings.ttsCompactOptions}</p>`
+			: nothing;
+	}
+
+	// Extra options and the preview
+	private _renderMore(optionsProblem: OptionsProblem | undefined) {
+		const speech = this.speech;
+		return html`
 			<details ?open=${this._advancedOpen} @toggle=${this._onToggleAdvanced}>
 				<summary>${strings.ttsAdvanced}</summary>
 				${
@@ -549,6 +646,12 @@ export class SkTtsForm extends LitElement {
 		};
 	}
 
+	private get _noEngines(): string {
+		return this.entitiesOnly
+			? strings.ttsNoEntityEngines
+			: strings.ttsNoEngines;
+	}
+
 	// Why there's nothing to send yet
 	private _problem(): string | undefined {
 		if (this._engines === undefined) {
@@ -558,7 +661,7 @@ export class SkTtsForm extends LitElement {
 			return this._loadError;
 		}
 		if (!this._engine) {
-			return strings.ttsNoEngines;
+			return this._noEngines;
 		}
 		if (this._voicesLoading) {
 			return strings.ttsVoicesLoading;
@@ -580,6 +683,10 @@ export class SkTtsForm extends LitElement {
 				detail: {
 					speech: problem === undefined ? this._speech() : undefined,
 					problem,
+					problemShown:
+						this._engines === undefined ||
+						this._loadError !== undefined ||
+						!this._engines.length,
 					message: this._message,
 				},
 				bubbles: true,
@@ -601,7 +708,7 @@ export class SkTtsForm extends LitElement {
 		const engine = this._engines?.find((e) => e.engine_id === id);
 		if (engine) {
 			// The language just used, if this engine has it too
-			this._selectEngine(engine, { language: this._language });
+			this._selectEngine(engine, { language: this._language }, true);
 			this._remember();
 		}
 		this._changed();
@@ -609,7 +716,7 @@ export class SkTtsForm extends LitElement {
 
 	private _onLanguage(ev: Event) {
 		this._language = (ev.target as HTMLSelectElement).value;
-		void this._loadVoices(this._voice);
+		void this._loadVoices(this._voice, true);
 		this._remember();
 		this._changed();
 	}

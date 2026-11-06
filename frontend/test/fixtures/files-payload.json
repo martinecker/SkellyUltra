@@ -144,5 +144,9 @@
 			"switch_entity": "switch.skelly_santa_override_bitrate",
 			"value_entity": "select.skelly_santa_override_bitrate_value"
 		}
+	},
+	"live_mode": {
+		"switch_entity": "switch.skelly_santa_live_mode",
+		"speaker_entity": "media_player.skelly_santa_live_mode_speaker"
 	}
 }

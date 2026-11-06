@@ -18,23 +18,3 @@ describe("register", () => {
 		).toHaveLength(1);
 	});
 });
-
-describe("card", () => {
-	it("needs no config from the card picker and renders the user's name", async () => {
-		const Card = customElements.get(CARD_ELEMENT) as unknown as {
-			new (): HTMLElement & {
-				setConfig(c: object): void;
-				hass: unknown;
-				updateComplete: Promise<boolean>;
-			};
-			getStubConfig(): object;
-		};
-		const card = new Card();
-		card.setConfig({ type: `custom:${CARD_ELEMENT}`, ...Card.getStubConfig() });
-		card.hass = { user: { name: "Martin" } };
-		document.body.append(card);
-		await card.updateComplete;
-		expect(card.shadowRoot?.textContent).toContain("Hello, Martin!");
-		card.remove();
-	});
-});

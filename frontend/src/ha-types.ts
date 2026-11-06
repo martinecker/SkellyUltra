@@ -38,6 +38,8 @@ export interface HomeAssistant {
 	user?: HassUser;
 	language: string;
 	config?: { country?: string | null };
+	// The sidebar panels, by URL path
+	panels?: Record<string, { url_path: string }>;
 	themes: { darkMode?: boolean };
 	callWS<T>(message: Record<string, unknown>): Promise<T>;
 	callService(

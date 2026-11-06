@@ -4,6 +4,7 @@
 // every registration checks first.
 
 import { CARD_PICKER_ENTRY, SkellyUltraCard } from "./card/skelly-ultra-card";
+import { SkellyUltraCardEditor } from "./card/skelly-ultra-card-editor";
 import { SkAddFileDialog } from "./components/sk-add-file-dialog";
 import { SkConfirm } from "./components/sk-confirm";
 import { SkEditDialog } from "./components/sk-edit-dialog";
@@ -14,6 +15,7 @@ import { SkTransferSettings } from "./components/sk-transfer-settings";
 import { SkTtsForm } from "./components/sk-tts-form";
 import {
 	ADD_FILE_DIALOG_ELEMENT,
+	CARD_EDITOR_ELEMENT,
 	CARD_ELEMENT,
 	CONFIRM_ELEMENT,
 	EDIT_DIALOG_ELEMENT,
@@ -37,6 +39,7 @@ const ELEMENTS: [string, CustomElementConstructor][] = [
 	[ADD_FILE_DIALOG_ELEMENT, SkAddFileDialog],
 	[PANEL_ELEMENT, SkellyUltraPanel],
 	[CARD_ELEMENT, SkellyUltraCard],
+	[CARD_EDITOR_ELEMENT, SkellyUltraCardEditor],
 ];
 
 export function register(): void {

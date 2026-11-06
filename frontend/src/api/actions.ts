@@ -135,6 +135,28 @@ export const sendFileFromTts = (
 		...request,
 	});
 
+// perform's answer: busy if the Skelly is already performing (nothing is
+// said then)
+export interface PerformResult {
+	status: "ok" | "busy";
+}
+
+// Speaks the message in live mode (turned on first if it's off), without
+// a mood or movement. Returns once the speech starts playing.
+export const sayLive = (
+	hass: HomeAssistant,
+	target: ActionTarget,
+	speech: Omit<TtsRequest, "target_filename">,
+) =>
+	callWithResponse<PerformResult>(hass, "perform", target, {
+		...speech,
+		mood: "none",
+		movement: ["none"],
+		wait_until_done: false,
+		// A first connect pairs the Skelly, which can take its own 30 s
+		live_mode_timeout: 60,
+	});
+
 export const cancelTransfer = (hass: HomeAssistant, target: ActionTarget) =>
 	call(hass, "cancel_file_transfer", target, {});
 

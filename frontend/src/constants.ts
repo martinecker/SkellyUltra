@@ -3,6 +3,7 @@
 export const PANEL_ELEMENT = "skelly-ultra-panel";
 export const PANEL_URL_PATH = "skelly-ultra";
 export const CARD_ELEMENT = "skelly-ultra-card";
+export const CARD_EDITOR_ELEMENT = "skelly-ultra-card-editor";
 
 // Elements used inside the panel and the card
 export const FILE_TABLE_ELEMENT = "sk-file-table";

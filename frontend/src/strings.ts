@@ -3,7 +3,6 @@
 export const strings = {
 	panelTitle: "Skelly",
 	openSidebar: "Open the sidebar",
-	greeting: (name: string) => `Hello, ${name}!`,
 	device: "Skelly",
 	noDevices: "No Skelly is set up, or none is loaded right now.",
 	loadingDevices: "Loading your Skellies…",
@@ -140,6 +139,8 @@ export const strings = {
 		`Couldn't list the text-to-speech engines: ${message}`,
 	ttsNoEngines:
 		"Home Assistant has no text-to-speech engine. Add one (e.g. Piper or Google Translate) under Settings › Devices & services.",
+	ttsNoEntityEngines:
+		"Home Assistant has no text-to-speech entity. Add one (e.g. Piper or Google Translate) under Settings › Devices & services.",
 	ttsEngine: "Engine",
 	ttsLanguage: "Language",
 	ttsVoice: "Voice",
@@ -155,6 +156,7 @@ export const strings = {
 	ttsOptionsEditorLoading: "Loading Home Assistant's YAML editor…",
 	ttsOptionsEditorMissing:
 		"Home Assistant's YAML editor didn't load, so extra options can't be added. Reload the page to try again.",
+	ttsCompactOptions: "The extra options set under the gear are used too.",
 	ttsOptionsYaml: "The extra options aren't valid YAML",
 	ttsOptionsMapping: 'The extra options must be "key: value" lines',
 	ttsPreview: "Preview",
@@ -222,6 +224,43 @@ export const strings = {
 	deleteMessage: (name: string) =>
 		`Delete ${name} from the Skelly? This can't be undone.`,
 	cancel: "Cancel",
+	// Card
+	cardNoDevice: "Pick a Skelly in the card's settings.",
+	cardUnknownDevice:
+		"This Skelly isn't set up or loaded in Home Assistant right now.",
+	cardOpenPanel: (name: string) => `Open ${name} in the Skelly panel`,
+	cardSay: "Say something",
+	cardMoreOptions: "Engine, language, voice and extra options",
+	cardSayButton: "Say",
+	cardSayTitle: "Speak the message through the Skelly in live mode",
+	cardSaying: "Saying…",
+	cardLiveConnecting: "Connecting live mode…",
+	cardSayFailed: (message: string) => `Couldn't say it: ${message}`,
+	cardSayBusy: "The Skelly is already saying something.",
+	cardLive: "Live mode",
+	cardLiveOn: "Live mode is on. Turn it off",
+	cardLiveOff: "Live mode is off. Turn it on",
+	cardLiveWait: "Live mode is connecting. Turn it off",
+	cardLiveNotConnected:
+		"Live mode didn't connect. The Home Assistant log says why.",
+	cardLiveFailed: (message: string) => `Couldn't switch live mode: ${message}`,
+	cardLiveOffHint: "Live mode is off. Say turns it on first.",
+	cardLiveMissing:
+		"Say needs live mode. Enable the Skelly's Live Mode Speaker and Live Mode entities in Home Assistant.",
+	cardNotConnected: "The Skelly is not connected",
+	cardUnavailable:
+		"The Skelly is not connected. These are the last known files.",
+	cardNoFiles: "No files in the play order.",
+	cardManage: "Manage files",
+	cardBusyTransfer: "A file is being sent to the Skelly",
+	cardBusyReading: "Reading the Skelly's files…",
+	// Card editor
+	editorDevice: "Skelly",
+	editorTtsEntity: "Text-to-speech engine",
+	editorTtsEntityHelper: "A TTS entity. Leave empty to use the last one used.",
+	editorShowTts: "Show the text-to-speech box",
+	editorShowFiles: "Show files",
+	editorMaxFiles: "Files to show",
 	cardName: "Skelly Ultra",
 	cardDescription:
 		"Shows a Skelly's status, says text through it and plays its files.",

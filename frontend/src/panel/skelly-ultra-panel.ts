@@ -21,6 +21,7 @@ import {
 	sameOrder,
 	withOrder,
 } from "../api/order";
+import { type FileRef, PlaybackTracker } from "../api/playback";
 import { SMALL_CHUNK_SIZE } from "../api/transfer-settings";
 import {
 	type FileEntry,
@@ -44,6 +45,7 @@ import type {
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
+import { showToast } from "../toast";
 
 export interface PanelConfig {
 	// Hash of the bundle that the backend serves; compared with the running
@@ -58,19 +60,7 @@ const DEVICE_PARAM = "device";
 // Below this width (in px) the files are a list instead of a table
 const COMPACT_WIDTH = 600;
 
-interface PlayingFile {
-	entry_id: string;
-	file_index: number;
-	name: string;
-	// The Skelly's playback report; undefined until it confirms a Play
-	report?: number;
-	// When the file ends (Date.now() time), if the Skelly said how long it is
-	endsAt?: number;
-}
-
-// How long (in ms) the Skelly has to confirm a Play before the panel says it
-// didn't start
-export const PLAY_CONFIRM_MS = 5000;
+export { PLAY_CONFIRM_MS } from "../api/playback";
 
 // Play order changes within this time (in ms) go out as one write
 export const ORDER_DEBOUNCE_MS = 600;
@@ -92,9 +82,6 @@ interface PendingOrder {
 export const HIGHLIGHT_MS = 5000;
 // How long (in ms) the toast for a sent file, with its Play button, shows
 const SENT_TOAST_MS = 8000;
-
-// What a file action needs of a file
-type FileRef = Pick<FileEntry, "file_index" | "name">;
 
 const busyKey = (entryId: string, fileIndex: number) =>
 	`${entryId}:${fileIndex}`;
@@ -124,14 +111,6 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _selected?: string;
 	// The file in the edit dialog
 	@state() private _editing?: { entry_id: string; name: string };
-	// The file playing, as the Skelly reported it or as just started here
-	@state() private _playing?: PlayingFile;
-	// Date.now(), updated every second while a playing file counts down
-	@state() private _now = Date.now();
-	// The last playback report handled (entry_id and report)
-	private _seenPlayback?: string;
-	private _playConfirmTimer?: ReturnType<typeof setTimeout>;
-	private _countdownTimer?: ReturnType<typeof setInterval>;
 	// busyKey()s of files with an action in progress
 	@state() private _busy: ReadonlySet<string> = new Set();
 	// Lists files instead of a table: the panel is less than 600 px wide
@@ -149,6 +128,9 @@ export class SkellyUltraPanel extends LitElement {
 	@state() private _highlight?: { entry_id: string; file_index: number };
 
 	private readonly _files = new FilesSubscription(this);
+	private readonly _playback = new PlaybackTracker(this, (name) =>
+		this._toast(strings.playNotStarted(name)),
+	);
 	private _loadingDevices = false;
 	private _devicesAttempted = false;
 	private _devicesRetryTimer?: ReturnType<typeof setTimeout>;
@@ -190,13 +172,6 @@ export class SkellyUltraPanel extends LitElement {
 		clearTimeout(this._highlightTimer);
 		this._highlightTimer = undefined;
 		this._highlight = undefined;
-		clearTimeout(this._playConfirmTimer);
-		this._playConfirmTimer = undefined;
-		this._stopCountdown();
-		// A Play the Skelly hasn't confirmed can't be checked from here
-		if (this._playing && this._playing.report === undefined) {
-			this._playing = undefined;
-		}
 		// Leaving the panel: write a waiting play order change now
 		this._writeOrder();
 	}
@@ -212,93 +187,8 @@ export class SkellyUltraPanel extends LitElement {
 			device ? this.hass : undefined,
 			device ? targetOf(device) : {},
 		);
-		this._forgetEndedPlayback();
-		this._followPlayback();
+		this._playback.follow(this._files.payload);
 		this._settleOrder();
-	}
-
-	protected updated(): void {
-		// Count down while a file with a known length plays
-		if (this._playing?.endsAt === undefined) {
-			this._stopCountdown();
-		} else if (this._countdownTimer === undefined) {
-			this._countdownTimer = setInterval(() => this._tick(), 1000);
-		}
-	}
-
-	private _tick(): void {
-		this._now = Date.now();
-		const endsAt = this._playing?.endsAt;
-		// The Skelly's "stopped" report may come late or not at all
-		if (endsAt !== undefined && this._now >= endsAt) {
-			this._playing = undefined;
-		}
-	}
-
-	private _stopCountdown(): void {
-		clearInterval(this._countdownTimer);
-		this._countdownTimer = undefined;
-	}
-
-	// Follows the Skelly's playback reports: a file it started (here or
-	// anywhere else) shows as playing, with its length, until it ends
-	private _followPlayback(): void {
-		const payload = this._files.payload;
-		if (!payload) {
-			return;
-		}
-		const report =
-			payload.available && !payload.unloaded ? payload.playback : null;
-		const key = `${payload.entry_id}:${report?.report ?? ""}`;
-		if (key === this._seenPlayback) {
-			return;
-		}
-		const playing = this._playing;
-		if (report) {
-			const file = payload.files.find(
-				(f) => f.file_index === report.file_index,
-			);
-			if (!file) {
-				return; // Not in the list yet: looked at again with the next one
-			}
-			this._seenPlayback = key;
-			clearTimeout(this._playConfirmTimer);
-			this._now = Date.now();
-			// From when the Skelly reported it (it may be shown again later,
-			// e.g. after reopening the panel), in this browser's time (HA's
-			// clock may differ), and never longer than the file
-			const duration = report.duration * 1000;
-			const endsAt =
-				duration > 0
-					? Math.min(
-							report.started + (this._now - payload.sent_at) + duration,
-							this._now + duration,
-						)
-					: undefined;
-			if (endsAt !== undefined && endsAt <= this._now) {
-				// Ended already; the Skelly's report of it was missed
-				if (playing?.entry_id === payload.entry_id) {
-					this._playing = undefined;
-				}
-				return;
-			}
-			this._playing = {
-				entry_id: payload.entry_id,
-				file_index: file.file_index,
-				name: file.name,
-				report: report.report,
-				endsAt,
-			};
-			return;
-		}
-		this._seenPlayback = key;
-		if (
-			playing?.entry_id === payload.entry_id &&
-			playing.report !== undefined
-		) {
-			// Ended; a Play still waiting for its report stays
-			this._playing = undefined;
-		}
 	}
 
 	// A written play order is shown until a newer file list arrives
@@ -313,25 +203,6 @@ export class SkellyUltraPanel extends LitElement {
 		clearTimeout(this._settleTimer);
 		this._settleTimer = undefined;
 		this._order = undefined;
-	}
-
-	// Drop the playing state once it can't be true any more: the Skelly
-	// disconnected, the integration reloaded, or the file is gone.
-	private _forgetEndedPlayback(): void {
-		const playing = this._playing;
-		const payload = this._files.payload;
-		if (!playing || !payload || payload.entry_id !== playing.entry_id) {
-			return;
-		}
-		if (
-			!payload.available ||
-			payload.unloaded ||
-			!payload.files.some(
-				(f) => f.file_index === playing.file_index && f.name === playing.name,
-			)
-		) {
-			this._playing = undefined;
-		}
 	}
 
 	// The chosen Skelly, or the first one
@@ -693,8 +564,8 @@ export class SkellyUltraPanel extends LitElement {
 							class=${live ? "" : "stale"}
 							.profile=${payload.device_profile}
 							.rows=${orderedFiles(this._shownPayload(payload))}
-							.playing=${this._playingIndex(payload)}
-							.remaining=${this._remaining(payload)}
+							.playing=${this._playback.playingIndex(payload)}
+							.remaining=${this._playback.remaining(payload)}
 							.highlight=${
 								this._highlight?.entry_id === payload.entry_id
 									? this._highlight.file_index
@@ -729,7 +600,8 @@ export class SkellyUltraPanel extends LitElement {
 				?playing=${
 					payload !== undefined &&
 					this._editing !== undefined &&
-					this._playingIndex(payload) === this._editedFile(payload)?.file_index
+					this._playback.playingIndex(payload) ===
+						this._editedFile(payload)?.file_index
 				}
 				@sk-preview=${this._onPlay}
 				@sk-preview-stop=${this._onStop}
@@ -888,16 +760,14 @@ export class SkellyUltraPanel extends LitElement {
 		try {
 			// The device can't change the order while it plays a file, so a
 			// file we started is stopped first
-			const playing = this._playing;
+			const playing = this._playback.playing;
 			if (playing?.entry_id === pending.entry_id) {
 				try {
 					await stopFile(hass, pending.target, playing.file_index);
 				} catch {
 					// Writing says why, if the device is still busy
 				}
-				if (this._playing === playing) {
-					this._playing = undefined;
-				}
+				this._playback.drop(playing);
 			}
 			const response = await setFileOrder(hass, pending.target, {
 				file_indices: order,
@@ -925,13 +795,6 @@ export class SkellyUltraPanel extends LitElement {
 		}
 		this._order = { ...pending, order, written: { seen: latest } };
 		this._settleTimer = setTimeout(() => this._dropOrder(), ORDER_SETTLE_MS);
-	}
-
-	private _playingIndex(payload: FilesPayload): number | null {
-		const playing = this._playing;
-		return playing && playing.entry_id === payload.entry_id
-			? playing.file_index
-			: null;
 	}
 
 	// The files of this Skelly with an action in progress
@@ -993,7 +856,7 @@ export class SkellyUltraPanel extends LitElement {
 		if (this._order && !this._order.written) {
 			await this._writeOrder();
 		}
-		const seen = this._seenPlayback;
+		const seen = this._playback.seen;
 		const entryId = await this._fileAction(
 			file,
 			(hass, target) => playFile(hass, target, file.file_index),
@@ -1002,43 +865,7 @@ export class SkellyUltraPanel extends LitElement {
 		if (!entryId || !this.isConnected) {
 			return;
 		}
-		const current = this._playing;
-		if (
-			this._seenPlayback !== seen &&
-			current?.entry_id === entryId &&
-			current.file_index === file.file_index &&
-			current.report !== undefined
-		) {
-			return; // The Skelly's report came before the action's answer
-		}
-		// Shown as playing until the Skelly reports it, or says nothing
-		const pending: PlayingFile = {
-			entry_id: entryId,
-			file_index: file.file_index,
-			name: file.name,
-		};
-		this._playing = pending;
-		clearTimeout(this._playConfirmTimer);
-		this._playConfirmTimer = setTimeout(() => {
-			this._playConfirmTimer = undefined;
-			if (this._playing === pending) {
-				this._playing = undefined;
-				this._toast(strings.playNotStarted(file.name));
-			}
-		}, PLAY_CONFIRM_MS);
-	}
-
-	// Seconds left of the playing file, if the Skelly said how long it is
-	private _remaining(payload: FilesPayload): number | null {
-		const playing = this._playing;
-		if (
-			!playing ||
-			playing.entry_id !== payload.entry_id ||
-			playing.endsAt === undefined
-		) {
-			return null;
-		}
-		return Math.max(0, Math.ceil((playing.endsAt - this._now) / 1000));
+		this._playback.started(entryId, file, seen);
 	}
 
 	private async _onStop(ev: CustomEvent<FileEventDetail>) {
@@ -1123,16 +950,14 @@ export class SkellyUltraPanel extends LitElement {
 		if (!hass || !target || !entryId) {
 			throw new Error(strings.editWaiting);
 		}
-		const playing = this._playing;
+		const playing = this._playback.playing;
 		if (playing?.entry_id === entryId) {
 			try {
 				await stopFile(hass, target, playing.file_index);
 			} catch {
 				// Saving says why, if the device is still busy
 			}
-			if (this._playing === playing) {
-				this._playing = undefined;
-			}
+			this._playback.drop(playing);
 		}
 		// The file's current index (it may have changed since the dialog opened)
 		const current =
@@ -1173,13 +998,7 @@ export class SkellyUltraPanel extends LitElement {
 	}
 
 	private _clearPlaying(entryId: string, file: FileRef) {
-		const playing = this._playing;
-		if (
-			playing?.entry_id === entryId &&
-			playing.file_index === file.file_index
-		) {
-			this._playing = undefined;
-		}
+		this._playback.clear(entryId, file.file_index);
 	}
 
 	private async _refresh() {
@@ -1346,27 +1165,12 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
-	// HA's own toast, at the bottom of the screen, with a button if given
 	private _toast(
 		message: string,
 		action?: { text: string; action: () => void },
 		duration?: number,
 	) {
-		// A send can end after the panel was left: HA's root shows it then
-		const target: EventTarget = this.isConnected
-			? this
-			: (document.querySelector("home-assistant") ?? this);
-		target.dispatchEvent(
-			new CustomEvent("hass-notification", {
-				detail: {
-					message,
-					...(action ? { action } : {}),
-					...(duration ? { duration } : {}),
-				},
-				bubbles: true,
-				composed: true,
-			}),
-		);
+		showToast(this, message, action, duration);
 	}
 
 	// What HA's own menu button does: the sidebar is hidden on narrow screens
