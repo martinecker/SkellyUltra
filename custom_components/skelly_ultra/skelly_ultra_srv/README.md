@@ -99,6 +99,12 @@ For debug logging:
 python3 run_server.py --verbose
 ```
 
+To stream silence to each live-mode Skelly so its Bluetooth sink stays awake between clips (off by default; it didn't help in testing, and on some single-dongle setups the extra A2DP traffic may make the controller drop its BLE and A2DP links):
+
+```bash
+python3 run_server.py --keepalive
+```
+
 ### 🔧 Option 2: Using the server module directly
 
 ```bash

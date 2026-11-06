@@ -72,7 +72,7 @@ class AudioPlayer:
     def __init__(
         self,
         on_active_change: Callable[[bool], Awaitable[None]] | None = None,
-        keepalive: bool = True,
+        keepalive: bool = False,
     ) -> None:
         """Initialize the audio player.
 

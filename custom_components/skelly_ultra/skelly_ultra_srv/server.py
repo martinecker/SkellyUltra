@@ -55,7 +55,7 @@ class SkellyUltraServer:
         host: str = "0.0.0.0",
         port: int = 8765,
         debug_json: bool = False,
-        keepalive: bool = True,
+        keepalive: bool = False,
     ) -> None:
         """Initialize the server.
 

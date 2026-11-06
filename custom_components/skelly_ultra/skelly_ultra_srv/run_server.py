@@ -47,10 +47,16 @@ async def main():
         help="Port to listen on (default: 8765)",
     )
     parser.add_argument(
-        "--no-keepalive",
+        "--keepalive",
         action="store_true",
-        help="Don't stream silence to live-mode devices to keep their sink awake",
+        help=(
+            "Stream silence to live-mode devices to keep their sink awake "
+            "(off by default: on some single-dongle setups it makes the "
+            "controller drop its links)"
+        ),
     )
+    # Accepted for old command lines; the keep-alive is off by default now
+    parser.add_argument("--no-keepalive", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
 
     # Configure colored logging
@@ -78,7 +84,7 @@ async def main():
         host=args.host,
         port=args.port,
         debug_json=args.debug_json,
-        keepalive=not args.no_keepalive,
+        keepalive=args.keepalive and not args.no_keepalive,
     )
 
     print(f"""Starting Skelly Ultra REST server on http://{args.host}:{args.port}
