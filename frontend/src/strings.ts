@@ -133,6 +133,36 @@ export const strings = {
 	tabUpload: "Upload",
 	tabMedia: "Media library",
 	tabUrl: "URL",
+	tabTts: "Text to speech",
+	// Text to speech
+	ttsLoading: "Loading the text-to-speech engines…",
+	ttsLoadFailed: (message: string) =>
+		`Couldn't list the text-to-speech engines: ${message}`,
+	ttsNoEngines:
+		"Home Assistant has no text-to-speech engine. Add one (e.g. Piper or Google Translate) under Settings › Devices & services.",
+	ttsEngine: "Engine",
+	ttsLanguage: "Language",
+	ttsVoice: "Voice",
+	ttsVoiceDefault: "Engine default",
+	ttsMessage: "Message",
+	ttsNoMessage: "Type a message to speak",
+	ttsVoicesLoading: "Loading the voices…",
+	ttsPreviewNoAudio:
+		"the engine sent no audio. Check its setup, sign-in or quota in Home Assistant.",
+	ttsAdvanced: "Advanced: extra TTS options",
+	ttsOptionsHint:
+		'Options the engine takes, in YAML, one "key: value" per line. The voice picked above is added as "voice".',
+	ttsOptionsEditorLoading: "Loading Home Assistant's YAML editor…",
+	ttsOptionsEditorMissing:
+		"Home Assistant's YAML editor didn't load, so extra options can't be added. Reload the page to try again.",
+	ttsOptionsYaml: "The extra options aren't valid YAML",
+	ttsOptionsMapping: 'The extra options must be "key: value" lines',
+	ttsPreview: "Preview",
+	ttsPreviewing: "Speaking…",
+	ttsPreviewTitle: "Listen here first (a separate text-to-speech request)",
+	ttsPreviewNote:
+		"A preview is a separate request to the engine, which counts against paid plans like ElevenLabs. Sending speaks the message again.",
+	ttsPreviewFailed: (message: string) => `Couldn't preview: ${message}`,
 	filenameLabel: "Name on the Skelly",
 	filenameEmpty: "Enter a name",
 	filenameSlash: "The name can't contain /",

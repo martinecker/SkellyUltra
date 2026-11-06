@@ -37,6 +37,7 @@ export interface HomeAssistant {
 	states: Record<string, HassEntity>;
 	user?: HassUser;
 	language: string;
+	config?: { country?: string | null };
 	themes: { darkMode?: boolean };
 	callWS<T>(message: Record<string, unknown>): Promise<T>;
 	callService(

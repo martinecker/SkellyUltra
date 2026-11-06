@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/main";
 import type { FilesPayload, SkellyDevice } from "../src/api/types";
+import type { SkAddFileDialog } from "../src/components/sk-add-file-dialog";
 import { PANEL_ELEMENT } from "../src/constants";
 import {
 	ORDER_DEBOUNCE_MS,
@@ -1755,6 +1756,40 @@ describe("panel", () => {
 				undefined,
 				false,
 				false,
+			);
+		});
+
+		it("sends speech with send_file_from_tts", async () => {
+			const { hass } = fakeHass(one);
+			hass.callService.mockResolvedValue({
+				response: { filename: "boo.mp3", file_index: 1 },
+			});
+			const panel = await showPanel(hass);
+			const addDialog = panel.shadowRoot?.querySelector(
+				"sk-add-file-dialog",
+			) as SkAddFileDialog;
+			addDialog.send?.({
+				filename: "boo.mp3",
+				speech: {
+					tts_entity: "tts.piper",
+					message: "Boo",
+					language: "en_US",
+				},
+			});
+			await settle(panel);
+			expect(hass.callService).toHaveBeenCalledWith(
+				"skelly_ultra",
+				"send_file_from_tts",
+				{
+					device_id: DEVICE_ID,
+					tts_entity: "tts.piper",
+					message: "Boo",
+					language: "en_US",
+					target_filename: "boo.mp3",
+				},
+				undefined,
+				false,
+				true,
 			);
 		});
 

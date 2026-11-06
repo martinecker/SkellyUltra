@@ -20,24 +20,26 @@ import {
 	uploadMedia,
 	uploadProblem,
 } from "../api/media";
+import { messageStem, type TtsSpeech } from "../api/tts";
 import type { DeviceProfile, FileEntry, TransferSettings } from "../api/types";
 import type { HomeAssistant } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
 import type { MediaPickDetail } from "./sk-media-browser";
+import type { SkTtsForm, TtsChangeDetail } from "./sk-tts-form";
 
-// What to send to the Skelly: a file_path for send_file and the name to
-// store it under
-export interface SendRequest {
-	filePath: string;
-	filename: string;
-}
+// What to send to the Skelly and the name to store it under: a file_path
+// for send_file, or speech for send_file_from_tts
+export type SendRequest = { filename: string } & (
+	| { filePath: string; speech?: undefined }
+	| { speech: TtsSpeech; filePath?: undefined }
+);
 
 // Starts sending; the dialog is closed by then. Progress and the result are
 // the panel's business.
 export type SendHandler = (request: SendRequest) => void;
 
-export type AddFileTab = "upload" | "media" | "url";
+export type AddFileTab = "upload" | "tts" | "media" | "url";
 
 const formatSize = (bytes: number): string =>
 	bytes < 1024 * 1024
@@ -75,6 +77,7 @@ export class SkAddFileDialog extends LitElement {
 	@state() private _file?: File;
 	@state() private _url = "";
 	@state() private _media?: MediaItem;
+	@state() private _tts: TtsChangeDetail = { message: "" };
 	@state() private _uploading = false;
 	@state() private _error?: string;
 	@state() private _dragOver = false;
@@ -306,7 +309,9 @@ export class SkAddFileDialog extends LitElement {
 	}
 
 	private get _tabs(): AddFileTab[] {
-		return this._canUpload ? ["upload", "media", "url"] : ["media", "url"];
+		return this._canUpload
+			? ["upload", "tts", "media", "url"]
+			: ["tts", "media", "url"];
 	}
 
 	// Opens the dialog with nothing picked yet
@@ -318,6 +323,8 @@ export class SkAddFileDialog extends LitElement {
 		this._file = undefined;
 		this._url = "";
 		this._media = undefined;
+		this._tts = { message: "" };
+		this._ttsForm?.reset();
 		this._uploading = false;
 		this._error = undefined;
 		this._dragOver = false;
@@ -331,9 +338,14 @@ export class SkAddFileDialog extends LitElement {
 		return this._dialog?.open ?? false;
 	}
 
+	private get _ttsForm(): SkTtsForm | null {
+		return this.renderRoot.querySelector<SkTtsForm>("sk-tts-form");
+	}
+
 	close(): void {
 		// An upload still running is called off
 		this._abort?.abort();
+		this._ttsForm?.stopPreview();
 		this._abort = undefined;
 		if (this._dialog?.open) {
 			this._dialog.close();
@@ -375,6 +387,13 @@ export class SkAddFileDialog extends LitElement {
 				</div>
 			</header>
 			<div class="body" id="panel" role="tabpanel" aria-labelledby="tab-${tab}">
+				<sk-tts-form
+					.hass=${this.hass}
+					?hidden=${tab !== "tts"}
+					?active=${tab === "tts"}
+					?disabled=${this.readOnlyReason !== undefined}
+					@sk-tts-change=${this._onTtsChange}
+				></sk-tts-form>
 				${this._renderSource(tab)}
 				${this._renderName(profile)}
 				<sk-transfer-settings
@@ -406,14 +425,19 @@ export class SkAddFileDialog extends LitElement {
 	private _tabLabel(tab: AddFileTab): string {
 		return tab === "upload"
 			? strings.tabUpload
-			: tab === "media"
-				? strings.tabMedia
-				: strings.tabUrl;
+			: tab === "tts"
+				? strings.tabTts
+				: tab === "media"
+					? strings.tabMedia
+					: strings.tabUrl;
 	}
 
 	private _renderSource(tab: AddFileTab) {
 		if (tab === "upload") {
 			return this._renderUpload();
+		}
+		if (tab === "tts") {
+			return nothing; // Always there, hidden on other tabs
 		}
 		if (tab === "media") {
 			return html`<sk-media-browser
@@ -547,6 +571,10 @@ export class SkAddFileDialog extends LitElement {
 			if (problem) {
 				return uploadMessage(problem);
 			}
+		} else if (tab === "tts") {
+			if (!this._tts.speech) {
+				return this._tts.problem ?? strings.ttsNoMessage;
+			}
 		} else if (tab === "media") {
 			if (!this._media) {
 				return strings.mediaPick;
@@ -566,6 +594,9 @@ export class SkAddFileDialog extends LitElement {
 	}
 
 	private _selectTab(tab: AddFileTab) {
+		if (tab !== "tts") {
+			this._ttsForm?.pausePreview();
+		}
 		this._tab = tab;
 		this._error = undefined;
 		// The name follows the source of the tab now shown
@@ -574,14 +605,31 @@ export class SkAddFileDialog extends LitElement {
 				? this._file?.name
 				: tab === "media"
 					? this._media?.title
-					: urlFileName(this._url);
-		this._suggest(source ?? "");
+					: tab === "url"
+						? urlFileName(this._url)
+						: undefined;
+		if (tab === "tts") {
+			this._suggestStem(this._ttsStem());
+		} else {
+			this._suggest(source ?? "");
+		}
+	}
+
+	// The backend's name for a message without letters or digits, too
+	private _ttsStem(): string {
+		const max = this.profile?.max_filename_length ?? 0;
+		return this._tts.message.trim()
+			? messageStem(this._tts.message, max) || "tts"
+			: "";
 	}
 
 	// Fills in a name from the source's, unless the user typed their own
 	private _suggest(sourceName: string) {
 		const max = this.profile?.max_filename_length ?? 0;
-		const stem = suggestStem(sourceName, max);
+		this._suggestStem(suggestStem(sourceName, max));
+	}
+
+	private _suggestStem(stem: string) {
 		if (this._stem === this._suggested) {
 			this._stem = stem;
 		}
@@ -596,6 +644,14 @@ export class SkAddFileDialog extends LitElement {
 		this._url = (ev.target as HTMLInputElement).value;
 		this._error = undefined;
 		this._suggest(isHttpUrl(this._url) ? urlFileName(this._url) : "");
+	}
+
+	private _onTtsChange(ev: CustomEvent<TtsChangeDetail>) {
+		this._tts = ev.detail;
+		this._error = undefined;
+		if (this._tab === "tts") {
+			this._suggestStem(this._ttsStem());
+		}
 	}
 
 	private _onMediaPick(ev: CustomEvent<MediaPickDetail>) {
@@ -646,6 +702,14 @@ export class SkAddFileDialog extends LitElement {
 			return;
 		}
 		const filename = filenameOf(this._stem);
+		if (tab === "tts") {
+			const speech = this._tts.speech;
+			if (speech) {
+				this.send?.({ speech, filename });
+				this.close();
+			}
+			return;
+		}
 		let filePath: string;
 		if (tab === "upload") {
 			const hass = this.hass;
@@ -708,6 +772,7 @@ export class SkAddFileDialog extends LitElement {
 	// Escape or close(): an upload still running is called off
 	private _onClose() {
 		this._abort?.abort();
+		this._ttsForm?.stopPreview();
 		this._abort = undefined;
 		this._uploading = false;
 		this.requestUpdate();

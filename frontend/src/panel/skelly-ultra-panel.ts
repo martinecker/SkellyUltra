@@ -8,6 +8,7 @@ import {
 	errorMessage,
 	playFile,
 	sendFile,
+	sendFileFromTts,
 	setFileOrder,
 	stopFile,
 } from "../api/actions";
@@ -29,6 +30,7 @@ import {
 } from "../api/types";
 import type {
 	SendHandler,
+	SendRequest,
 	SkAddFileDialog,
 } from "../components/sk-add-file-dialog";
 import type { SkConfirm } from "../components/sk-confirm";
@@ -1252,11 +1254,12 @@ export class SkellyUltraPanel extends LitElement {
 
 	// Sends the file picked in the add dialog. The service call lasts until
 	// the transfer ends; the transfer bar shows its progress meanwhile.
-	private readonly _sendNew: SendHandler = ({ filePath, filename }) => {
-		void this._send(filePath, filename);
+	private readonly _sendNew: SendHandler = (request) => {
+		void this._send(request);
 	};
 
-	private async _send(filePath: string, filename: string) {
+	private async _send(request: SendRequest) {
+		const { filename } = request;
 		const hass = this.hass;
 		const target = this._actionTarget;
 		const entryId = this._payload?.entry_id;
@@ -1271,7 +1274,12 @@ export class SkellyUltraPanel extends LitElement {
 		this._sending = entryId;
 		let sent: Awaited<ReturnType<typeof sendFile>>;
 		try {
-			sent = await sendFile(hass, target, filePath, filename);
+			sent = request.speech
+				? await sendFileFromTts(hass, target, {
+						...request.speech,
+						target_filename: filename,
+					})
+				: await sendFile(hass, target, request.filePath, filename);
 		} catch (err) {
 			this._toast(strings.sendFailed(filename, errorMessage(err)));
 			return;

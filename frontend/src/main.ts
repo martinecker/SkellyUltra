@@ -11,6 +11,7 @@ import { SkFileTable } from "./components/sk-file-table";
 import { SkMediaBrowser } from "./components/sk-media-browser";
 import { SkTransferBar } from "./components/sk-transfer-bar";
 import { SkTransferSettings } from "./components/sk-transfer-settings";
+import { SkTtsForm } from "./components/sk-tts-form";
 import {
 	ADD_FILE_DIALOG_ELEMENT,
 	CARD_ELEMENT,
@@ -21,6 +22,7 @@ import {
 	PANEL_ELEMENT,
 	TRANSFER_BAR_ELEMENT,
 	TRANSFER_SETTINGS_ELEMENT,
+	TTS_FORM_ELEMENT,
 } from "./constants";
 import { SkellyUltraPanel } from "./panel/skelly-ultra-panel";
 
@@ -31,6 +33,7 @@ const ELEMENTS: [string, CustomElementConstructor][] = [
 	[EDIT_DIALOG_ELEMENT, SkEditDialog],
 	[MEDIA_BROWSER_ELEMENT, SkMediaBrowser],
 	[TRANSFER_SETTINGS_ELEMENT, SkTransferSettings],
+	[TTS_FORM_ELEMENT, SkTtsForm],
 	[ADD_FILE_DIALOG_ELEMENT, SkAddFileDialog],
 	[PANEL_ELEMENT, SkellyUltraPanel],
 	[CARD_ELEMENT, SkellyUltraCard],
