@@ -32,7 +32,7 @@ The server can also act as a BLE proxy to control the BLE device in one or more 
 
 For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 
-**Note**: The BLE proxy functionality works on Windows, Linux, and other platforms. However, the Bluetooth Classic A2DP speaker endpoints require a Linux-based system due to dependencies on command line tools like `bluetoothctl` that are only available there.
+**Note**: The server requires Linux with BlueZ, for both the BLE proxy and the Bluetooth Classic A2DP speaker endpoints. The BLE proxy talks to BlueZ directly over D-Bus (for example to recover a stuck scanner or drop a stale link), and the speaker endpoints use command line tools like `bluetoothctl` that are only available there. It does not run on Windows or macOS.
 
 ## 📋 Requirements
 
