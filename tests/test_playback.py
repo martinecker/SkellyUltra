@@ -213,6 +213,10 @@ async def test_failed_or_unreported_play_holds_off_polling_briefly(
         DOMAIN, "play_file", {"file_index": 1}, blocking=True
     )
     before = queries(device)
+    # Two steps, so the 10s report timeout fires before the 30s poll is due.
+    # In one jump both timers fire in no set order, and a poll that runs first
+    # is still held off.
+    await advance(hass, 11)
     await advance(hass, 31)
     assert queries(device) > before, "polling resumed after the report timeout"
 
