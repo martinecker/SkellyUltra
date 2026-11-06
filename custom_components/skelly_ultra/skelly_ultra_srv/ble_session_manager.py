@@ -7,6 +7,7 @@ from collections.abc import Callable
 import contextlib
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+import itertools
 import logging
 import re
 import uuid
@@ -26,6 +27,8 @@ from .bluez_discovery import run_discovery_call
 from .mtu import acquire_mtu
 
 _LOGGER = logging.getLogger(__name__)
+
+_session_serials = itertools.count()
 
 
 def _put_nowait_dropping_oldest(queue: asyncio.Queue, item) -> None:
@@ -259,6 +262,8 @@ class BLESession:
         self.device: BLEDevice | None = None  # Its BlueZ object on that adapter
         # Set when the BLE link drops, to wake a pending notifications long-poll
         self.disconnected_event = asyncio.Event()
+        # Creation order; the newest connected session to a device owns its link
+        self.serial = next(_session_serials)
 
     def mark_disconnected(self) -> None:
         """Record that the BLE link dropped and wake any pending long-poll."""
@@ -315,6 +320,9 @@ class BLESessionManager:
         # Connects between client.connect() and their session being stored
         # or aborted; they depend on bleak's BlueZ connection too
         self._connects_in_flight = 0
+        # The same per BLE address (upper case); such a connect may be riding
+        # on the link of an existing session already
+        self._connecting: dict[str, int] = {}
         self._scanner_paused = False
         self._scanner_holds = 0  # Pending pauses (connects, playback)
         self._device_cache: dict[
@@ -352,6 +360,8 @@ class BLESessionManager:
 
         # Disconnect all sessions
         for session_id in list(self._sessions.keys()):
+            if session_id not in self._sessions:
+                continue  # Closed with a newer session to its device
             try:
                 await self.disconnect_session(session_id)
             except Exception:
@@ -842,9 +852,11 @@ class BLESessionManager:
                         idle_sessions.append(session_id)
 
                 for session_id in idle_sessions:
+                    if session_id not in self._sessions:
+                        continue  # Closed with a newer session to its device
                     _LOGGER.info("Cleaning up idle BLE session %s", session_id)
                     try:
-                        await self.disconnect_session(session_id)
+                        await self.disconnect_session(session_id, idle=True)
                     except Exception:
                         _LOGGER.exception("Error cleaning up session %s", session_id)
 
@@ -1116,8 +1128,19 @@ class BLESessionManager:
                 return cached.device if cached else None
 
             device = find_cached_by_address()
+            shared = self._connected_session(address)
             if device:
                 _LOGGER.info("Using cached BLE device for address: %s", address)
+            elif shared is not None and shared.device is not None:
+                # Still connected in an older session (e.g. the client
+                # restarted). A connected device doesn't advertise, so it
+                # would never reach the cache; share that session's link.
+                _LOGGER.info(
+                    "Device %s is still connected in session %s, sharing its link",
+                    address,
+                    shared.session_id,
+                )
+                device = shared.device
             else:
                 _LOGGER.warning(
                     "Device not in cache (background scanner may not have seen it yet), "
@@ -1191,6 +1214,8 @@ class BLESessionManager:
         try:
             await self._pause_scanner()
             self._connects_in_flight += 1
+            connect_key = discovered_address.upper()
+            self._connecting[connect_key] = self._connecting.get(connect_key, 0) + 1
             in_flight = True
             # Create BleakClient with disconnected_callback parameter
             _LOGGER.info("Connecting to BLE device: %s", discovered_address)
@@ -1237,8 +1262,10 @@ class BLESessionManager:
                         len(data),
                         raw_hex,
                     )
+                    # Not client activity: a session the client abandoned
+                    # still gets the device's notifications, and must still
+                    # count as idle
                     session.buffer_notification(sender, data)
-                    session.last_activity = datetime.now(UTC)
                 except Exception:
                     _LOGGER.exception("Error in notification callback")
 
@@ -1258,13 +1285,40 @@ class BLESessionManager:
             # Drop a link that is (half) up, or BlueZ keeps it and the device
             # stops advertising. Shielded so a cancellation can't cut it short.
             if client is not None:
-                await asyncio.shield(self._abort_connect(client))
+                sharing = [
+                    o.session_id
+                    for o in self._sessions.values()
+                    if o.address.upper() == discovered_address.upper()
+                    and self._link_up(o)
+                ]
+                if self._connecting.get(discovered_address.upper(), 0) > 1:
+                    # Not counting this one (its count drops in the finally)
+                    sharing.append("another connect in progress")
+                if sharing:
+                    # bleak rode on their link (it skips Connect then), and
+                    # a Disconnect would drop it for them too. bleak itself
+                    # still sends one if connect() fails or is cancelled
+                    # after that point (e.g. during service discovery).
+                    _LOGGER.info(
+                        "Releasing the failed connect to %s without "
+                        "disconnecting: session %s uses the link",
+                        discovered_address,
+                        ", ".join(sharing),
+                    )
+                    self._release_client(client, session_id)
+                else:
+                    await asyncio.shield(self._abort_connect(client))
             raise
         finally:
             if in_flight:
                 # The session (if any) is stored right after this, and
                 # _resume_scanner() doesn't suspend, so it's never unaccounted for
                 self._connects_in_flight -= 1
+                left = self._connecting.get(connect_key, 0) - 1
+                if left > 0:
+                    self._connecting[connect_key] = left
+                else:
+                    self._connecting.pop(connect_key, None)
             # Best effort: a failed scanner restart must not lose a session
             # that is up, or replace the connect's own error
             try:
@@ -1272,6 +1326,9 @@ class BLESessionManager:
             except Exception:
                 _LOGGER.warning("Could not resume BLE scanner", exc_info=True)
 
+        # Ordered by when sessions are stored, which is what disconnect_session
+        # relies on (concurrent connects may finish in either order)
+        session.serial = next(_session_serials)
         self._sessions[session_id] = session
         if session.adapter:
             self._last_adapter[discovered_address.upper()] = session.adapter
@@ -1379,6 +1436,10 @@ class BLESessionManager:
         if not session.is_connected:
             raise RuntimeError("BLE device is disconnected")
 
+        # A poll is client activity, also when it returns buffered data at
+        # once (notifications themselves don't count, see create_session)
+        session.last_activity = datetime.now(UTC)
+
         notifications = []
 
         # First, hand out everything already buffered, removing it from the
@@ -1478,20 +1539,88 @@ class BLESessionManager:
                 "has_more": False,
             }
 
-    async def disconnect_session(self, session_id: str) -> None:
+    async def disconnect_session(self, session_id: str, *, idle: bool = False) -> None:
         """Disconnect BLE session and cleanup.
+
+        Sessions to the same device share one BlueZ link (bleak skips Connect
+        when the device is already connected), and disconnecting any of their
+        clients drops it for all. So a session is closed without dropping the
+        link while another one needs it: a newer session, or a connect to the
+        device in progress, or for an idle session (`idle`, from the cleanup)
+        any other session. Otherwise the link is dropped, which also closes
+        the older sessions to the device (e.g. left behind when the client
+        restarted).
 
         Args:
             session_id: Session identifier to disconnect
+            idle: Closed by the idle cleanup rather than the client
 
         Raises:
             ValueError: If session_id is invalid
         """
-        session = self._sessions.pop(session_id, None)
+        session = self._sessions.get(session_id)
         if not session:
             raise ValueError(f"Invalid session_id: {session_id}")
+        address = session.address.upper()
+        same_device = [
+            other
+            for other in self._sessions.values()
+            if other is not session
+            and other.address.upper() == address
+            and self._link_up(other)
+        ]
+        newer = [o for o in same_device if o.serial > session.serial]
+        older = [o for o in same_device if o.serial < session.serial]
+        keepers = [o.session_id for o in (same_device if idle else newer)]
+        if self._connecting.get(address):
+            keepers.append("a connect in progress")
+        del self._sessions[session_id]
+
+        if keepers:
+            # Also when this session's own flag says disconnected: a failed
+            # write sets it while the shared link is still up
+            _LOGGER.info(
+                "Closing BLE session %s without disconnecting %s: still used by %s",
+                session_id,
+                session.address,
+                ", ".join(keepers),
+            )
+            await self._release_session(session)
+            return
 
         _LOGGER.info("Disconnecting BLE session %s", session_id)
+        await self._close_session_client(session)
+
+        # The link is down now (or going down), which ends the older
+        # sessions too; close their clients as well
+        for other in older:
+            if self._sessions.pop(other.session_id, None) is None:
+                continue  # Closed meanwhile
+            _LOGGER.info(
+                "Closing BLE session %s too: it shared the link to %s",
+                other.session_id,
+                other.address,
+            )
+            other.mark_disconnected()
+            await self._close_session_client(other)
+
+    @staticmethod
+    def _link_up(session: BLESession) -> bool:
+        """Return True if a session's BLE link may still be up.
+
+        Its own flag isn't enough: a failed write sets it while the link
+        stays up, and disconnecting the client would still drop that link.
+        """
+        if session.is_connected:
+            return True
+        try:
+            return bool(session.client.is_connected)
+        except Exception:  # noqa: BLE001 - treat as down
+            return False
+
+    @staticmethod
+    async def _close_session_client(session: BLESession) -> None:
+        """Stop notifications and disconnect a session's client."""
         try:
             await session.client.stop_notify(NOTIFY_UUID)
         except Exception:
@@ -1501,6 +1630,57 @@ class BLESessionManager:
             await session.client.disconnect()
         except Exception:
             _LOGGER.debug("Error disconnecting client", exc_info=True)
+
+    async def _release_session(self, session: BLESession) -> None:
+        """Close a session's client without dropping the shared BLE link.
+
+        Its notifications stop (BlueZ tracks them per D-Bus connection) and
+        its D-Bus connection is closed, which bleak has no public call for.
+        If bleak's internals differ from what this expects, the client is
+        left as it is (a small leak) rather than risking the link.
+        """
+        session.mark_disconnected()
+        client = session.client
+        try:
+            await client.stop_notify(NOTIFY_UUID)
+        except Exception:
+            _LOGGER.debug("Error stopping notifications", exc_info=True)
+        self._release_client(client, session.session_id)
+
+    @staticmethod
+    def _release_client(client: BleakClient, label: str) -> None:
+        """Close a client's D-Bus connection without disconnecting the device.
+
+        Closing it also ends any notifications it started (BlueZ tracks them
+        per D-Bus connection). Doesn't suspend, so it can't be cut short.
+        """
+        backend = getattr(client, "_backend", None)
+        bus = getattr(backend, "_bus", None)
+        cleanup = getattr(backend, "_cleanup_all", None)
+        if bus is None or not callable(cleanup):
+            _LOGGER.debug(
+                "Can't release the client of %s (unexpected bleak "
+                "internals), leaving it open",
+                label,
+            )
+            return
+        try:
+            # Ends bleak's disconnect monitor without its Disconnect call,
+            # and stops watching the device (no disconnected callback)
+            monitor = getattr(backend, "_disconnect_monitor_event", None)
+            if monitor is not None:
+                monitor.set()
+                backend._disconnect_monitor_event = None
+            cleanup()
+            backend._is_connected = False
+            backend._bus = None  # A later disconnect() is a no-op
+            bus.disconnect()
+        except Exception:
+            _LOGGER.debug(
+                "Error releasing the client of %s",
+                label,
+                exc_info=True,
+            )
 
     def get_session_info(self, session_id: str) -> dict | None:
         """Get information about a session.
