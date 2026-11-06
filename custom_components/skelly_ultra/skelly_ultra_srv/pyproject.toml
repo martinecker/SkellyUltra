@@ -14,5 +14,8 @@ dependencies = [
     "bleak>=0.21.0",
 ]
 
-[project.scripts]
-skelly-ultra-server = "skelly_ultra_srv.server:main"
+# This folder is the skelly_ultra_srv package itself, run from its parent
+# folder with `python -m skelly_ultra_srv.server`, so `pip install .` here
+# only installs the dependencies
+[tool.setuptools]
+py-modules = []

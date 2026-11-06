@@ -1,26 +1,22 @@
+# Skelly Ultra REST server as a systemd *user* service, so it can reach your
+# PipeWire session for audio. See "Option 4" in README.md:
+#   cp skelly-ultra-server.service ~/.config/systemd/user/
+#   systemctl --user enable --now skelly-ultra-server
+#   sudo loginctl enable-linger $USER   # start at boot without a login
 [Unit]
-Description=Skelly Ultra REST Server for Bluetooth Classic Audio
-Documentation=https://github.com/martinecker/home-assistant-core
-After=network.target bluetooth.target pipewire.service
-Wants=bluetooth.target
+Description=Skelly Ultra REST Server (Bluetooth Classic audio and BLE proxy)
+Documentation=https://github.com/martinecker/SkellyUltra
+After=pipewire.service wireplumber.service
+Wants=pipewire.service wireplumber.service
 
 [Service]
 Type=simple
-# Run as root to enable automatic Bluetooth pairing via D-Bus
-# If you don't need automatic pairing, you can set User=YOUR_USERNAME_HERE instead
-User=root
-Group=root
-WorkingDirectory=/path/to/custom_components/skelly_ultra
-ExecStart=/usr/bin/python3 -m skelly_ultra_srv.server
+# %h is your home folder. Set these to the folder that contains
+# skelly_ultra_srv and to the Python of your virtual environment.
+WorkingDirectory=%h/SkellyUltra/custom_components/skelly_ultra
+ExecStart=%h/skelly-venv/bin/python3 -m skelly_ultra_srv.server
 Restart=always
 RestartSec=10
-StandardOutput=journal
-StandardError=journal
-
-# Security hardening
-# Note: NoNewPrivileges and ProtectSystem are relaxed to allow D-Bus system bus access
-PrivateTmp=true
-ReadWritePaths=/tmp
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

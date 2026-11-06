@@ -51,25 +51,48 @@ For details see the [🔷 BLE Proxy Endpoints](#-ble-proxy-endpoints)
 ```bash
 # On Debian/Ubuntu
 sudo apt-get update
-sudo apt-get install bluez pipewire-bin pulseaudio-utils python3-pip
+sudo apt-get install bluez pipewire-bin pulseaudio-utils python3-venv
 
 # On Fedora
 sudo dnf install bluez pipewire-utils pulseaudio-utils python3-pip
 ```
 
-To install the Python dependencies, which are specified in `pyproject.toml`, simply run `pip`:
+Install the Python dependencies, which are specified in `pyproject.toml`, into a virtual environment (newer distributions, including Raspberry Pi OS, refuse a system-wide `pip install`):
 
 ```bash
-cd /path/to/custom_components/skelly_ultra/skelly_ultra_srv
-pip3 install .
+python3 -m venv ~/skelly-venv
+~/skelly-venv/bin/pip install /path/to/custom_components/skelly_ultra/skelly_ultra_srv
 ```
 
-When using the system Python environment instead of a virtual environment, on some Linux distributions you may instead have to manually install these dependencies via `sudo apt-get` using distribution-provided packages.
-These will often have a `python3-` prefix followed by the package name, for example:
+This only installs the dependencies; the server itself runs from its folder (see [Running the Server](#-running-the-server)). Run the commands there with the virtual environment's Python, or activate it first with `source ~/skelly-venv/bin/activate`.
 
-```bash
-sudo apt install python3-dbus-next
-```
+If you'd rather use the system Python, install the dependencies from your distribution's packages instead. These usually have a `python3-` prefix, for example `sudo apt install python3-aiohttp python3-dbus-next`. Check that the packaged versions are new enough (`pyproject.toml`); Debian bookworm's `python3-bleak`, for example, is too old, so a virtual environment is the safer choice.
+
+### 🍓 Headless Raspberry Pi OS Lite
+
+Without a desktop nobody is logged in at the Pi, so a few extra steps are needed:
+
+- **WirePlumber**: By default WirePlumber 0.5 only enables Bluetooth audio for the user logged in at the machine's seat. On a headless Pi there is none, and connecting a Skelly's speaker fails with `br-connection-profile-unavailable`. Turn seat monitoring off for your user:
+
+  ```bash
+  mkdir -p ~/.config/wireplumber/wireplumber.conf.d
+  nano ~/.config/wireplumber/wireplumber.conf.d/50-skelly-bluez.conf
+  ```
+
+  with this content:
+
+  ```
+  wireplumber.profiles = {
+    main = {
+      monitor.bluez.seat-monitoring = disabled
+    }
+  }
+  ```
+
+  Then restart WirePlumber: `systemctl --user restart wireplumber`
+
+- **Start at boot**: Your user's services (PipeWire, WirePlumber and the server, see [Option 4](#-option-4-as-a-systemd-user-service-recommended-for-production)) only run while you're logged in, unless you enable lingering: `sudo loginctl enable-linger $USER`.
+- **USB Bluetooth dongle**: See [Everything keeps reconnecting after the USB dongle reset](#-everything-keeps-reconnecting-after-the-usb-dongle-reset-no-hci0) in Troubleshooting.
 
 ### 2. Docker Installation (Alternative)
 
@@ -121,35 +144,36 @@ server = SkellyUltraServer(host="0.0.0.0", port=8765)
 server.run()
 ```
 
-### 🔄 Option 4: As a systemd service (recommended for production)
+### 🔄 Option 4: As a systemd user service (recommended for production)
 
-A systemd service file is provided: `skelly-ultra-server.service`
+A systemd service file is provided: `skelly-ultra-server.service`. It runs as a *user* service, as your user, because audio playback needs your user's PipeWire session (a service running as root can't reach it). Pairing still works through `sudo`, see [Bluetooth Pairing](#-important-bluetooth-pairing).
 
-1. Edit the service file to set your username and paths:
+1. Copy it to your user's systemd folder:
 
    ```bash
-   nano skelly-ultra-server.service
+   mkdir -p ~/.config/systemd/user
+   cp skelly-ultra-server.service ~/.config/systemd/user/
    ```
 
-2. Copy to systemd directory:
+2. Edit `WorkingDirectory` (the folder that contains `skelly_ultra_srv`) and `ExecStart` (your virtual environment's Python) if they differ from the defaults:
 
    ```bash
-   sudo cp skelly-ultra-server.service /etc/systemd/system/
+   nano ~/.config/systemd/user/skelly-ultra-server.service
    ```
 
-3. Enable and start:
+3. Enable and start it, and let it start at boot without a login:
 
    ```bash
-   sudo systemctl daemon-reload
-   sudo systemctl enable skelly-ultra-server
-   sudo systemctl start skelly-ultra-server
-   sudo systemctl status skelly-ultra-server
+   systemctl --user daemon-reload
+   systemctl --user enable --now skelly-ultra-server
+   sudo loginctl enable-linger $USER
+   systemctl --user status skelly-ultra-server
    ```
 
 4. View logs:
 
    ```bash
-   sudo journalctl -u skelly-ultra-server -f
+   journalctl --user -u skelly-ultra-server -f
    ```
 
 ### 🐳 Option 5: Using Docker (containerized deployment)
@@ -242,21 +266,29 @@ If you see `(ALL) NOPASSWD: ALL` or similar, you can **skip this setup** - your 
 
 **If sudo prompts for a password**, configure passwordless sudo for the Python executable:
 
-1. **Add to sudoers**:
+1. **Find the Python the server runs with.** The server runs `sudo -n <its own Python>`, so the rule must name exactly that path. For a virtual environment:
+
+   ```bash
+   ~/skelly-venv/bin/python3 -c "import sys; print(sys.executable)"
+   ```
+
+   Use the same `python3` or `python` name as the command that starts the server (e.g. `ExecStart` in the service file).
+
+2. **Add to sudoers**:
 
    ```bash
    sudo visudo -f /etc/sudoers.d/skelly-ultra-server
    ```
 
-2. **Add this line** (replace `your_username` with your actual username):
+3. **Add this line** (replace `your_username` with your actual username and the path with the one from step 1):
 
    ```
-   your_username ALL=(ALL) NOPASSWD: /usr/bin/python3
+   your_username ALL=(ALL) NOPASSWD: /home/your_username/skelly-venv/bin/python3
    ```
 
-3. **Save and exit** (Ctrl+X, then Y, then Enter)
+4. **Save and exit** (Ctrl+X, then Y, then Enter)
 
-**Note:** This configuration only grants passwordless access to the Python executable, not all commands. If you already have broader sudo access (like on Raspberry Pi OS), this explicit rule is redundant but harmless.
+**Note:** Passwordless sudo for a Python interpreter lets that user run anything as root, so only add it for a user you'd trust with root anyway. If you already have broader sudo access (like on Raspberry Pi OS), this explicit rule is redundant but harmless.
 
 #### Running the Server
 
@@ -295,7 +327,7 @@ curl -X POST http://localhost:8765/classic/pair_and_trust_by_mac \
 
 #### Requirements
 
-- Python package: `pydbus` (included in `pyproject.toml`)
+- Python package: `dbus-next` (included in `pyproject.toml`)
 - Sudo access for pairing (configured above)
 - Device must be in pairing mode and within range. Pairing mode is automatically enabled by the HA integration if called from it. See the HA integration service `skelly_ultra.enable_classic_bt`.
 
