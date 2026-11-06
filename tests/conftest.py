@@ -55,6 +55,22 @@ def no_real_bluetooth(mock_bleak_scanner_start, mock_bluetooth_adapters):
 
 
 @pytest.fixture(autouse=True)
+def no_ffmpeg_version_probe():
+    """Skip the ffmpeg integration's `ffmpeg -version` call at setup.
+
+    The integration depends on ffmpeg, whose setup runs that probe. On a slow
+    CI runner the first ffmpeg start can take over 10s; haffmpeg then times
+    out and kills it, and under Python 3.14 that leaves a stray read task that
+    fails the test's teardown. The tests never use the probed version, and the
+    audio conversions still run the real ffmpeg.
+    """
+    with patch(
+        "homeassistant.components.ffmpeg.FFVersion.get_version", return_value="6.0"
+    ):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def onboarded():
     """Behave like an installation that has finished onboarding.
 
