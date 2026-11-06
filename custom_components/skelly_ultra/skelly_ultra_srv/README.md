@@ -1488,6 +1488,14 @@ curl http://localhost:8765/classic/status
   - pulseaudio
   - pulseaudio-utils
 
+### 🔁 Everything keeps reconnecting after the USB dongle reset (no `hci0`)
+
+If a USB Bluetooth dongle hangs (for example `command 0x2005 tx timeout` in `dmesg`), the kernel resets it and it can come back as `hci1`. When there is then no `hci0` at all (e.g. the dongle is the only adapter because the built-in one is disabled), BlueZ 5.82's `bluetoothd` exits every time an A2DP stream starts, logging `avdtp_set_priority() Can't open device hci0: No such device`. systemd restarts it, all BLE and live-mode links drop and reconnect, and the cycle repeats.
+
+- Check the adapter names: `hciconfig` or `bluetoothctl list`, and look for the error with `journalctl -u bluetooth`.
+- Reboot (or unplug and replug the dongle) to get it back as `hci0`.
+- To keep the dongle from hanging and resetting, turn off USB autosuspend for Bluetooth: `echo "options btusb enable_autosuspend=0" | sudo tee /etc/modprobe.d/btusb.conf`, then reboot.
+
 ### 🔐 Permission issues
 
 - Make sure your user is in the `bluetooth` group: `sudo usermod -aG bluetooth $USER`
