@@ -21,3 +21,6 @@ home-assistant-frontend==20260930.5
 mutagen==1.48.1
 ha-ffmpeg==3.2.2
 pydub>=0.25.1
+
+# The REST server (skelly_ultra_srv), which tests/test_srv_*.py import
+dbus-next==0.2.3

@@ -164,8 +164,13 @@ async def test_idle_cleanup_keeps_the_active_session(monkeypatch) -> None:
     old.last_activity = datetime.now(UTC) - timedelta(minutes=5)
 
     sleeps = 0
+    real_sleep = asyncio.sleep
 
-    async def fake_sleep(delay: float) -> None:
+    async def fake_sleep(delay: float, *args) -> None:
+        # This patches asyncio.sleep everywhere, Home Assistant's test
+        # instance included, so only the cleanup loop's 1-minute wait is faked
+        if delay != 60:
+            return await real_sleep(delay, *args)
         nonlocal sleeps
         sleeps += 1
         if sleeps > 1:
