@@ -59,4 +59,23 @@ export function register(): void {
 	}
 }
 
+// Home Assistant's app installs a polyfill for scoped custom element
+// registries, which replaces window.customElements. HA loads this bundle in
+// parallel with its app, so once the bundle is in the browser cache it can run
+// before the polyfill: its elements then land only in the browser's registry,
+// HA doesn't find them there, and dashboards say "Custom element doesn't
+// exist". So register again in the new registry once HA's app has defined its
+// root element. The polyfill accepts an element that the browser's registry
+// already has.
+export function registerAgainAfterHaBoots(
+	registryAtLoad: CustomElementRegistry = window.customElements,
+): Promise<void> {
+	return registryAtLoad.whenDefined("home-assistant").then(() => {
+		if (window.customElements !== registryAtLoad) {
+			register();
+		}
+	});
+}
+
 register();
+void registerAgainAfterHaBoots();

@@ -6744,5 +6744,10 @@ function Pa() {
 	for (let [e, t] of Na) customElements.get(e) || customElements.define(e, t);
 	window.customCards = window.customCards ?? [], window.customCards.some((e) => e.type === "skelly-ultra-card") || window.customCards.push(Lt);
 }
-Pa();
-export { Pa as register };
+function Fa(e = window.customElements) {
+	return e.whenDefined("home-assistant").then(() => {
+		window.customElements !== e && Pa();
+	});
+}
+Pa(), Fa();
+export { Pa as register, Fa as registerAgainAfterHaBoots };
