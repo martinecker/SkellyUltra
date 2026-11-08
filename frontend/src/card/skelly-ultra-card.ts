@@ -13,6 +13,7 @@ import { formatFree, orderedFiles } from "../api/files";
 import { FilesSubscription } from "../api/files-subscription";
 import { type FileRef, PlaybackTracker } from "../api/playback";
 import type { FilesPayload } from "../api/types";
+import type { LiveOpenEventDetail } from "../components/sk-live-controls";
 import type { SkTtsForm, TtsChangeDetail } from "../components/sk-tts-form";
 import {
 	CARD_EDITOR_ELEMENT,
@@ -30,6 +31,8 @@ export interface SkellyUltraCardConfig extends LovelaceCardConfig {
 	tts_entity?: string;
 	show_tts?: boolean;
 	show_files?: boolean;
+	// The collapsible live controls section (eye icon, movement, lights)
+	show_live?: boolean;
 	max_files?: number;
 }
 
@@ -41,7 +44,10 @@ export function withDefaults(
 	config: SkellyUltraCardConfig,
 ): SkellyUltraCardConfig &
 	Required<
-		Pick<SkellyUltraCardConfig, "show_tts" | "show_files" | "max_files">
+		Pick<
+			SkellyUltraCardConfig,
+			"show_tts" | "show_files" | "show_live" | "max_files"
+		>
 	> {
 	return {
 		...config,
@@ -49,6 +55,7 @@ export function withDefaults(
 		tts_entity: config.tts_entity ?? undefined,
 		show_tts: config.show_tts ?? true,
 		show_files: config.show_files ?? true,
+		show_live: config.show_live ?? true,
 		max_files: config.max_files ?? DEFAULT_MAX_FILES,
 	};
 }
@@ -68,8 +75,8 @@ export function configProblem(
 	if (!text("tts_entity")) {
 		return "tts_entity must be text";
 	}
-	if (!flag("show_tts") || !flag("show_files")) {
-		return "show_tts and show_files must be true or false";
+	if (!flag("show_tts") || !flag("show_files") || !flag("show_live")) {
+		return "show_tts, show_files and show_live must be true or false";
 	}
 	const max = config.max_files;
 	if (
@@ -81,6 +88,18 @@ export function configProblem(
 		return `max_files must be a whole number from 1 to ${MAX_FILES_LIMIT}`;
 	}
 	return undefined;
+}
+
+// localStorage key prefix remembering, per Skelly, that a card's live
+// controls are open in this browser
+const LIVE_OPEN_KEY = "skelly_ultra.card.live_open.";
+
+function storedLiveOpen(deviceId: string): boolean {
+	try {
+		return localStorage.getItem(LIVE_OPEN_KEY + deviceId) === "1";
+	} catch {
+		return false;
+	}
 }
 
 // How long (in ms) a live mode that was turned on has to show as connected
@@ -110,6 +129,8 @@ export class SkellyUltraCard extends LitElement {
 	@state() private _busyFile?: number;
 	// Whether HA lists the configured Skelly: undefined until known
 	@state() private _known?: boolean;
+	// The live controls are open, and for which Skelly
+	@state() private _liveOpen?: { deviceId: string; open: boolean };
 	// The Skelly last looked up, and when (Date.now())
 	private _knownFor?: string;
 	private _knownAt = 0;
@@ -156,6 +177,7 @@ export class SkellyUltraCard extends LitElement {
 		return (
 			1 +
 			(config.show_tts ? 3 : 0) +
+			(config.show_live ? 1 : 0) +
 			(config.show_files ? Math.ceil(config.max_files / 2) + 1 : 0)
 		);
 	}
@@ -495,6 +517,7 @@ export class SkellyUltraCard extends LitElement {
 					: nothing
 			}
 			${config.show_tts ? this._renderTts(config, payload, available, transferring, reading) : nothing}
+			${config.show_live && payload ? this._renderLive(config.device_id, payload, available, transferring) : nothing}
 			${config.show_files && payload ? this._renderFiles(config, payload, available, transferring, reading) : nothing}
 		`;
 	}
@@ -714,6 +737,49 @@ export class SkellyUltraCard extends LitElement {
 			<span class="dot ${live === "on" ? "live" : live === "connecting" ? "reloading" : ""}" aria-hidden="true"></span>
 			${strings.cardLive}
 		</button>`;
+	}
+
+	private _renderLive(
+		deviceId: string,
+		payload: FilesPayload,
+		available: boolean,
+		transferring: boolean,
+	) {
+		const open =
+			this._liveOpen?.deviceId === deviceId
+				? this._liveOpen.open
+				: storedLiveOpen(deviceId);
+		return html`<section class="live-controls">
+			<sk-live-controls
+				.hass=${this.hass}
+				.profile=${payload.device_profile}
+				.controls=${payload.live_controls}
+				?open=${open}
+				narrow
+				.disabledReason=${
+					!available
+						? strings.cardNotConnected
+						: transferring
+							? strings.liveBusyTransfer
+							: undefined
+				}
+				@sk-live-open=${(ev: CustomEvent<LiveOpenEventDetail>) =>
+					this._onLiveOpen(deviceId, ev.detail.open)}
+			></sk-live-controls>
+		</section>`;
+	}
+
+	private _onLiveOpen(deviceId: string, open: boolean) {
+		this._liveOpen = { deviceId, open };
+		try {
+			if (open) {
+				localStorage.setItem(LIVE_OPEN_KEY + deviceId, "1");
+			} else {
+				localStorage.removeItem(LIVE_OPEN_KEY + deviceId);
+			}
+		} catch {
+			// Not remembered, e.g. in a private window
+		}
 	}
 
 	private _renderFiles(

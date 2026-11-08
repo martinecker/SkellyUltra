@@ -6,6 +6,7 @@ import { errorMessage } from "../api/actions";
 import { listDevices } from "../api/devices";
 import { RETRY_DELAYS } from "../api/files-subscription";
 import type { SkellyDevice } from "../api/types";
+import type { LiveOpenEventDetail } from "../components/sk-live-controls";
 import type { HomeAssistant, PanelInfo } from "../ha-types";
 import { strings } from "../strings";
 import { sharedStyles } from "../styles";
@@ -33,6 +34,27 @@ function storedDetails(): boolean {
 		return localStorage.getItem(DETAILS_KEY) === "1";
 	} catch {
 		return false;
+	}
+}
+
+// localStorage key remembering the Skellies whose live controls were opened
+// in this browser (their device_ids or entry_ids); the others' are closed,
+// as on the card
+const LIVE_OPEN_KEY = "skelly_ultra.panel.live_open";
+
+function storedLiveOpen(): ReadonlySet<string> {
+	try {
+		const stored: unknown = JSON.parse(
+			localStorage.getItem(LIVE_OPEN_KEY) ?? "[]",
+		);
+		return new Set(
+			Array.isArray(stored)
+				? stored.filter((id): id is string => typeof id === "string")
+				: [],
+		);
+	} catch {
+		// Not readable, e.g. in a private window, or not valid: all closed
+		return new Set();
 	}
 }
 
@@ -83,6 +105,8 @@ export class SkellyUltraPanel extends LitElement {
 	// Lists files instead of a table: the panel is less than 600 px wide
 	@state() private _compact = false;
 	@state() private _details = storedDetails();
+	// Skellies whose live controls are open (idOf); the others' are closed
+	@state() private _liveOpen = storedLiveOpen();
 	// entry_id of the Skelly a new file is being sent to
 	@state() private _sendingTo?: string;
 
@@ -232,6 +256,29 @@ export class SkellyUltraPanel extends LitElement {
 		}
 	}
 
+	// Opens or closes one Skelly's live controls, and remembers it
+	private _onLiveOpen(
+		device: SkellyDevice,
+		ev: CustomEvent<LiveOpenEventDetail>,
+	): void {
+		const open = new Set(this._liveOpen);
+		if (ev.detail.open) {
+			open.add(idOf(device));
+		} else {
+			open.delete(idOf(device));
+		}
+		this._liveOpen = open;
+		try {
+			if (open.size) {
+				localStorage.setItem(LIVE_OPEN_KEY, JSON.stringify([...open]));
+			} else {
+				localStorage.removeItem(LIVE_OPEN_KEY);
+			}
+		} catch {
+			// Not remembered, e.g. in a private window
+		}
+	}
+
 	static styles = [
 		sharedStyles,
 		css`
@@ -366,10 +413,13 @@ export class SkellyUltraPanel extends LitElement {
 								?narrow=${this.narrow}
 								?compact=${this._compact}
 								?details=${this._details}
+								.liveOpen=${this._liveOpen.has(idOf(d))}
 								?named=${shown.length > 1}
 								.sendingTo=${this._sendingTo}
 								.onSending=${this._onSending}
 								@sk-details=${this._onDetails}
+								@sk-live-open=${(ev: CustomEvent<LiveOpenEventDetail>) =>
+									this._onLiveOpen(d, ev)}
 							></sk-skelly-files>`,
 						)
 					: html`<ha-card>

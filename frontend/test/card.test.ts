@@ -260,14 +260,84 @@ describe("card", () => {
 			card.setConfig({ type: "x", device_id: 1 } as never),
 		).toThrow();
 		card.setConfig({ type: "x", device_id: DEVICE_ID });
-		expect(card.getCardSize()).toBe(1 + 3 + 4);
+		expect(() => card.setConfig({ type: "x", show_live: 1 } as never)).toThrow(
+			"show_live",
+		);
+		card.setConfig({ type: "x", device_id: DEVICE_ID });
+		expect(card.getCardSize()).toBe(1 + 3 + 1 + 4);
 		card.setConfig({
 			type: "x",
 			device_id: DEVICE_ID,
 			show_tts: false,
+			show_live: false,
 			max_files: 2,
 		});
 		expect(card.getCardSize()).toBe(1 + 2);
+	});
+
+	it("shows the live controls collapsed, remembering them opened", async () => {
+		const { hass } = fakeHass();
+		const volume = base.live_controls.volume_entity as string;
+		hass.states[volume] = { entity_id: volume, state: "30", attributes: {} };
+		const card = await showCard({ device_id: DEVICE_ID }, hass);
+		const controls = () =>
+			root(card).querySelector("sk-live-controls") as HTMLElement & {
+				open: boolean;
+				narrow: boolean;
+				disabledReason?: string;
+				shadowRoot: ShadowRoot;
+			};
+		expect(controls().open).toBe(false);
+		expect(controls().narrow).toBe(true);
+		expect(controls().disabledReason).toBeUndefined();
+		(
+			controls().shadowRoot.querySelector("button.head") as HTMLButtonElement
+		).click();
+		await settle(card);
+		expect(controls().open).toBe(true);
+		expect(
+			(controls().shadowRoot.querySelector("input.volume") as HTMLInputElement)
+				.value,
+		).toBe("30");
+		expect(
+			localStorage.getItem(`skelly_ultra.card.live_open.${DEVICE_ID}`),
+		).toBe("1");
+		// Another card of the same Skelly opens it too, once shown
+		const other = await showCard({ device_id: DEVICE_ID }, hass);
+		expect(
+			(
+				root(other).querySelector("sk-live-controls") as HTMLElement & {
+					open: boolean;
+				}
+			).open,
+		).toBe(true);
+		(
+			controls().shadowRoot.querySelector("button.head") as HTMLButtonElement
+		).click();
+		await settle(card);
+		expect(controls().open).toBe(false);
+		expect(
+			localStorage.getItem(`skelly_ultra.card.live_open.${DEVICE_ID}`),
+		).toBeNull();
+	});
+
+	it("leaves the live controls out if set so", async () => {
+		const card = await showCard({ device_id: DEVICE_ID, show_live: false });
+		expect(root(card).querySelector("sk-live-controls")).toBeNull();
+	});
+
+	it("can't use the live controls while the Skelly is disconnected", async () => {
+		const { hass, send } = fakeHass();
+		const card = await showCard({ device_id: DEVICE_ID }, hass);
+		send({ ...payload, available: false });
+		await settle(card);
+		expect(
+			(
+				root(card).querySelector("sk-live-controls") as HTMLElement & {
+					disabledReason?: string;
+				}
+			).disabledReason,
+		).toBe("The Skelly is not connected");
 	});
 
 	it("asks for a Skelly when none is set", async () => {

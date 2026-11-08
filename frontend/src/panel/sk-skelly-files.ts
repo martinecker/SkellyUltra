@@ -87,6 +87,8 @@ export class SkSkellyFiles extends LitElement {
 	@property({ type: Boolean }) compact = false;
 	// Shows the Details columns
 	@property({ type: Boolean }) details = false;
+	// Shows the live controls opened (the panel keeps this for every Skelly)
+	@property({ type: Boolean }) liveOpen = false;
 	// Other Skellies are shown too: toasts say which Skelly they're about
 	@property({ type: Boolean }) named = false;
 	// entry_id of the Skelly a new file is being sent to, from any card of
@@ -272,6 +274,11 @@ export class SkSkellyFiles extends LitElement {
 				color: var(--secondary-text-color);
 			}
 
+			sk-live-controls {
+				margin-bottom: 8px;
+				border-bottom: 1px solid var(--divider-color);
+			}
+
 			sk-file-table.stale {
 				opacity: 0.5;
 			}
@@ -358,6 +365,25 @@ export class SkSkellyFiles extends LitElement {
 					: nothing
 			}
 			${this._renderSmallChunks(live, payload)}
+			${
+				payload
+					? html`<sk-live-controls
+							.hass=${this.hass}
+							.profile=${payload.device_profile}
+							.controls=${payload.live_controls}
+							?open=${this.liveOpen}
+							?narrow=${this.compact}
+							.disabledReason=${
+								!live || !payload.available
+									? strings.cardNotConnected
+									: transferring
+										? strings.liveBusyTransfer
+										: undefined
+							}
+							.onError=${this._onLiveError}
+						></sk-live-controls>`
+					: nothing
+			}
 			<sk-transfer-bar
 				.transfer=${transfer}
 				?cancelling=${this._cancelling}
@@ -974,6 +1000,9 @@ export class SkSkellyFiles extends LitElement {
 			}),
 		);
 	}
+
+	private readonly _onLiveError = (message: string): void =>
+		this._toast(message);
 
 	private _toast(
 		message: string,

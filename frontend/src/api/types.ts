@@ -103,6 +103,29 @@ export interface FilesPayload {
 		switch_entity: string | null;
 		speaker_entity: string | null;
 	};
+	// The entities that change the Skelly right now, for the live controls
+	live_controls: LiveControls;
+}
+
+// The entities behind the live controls, as far as the Skelly's profile has
+// them (null: not in the entity registry; a disabled one has no state). The
+// UI reads their states and calls their services, like any automation.
+export interface LiveControls {
+	eye_icon_entity: string | null;
+	volume_entity: string | null;
+	// In profile order, like DeviceProfile.movements
+	movements: { part: string; entity: string | null }[];
+	trigger_movement_entity: string | null;
+	// In profile order, like DeviceProfile.lights
+	lights: LiveLight[];
+}
+
+export interface LiveLight {
+	channel: number;
+	light_entity: string | null;
+	effect_mode_entity: string | null;
+	effect_speed_entity: string | null;
+	color_cycle_entity: string | null;
 }
 
 // One file transfer override. The entities change it (null: not found in

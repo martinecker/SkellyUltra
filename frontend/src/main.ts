@@ -9,6 +9,7 @@ import { SkAddFileDialog } from "./components/sk-add-file-dialog";
 import { SkConfirm } from "./components/sk-confirm";
 import { SkEditDialog } from "./components/sk-edit-dialog";
 import { SkFileTable } from "./components/sk-file-table";
+import { SkLiveControls } from "./components/sk-live-controls";
 import { SkMediaBrowser } from "./components/sk-media-browser";
 import { SkTransferBar } from "./components/sk-transfer-bar";
 import { SkTransferSettings } from "./components/sk-transfer-settings";
@@ -20,6 +21,7 @@ import {
 	CONFIRM_ELEMENT,
 	EDIT_DIALOG_ELEMENT,
 	FILE_TABLE_ELEMENT,
+	LIVE_CONTROLS_ELEMENT,
 	MEDIA_BROWSER_ELEMENT,
 	PANEL_ELEMENT,
 	SKELLY_FILES_ELEMENT,
@@ -39,6 +41,7 @@ const ELEMENTS: [string, CustomElementConstructor][] = [
 	[TRANSFER_SETTINGS_ELEMENT, SkTransferSettings],
 	[TTS_FORM_ELEMENT, SkTtsForm],
 	[ADD_FILE_DIALOG_ELEMENT, SkAddFileDialog],
+	[LIVE_CONTROLS_ELEMENT, SkLiveControls],
 	[SKELLY_FILES_ELEMENT, SkSkellyFiles],
 	[PANEL_ELEMENT, SkellyUltraPanel],
 	[CARD_ELEMENT, SkellyUltraCard],

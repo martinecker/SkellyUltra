@@ -230,6 +230,20 @@ export const strings = {
 	deleteMessage: (name: string) =>
 		`Delete ${name} from the Skelly? This can't be undone.`,
 	cancel: "Cancel",
+	// Live controls (panel and card)
+	liveControls: "Live controls",
+	liveNone:
+		"No live controls: the Skelly's eye icon, movement, light and volume entities are disabled in Home Assistant.",
+	liveLights: "Lights",
+	liveLightOn: "On",
+	liveColorOff: "Color; picking one turns the light on",
+	liveMove: "Move",
+	liveMoveTitle: "Move the ticked parts once more",
+	liveMoveNone: "Tick a part to move first",
+	liveVolume: "Volume",
+	liveFailed: (message: string) => `Couldn't change the Skelly: ${message}`,
+	liveBusyTransfer:
+		"A file is being sent to the Skelly; try again once it's done.",
 	// Card
 	cardNoDevice: "Pick a Skelly in the card's settings.",
 	cardUnknownDevice:
@@ -267,6 +281,7 @@ export const strings = {
 	editorShowTts: "Show the text-to-speech box",
 	editorShowFiles: "Show files",
 	editorMaxFiles: "Files to show",
+	editorShowLive: "Show the live controls (eye icon, movement, lights, volume)",
 	cardName: "Skelly Ultra",
 	cardDescription:
 		"Shows a Skelly's status, says text through it and plays its files.",

@@ -29,6 +29,7 @@ describe("card editor", () => {
 			type: "custom:skelly-ultra-card",
 			device_id: "abc",
 			show_tts: true,
+			show_live: true,
 			show_files: true,
 			max_files: 5,
 		});

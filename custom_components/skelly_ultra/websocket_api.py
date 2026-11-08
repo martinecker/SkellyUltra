@@ -287,6 +287,58 @@ def _transfer_settings(
     }
 
 
+def _live_controls(
+    hass: HomeAssistant, entry: ConfigEntry, profile: dict
+) -> dict[str, Any]:
+    """Return the entities that change the Skelly right now, as available.
+
+    A UI reads their states and calls their services (light.turn_on,
+    select.select_option, number.set_value, switch.turn_on, button.press),
+    like any automation. Each is None when it isn't in the entity registry;
+    a disabled one is listed but has no state. Only what the device's
+    profile has is listed: e.g. no eye icon on Lethal Lily.
+    """
+    entry_id = entry.entry_id
+    return {
+        "eye_icon_entity": (
+            _entity_id(hass, "select", f"{entry_id}_eye_icon")
+            if profile.get("has_eye_image")
+            else None
+        ),
+        "volume_entity": _entity_id(hass, "number", f"{entry_id}_volume_number"),
+        "movements": [
+            {
+                "part": m["part"],
+                "entity": _entity_id(
+                    hass, "switch", f"{entry_id}_movement_{m['part']}"
+                ),
+            }
+            for m in profile["movements"]
+        ],
+        "trigger_movement_entity": _entity_id(
+            hass, "button", f"{entry_id}_trigger_movement"
+        ),
+        "lights": [
+            {
+                "channel": light["channel"],
+                "light_entity": _entity_id(
+                    hass, "light", f"{entry_id}_light_{light['channel']}"
+                ),
+                "effect_mode_entity": _entity_id(
+                    hass, "select", f"{entry_id}_effect_mode_{light['channel']}"
+                ),
+                "effect_speed_entity": _entity_id(
+                    hass, "number", f"{entry_id}_effect_speed_{light['channel']}"
+                ),
+                "color_cycle_entity": _entity_id(
+                    hass, "switch", f"{entry_id}_color_cycle_{light['channel']}"
+                ),
+            }
+            for light in profile["lights"]
+        ],
+    }
+
+
 def _stamped(payload: dict[str, Any]) -> dict[str, Any]:
     """Add sent_at, HA's clock (ms since the epoch) as the payload is sent.
 
@@ -338,13 +390,12 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
         # reads their states: the switch is on while live mode is on (or
         # being restored), the speaker is available while it's connected.
         "live_mode": {
-            "switch_entity": _entity_id(
-                hass, "switch", f"{entry.entry_id}_live_mode"
-            ),
+            "switch_entity": _entity_id(hass, "switch", f"{entry.entry_id}_live_mode"),
             "speaker_entity": _entity_id(
                 hass, "media_player", f"{entry.entry_id}_live_mode_speaker"
             ),
         },
+        "live_controls": _live_controls(hass, entry, profile),
     }
 
 

@@ -580,6 +580,74 @@ describe("panel", () => {
 		localStorage.removeItem("skelly_ultra.panel.details");
 	});
 
+	it("shows each Skelly's live controls, opened per Skelly", async () => {
+		const { hass } = fakeHass(two);
+		const volume = idlePayload.live_controls.volume_entity as string;
+		Object.assign(hass, {
+			states: {
+				[volume]: { entity_id: volume, state: "40", attributes: {} },
+			},
+		});
+		const panel = await showPanel(hass);
+		const controls = (index: number) =>
+			view(panel, index).querySelector("sk-live-controls") as HTMLElement & {
+				open: boolean;
+				shadowRoot: ShadowRoot;
+			};
+		// Closed until opened, as on the card
+		expect(controls(0).open).toBe(false);
+		expect(controls(1).open).toBe(false);
+		(
+			controls(0).shadowRoot.querySelector("button.head") as HTMLButtonElement
+		).click();
+		await settle(panel);
+		expect(controls(0).open).toBe(true);
+		expect(controls(1).open).toBe(false);
+		const slider = controls(0).shadowRoot.querySelector(
+			"input.volume",
+		) as HTMLInputElement;
+		expect(slider.value).toBe("40");
+		slider.value = "70";
+		slider.dispatchEvent(new Event("change"));
+		expect(hass.callService).toHaveBeenLastCalledWith(
+			"number",
+			"set_value",
+			{ entity_id: volume, value: 70 },
+			undefined,
+			false,
+		);
+		expect(localStorage.getItem("skelly_ultra.panel.live_open")).toBe(
+			`["${DEVICE_ID}"]`,
+		);
+		// Remembered for the next visit
+		document.body.innerHTML = "";
+		const again = await showPanel(hass);
+		const openOf = (index: number) =>
+			(
+				view(again, index).querySelector("sk-live-controls") as HTMLElement & {
+					open: boolean;
+				}
+			).open;
+		expect([openOf(0), openOf(1)]).toEqual([true, false]);
+		// Closed again: nothing left to remember
+		const head = (
+			view(again, 0).querySelector("sk-live-controls") as HTMLElement
+		).shadowRoot?.querySelector("button.head") as HTMLButtonElement;
+		head.click();
+		await settle(again);
+		expect([openOf(0), openOf(1)]).toEqual([false, false]);
+		expect(localStorage.getItem("skelly_ultra.panel.live_open")).toBeNull();
+	});
+
+	it("can't use the live controls during a transfer", async () => {
+		const { hass } = fakeHass(one, filesFixture as FilesPayload);
+		const panel = await showPanel(hass);
+		const controls = view(panel).querySelector(
+			"sk-live-controls",
+		) as HTMLElement & { disabledReason?: string };
+		expect(controls.disabledReason).toContain("being sent");
+	});
+
 	it("lists the files with a menu on narrow screens", async () => {
 		const { hass } = fakeHass(one);
 		const panel = await showPanel(hass, 400);

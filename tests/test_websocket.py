@@ -324,6 +324,94 @@ async def test_transfer_settings_follow_the_override_entities(
     assert event["transfer_settings"]["bitrate"]["override"] is True
 
 
+async def test_live_controls_list_the_profiles_entities(
+    hass, setup_integration, device, hass_ws_client
+):
+    """The panel and card change the Skelly through the listed entities."""
+    client = await hass_ws_client(hass)
+    controls = (await ws_list(client))["live_controls"]
+    listed = [
+        controls["eye_icon_entity"],
+        controls["volume_entity"],
+        controls["trigger_movement_entity"],
+        *(m["entity"] for m in controls["movements"]),
+        *(
+            light[key]
+            for light in controls["lights"]
+            for key in (
+                "light_entity",
+                "effect_mode_entity",
+                "effect_speed_entity",
+                "color_cycle_entity",
+            )
+        ),
+    ]
+    assert all(hass.states.get(entity_id) for entity_id in listed), listed
+    assert [m["part"] for m in controls["movements"]] == [
+        "all",
+        "head",
+        "arm",
+        "torso",
+    ]
+    assert [light["channel"] for light in controls["lights"]] == [0, 1]
+
+    # What the live controls do: plain entity services
+    await hass.services.async_call(
+        "select",
+        "select_option",
+        {"entity_id": controls["eye_icon_entity"], "option": "15 Heart"},
+        blocking=True,
+    )
+    head = next(m for m in controls["movements"] if m["part"] == "head")
+    await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": head["entity"]}, blocking=True
+    )
+    await hass.services.async_call(
+        "light",
+        "turn_on",
+        {
+            "entity_id": controls["lights"][1]["light_entity"],
+            "rgb_color": [255, 0, 0],
+            "brightness": 128,
+        },
+        blocking=True,
+    )
+    await hass.async_block_till_done()
+    assert device.eye_icon == 15
+    assert device.action == 0x01
+    assert device.lights[1].rgb == (255, 0, 0)
+    assert device.lights[1].brightness == 128
+
+
+@pytest.mark.parametrize("device_type", [DEVICE_TYPE_SKELLY_12FT, DEVICE_TYPE_LILY])
+async def test_live_controls_follow_device_profile(
+    hass, mock_ble, hass_ws_client, device_type
+):
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={"address": mock_ble.address, CONF_DEVICE_TYPE: device_type}
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    client = await hass_ws_client(hass)
+
+    controls = (await ws_list(client))["live_controls"]
+    assert [light["channel"] for light in controls["lights"]] == [0]
+    if device_type == DEVICE_TYPE_SKELLY_12FT:
+        assert [m["part"] for m in controls["movements"]] == ["head"]
+        eye = hass.states.get(controls["eye_icon_entity"])
+        assert len(eye.attributes["options"]) == 20
+    else:
+        assert controls["eye_icon_entity"] is None
+        assert [m["part"] for m in controls["movements"]] == [
+            "all",
+            "wrist",
+            "elbow",
+            "head",
+            "eyes",
+        ]
+
+
 async def test_unsubscribe_stops_events(
     hass, setup_integration, device, hass_ws_client
 ):

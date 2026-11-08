@@ -148,5 +148,44 @@
 	"live_mode": {
 		"switch_entity": "switch.skelly_santa_live_mode",
 		"speaker_entity": "media_player.skelly_santa_live_mode_speaker"
+	},
+	"live_controls": {
+		"eye_icon_entity": "select.skelly_santa_eye_icon",
+		"volume_entity": "number.skelly_santa_volume",
+		"movements": [
+			{
+				"part": "all",
+				"entity": "switch.skelly_santa_movement_all"
+			},
+			{
+				"part": "head",
+				"entity": "switch.skelly_santa_movement_head"
+			},
+			{
+				"part": "arm",
+				"entity": "switch.skelly_santa_movement_arm"
+			},
+			{
+				"part": "torso",
+				"entity": "switch.skelly_santa_movement_torso"
+			}
+		],
+		"trigger_movement_entity": "button.skelly_santa_trigger_movement",
+		"lights": [
+			{
+				"channel": 0,
+				"light_entity": "light.skelly_santa_torso_light",
+				"effect_mode_entity": "select.skelly_santa_torso_light_effect_mode",
+				"effect_speed_entity": "number.skelly_santa_torso_light_effect_speed",
+				"color_cycle_entity": "switch.skelly_santa_torso_light_color_cycle"
+			},
+			{
+				"channel": 1,
+				"light_entity": "light.skelly_santa_head_light",
+				"effect_mode_entity": "select.skelly_santa_head_light_effect_mode",
+				"effect_speed_entity": "number.skelly_santa_head_light_effect_speed",
+				"color_cycle_entity": "switch.skelly_santa_head_light_color_cycle"
+			}
+		]
 	}
 }

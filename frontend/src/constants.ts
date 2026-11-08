@@ -15,3 +15,4 @@ export const MEDIA_BROWSER_ELEMENT = "sk-media-browser";
 export const TRANSFER_SETTINGS_ELEMENT = "sk-transfer-settings";
 export const TTS_FORM_ELEMENT = "sk-tts-form";
 export const SKELLY_FILES_ELEMENT = "sk-skelly-files";
+export const LIVE_CONTROLS_ELEMENT = "sk-live-controls";

@@ -18,6 +18,7 @@ export const EDITOR_SCHEMA = [
 	},
 	{ name: "tts_entity", selector: { entity: { domain: "tts" } } },
 	{ name: "show_tts", selector: { boolean: {} } },
+	{ name: "show_live", selector: { boolean: {} } },
 	{ name: "show_files", selector: { boolean: {} } },
 	{
 		name: "max_files",
@@ -29,6 +30,7 @@ const LABELS: Record<string, string> = {
 	device_id: strings.editorDevice,
 	tts_entity: strings.editorTtsEntity,
 	show_tts: strings.editorShowTts,
+	show_live: strings.editorShowLive,
 	show_files: strings.editorShowFiles,
 	max_files: strings.editorMaxFiles,
 };
@@ -40,6 +42,7 @@ const HELPERS: Record<string, string> = {
 // Defaults aren't written into the config, so the YAML stays short
 const DEFAULTS: Record<string, unknown> = {
 	show_tts: true,
+	show_live: true,
 	show_files: true,
 	max_files: DEFAULT_MAX_FILES,
 };
