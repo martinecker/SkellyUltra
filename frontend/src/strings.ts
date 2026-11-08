@@ -3,10 +3,15 @@
 export const strings = {
 	panelTitle: "Skelly",
 	openSidebar: "Open the sidebar",
-	device: "Skelly",
 	noDevices: "No Skelly is set up, or none is loaded right now.",
 	loadingDevices: "Loading your Skellies…",
 	devicesFailed: (message: string) => `Couldn't list your Skellies: ${message}`,
+	// Choosing the Skellies to show
+	skelliesShown: "Skellies to show",
+	allSkellies: "All",
+	noneChosen: "No Skelly is ticked. Tick one above to see its files.",
+	// A toast about one of several Skellies shown
+	skellyToast: (name: string, message: string) => `${name}: ${message}`,
 	status: {
 		idle: "Not connected",
 		connecting: "Connecting…",
@@ -127,6 +132,7 @@ export const strings = {
 	addFile: "Add file",
 	addFileTitle: "Send a new file to the Skelly",
 	addBusy: "A file is being sent to the Skelly",
+	addBusyOther: "A file is being sent to another Skelly",
 	addDisconnected: "The Skelly is not connected, so files can't be added.",
 	addDialogTitle: "Add a file",
 	tabUpload: "Upload",

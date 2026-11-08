@@ -22,10 +22,12 @@ import {
 	FILE_TABLE_ELEMENT,
 	MEDIA_BROWSER_ELEMENT,
 	PANEL_ELEMENT,
+	SKELLY_FILES_ELEMENT,
 	TRANSFER_BAR_ELEMENT,
 	TRANSFER_SETTINGS_ELEMENT,
 	TTS_FORM_ELEMENT,
 } from "./constants";
+import { SkSkellyFiles } from "./panel/sk-skelly-files";
 import { SkellyUltraPanel } from "./panel/skelly-ultra-panel";
 
 const ELEMENTS: [string, CustomElementConstructor][] = [
@@ -37,6 +39,7 @@ const ELEMENTS: [string, CustomElementConstructor][] = [
 	[TRANSFER_SETTINGS_ELEMENT, SkTransferSettings],
 	[TTS_FORM_ELEMENT, SkTtsForm],
 	[ADD_FILE_DIALOG_ELEMENT, SkAddFileDialog],
+	[SKELLY_FILES_ELEMENT, SkSkellyFiles],
 	[PANEL_ELEMENT, SkellyUltraPanel],
 	[CARD_ELEMENT, SkellyUltraCard],
 	[CARD_EDITOR_ELEMENT, SkellyUltraCardEditor],

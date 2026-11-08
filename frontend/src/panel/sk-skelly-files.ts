@@ -1,0 +1,994 @@
+import { css, html, LitElement, nothing, type PropertyValues } from "lit";
+import { property, state } from "lit/decorators.js";
+import {
+	type ActionTarget,
+	cancelTransfer,
+	deleteFile,
+	editFile,
+	errorMessage,
+	playFile,
+	sendFile,
+	sendFileFromTts,
+	setFileOrder,
+	stopFile,
+} from "../api/actions";
+import { formatFree, orderedFiles, refreshFiles } from "../api/files";
+import { FilesSubscription } from "../api/files-subscription";
+import {
+	enabledIndices,
+	existingOnly,
+	sameOrder,
+	withOrder,
+} from "../api/order";
+import { type FileRef, PlaybackTracker } from "../api/playback";
+import { SMALL_CHUNK_SIZE } from "../api/transfer-settings";
+import {
+	type FileEntry,
+	type FilesPayload,
+	type SkellyDevice,
+	targetOf,
+} from "../api/types";
+import type {
+	SendHandler,
+	SendRequest,
+	SkAddFileDialog,
+} from "../components/sk-add-file-dialog";
+import type { SkConfirm } from "../components/sk-confirm";
+import type { SaveHandler, SkEditDialog } from "../components/sk-edit-dialog";
+import type {
+	DragEventDetail,
+	FileEventDetail,
+	OrderEventDetail,
+	SkFileTable,
+} from "../components/sk-file-table";
+import type { HomeAssistant } from "../ha-types";
+import { strings } from "../strings";
+import { sharedStyles } from "../styles";
+import { showToast } from "../toast";
+
+// Play order changes within this time (in ms) go out as one write
+export const ORDER_DEBOUNCE_MS = 600;
+// How long (in ms) the written order is shown before the Skelly's own
+// order, if no new file list arrives after the write
+export const ORDER_SETTLE_MS = 3000;
+
+// A play order change not yet confirmed by the Skelly's file list
+interface PendingOrder {
+	entry_id: string;
+	target: ActionTarget;
+	// file_index of each enabled file, in play order
+	order: number[];
+	// Written; shown until the next file list (or ORDER_SETTLE_MS)
+	written?: { seen: FilesPayload | undefined };
+}
+
+// How long (in ms) a file just added stays highlighted
+export const HIGHLIGHT_MS = 5000;
+// How long (in ms) the toast for a sent file, with its Play button, shows
+const SENT_TOAST_MS = 8000;
+
+const busyKey = (entryId: string, fileIndex: number) =>
+	`${entryId}:${fileIndex}`;
+
+// Fired (sk-details) when the Details checkbox changes; the panel shows the
+// Details columns for every Skelly alike
+export interface DetailsEventDetail {
+	details: boolean;
+}
+
+// One Skelly in the sidebar panel: its files, live, which it plays, stops,
+// edits, reorders, deletes and adds to. The panel shows one per chosen
+// Skelly (keyed by entry_id, so device stays the same Skelly).
+export class SkSkellyFiles extends LitElement {
+	@property({ attribute: false }) hass?: HomeAssistant;
+	@property({ attribute: false }) device?: SkellyDevice;
+	@property({ type: Boolean, reflect: true }) narrow = false;
+	// Lists files instead of a table: the panel is less than 600 px wide
+	@property({ type: Boolean }) compact = false;
+	// Shows the Details columns
+	@property({ type: Boolean }) details = false;
+	// Other Skellies are shown too: toasts say which Skelly they're about
+	@property({ type: Boolean }) named = false;
+	// entry_id of the Skelly a new file is being sent to, from any card of
+	// the panel: one send at a time, also to another Skelly
+	@property({ attribute: false }) sendingTo?: string;
+	// Tells the panel a send to this Skelly started or ended. A callback,
+	// not an event: it must reach the panel after this card left.
+	@property({ attribute: false }) onSending?: (
+		entryId: string,
+		sending: boolean,
+	) => void;
+
+	// The file in the edit dialog
+	@state() private _editing?: { entry_id: string; name: string };
+	// busyKey()s of files with an action in progress
+	@state() private _busy: ReadonlySet<string> = new Set();
+	@state() private _refreshing = false;
+	@state() private _cancelling = false;
+	// The play order the table shows until the Skelly reports it
+	@state() private _order?: PendingOrder;
+	// entry_id of the Skelly whose play order is being written
+	@state() private _orderSaving?: string;
+	// entry_id of the Skelly a new file is being sent to
+	@state() private _sending?: string;
+	// The file just added, pointed out in the table for a moment
+	@state() private _highlight?: { entry_id: string; file_index: number };
+
+	private readonly _files = new FilesSubscription(this);
+	private readonly _playback = new PlaybackTracker(this, (name) =>
+		this._toast(strings.playNotStarted(name)),
+	);
+	private _orderTimer?: ReturnType<typeof setTimeout>;
+	private _settleTimer?: ReturnType<typeof setTimeout>;
+	// A row is being dragged: the play order isn't written meanwhile
+	private _dragging = false;
+	private _highlightTimer?: ReturnType<typeof setTimeout>;
+
+	disconnectedCallback(): void {
+		super.disconnectedCallback();
+		clearTimeout(this._highlightTimer);
+		this._highlightTimer = undefined;
+		this._highlight = undefined;
+		// Leaving the panel, or this Skelly is no longer shown: write a
+		// waiting play order change now
+		this._writeOrder();
+	}
+
+	protected willUpdate(_changed: PropertyValues<this>): void {
+		const device = this.device;
+		this._files.setTarget(
+			device ? this.hass : undefined,
+			device ? targetOf(device) : {},
+		);
+		this._playback.follow(this._files.payload);
+		this._settleOrder();
+	}
+
+	// A written play order is shown until a newer file list arrives
+	private _settleOrder(): void {
+		const written = this._order?.written;
+		if (written && this._files.payload !== written.seen) {
+			this._dropOrder();
+		}
+	}
+
+	private _dropOrder(): void {
+		clearTimeout(this._settleTimer);
+		this._settleTimer = undefined;
+		this._order = undefined;
+	}
+
+	static styles = [
+		sharedStyles,
+		css`
+			:host {
+				display: block;
+			}
+
+			ha-card {
+				padding: 8px 16px 16px;
+			}
+
+			:host([narrow]) ha-card {
+				padding: 8px 12px 12px;
+			}
+
+			.status {
+				display: flex;
+				flex-wrap: wrap;
+				gap: 8px;
+				align-items: center;
+				margin-bottom: 8px;
+			}
+
+			.dot {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				background: var(--disabled-text-color, #999);
+			}
+
+			.dot.live {
+				background: var(--success-color, #4caf50);
+			}
+
+			.dot.unavailable,
+			.dot.reloading {
+				background: var(--warning-color, #ffa600);
+			}
+
+			.dot.error {
+				background: var(--error-color, #db4437);
+			}
+
+			.warning {
+				color: var(--warning-color, #ffa600);
+			}
+
+			.error {
+				color: var(--error-color, #db4437);
+			}
+
+			.spacer {
+				flex: 1;
+			}
+
+			.toggle {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font-size: 14px;
+				cursor: pointer;
+			}
+
+			button.refresh,
+			button.add {
+				display: inline-flex;
+				align-items: center;
+				gap: 4px;
+				font: inherit;
+				font-size: 14px;
+				color: var(--primary-color);
+				background: transparent;
+				border: 1px solid var(--divider-color);
+				border-radius: 4px;
+				padding: 4px 12px 4px 8px;
+				cursor: pointer;
+			}
+
+			:host([narrow]) button.refresh,
+			:host([narrow]) button.add {
+				padding: 4px;
+			}
+
+			:host([narrow]) button.refresh .label,
+			:host([narrow]) button.add .label {
+				display: none;
+			}
+
+			button.refresh:disabled,
+			button.add:disabled {
+				color: var(--disabled-text-color, #999);
+				cursor: default;
+			}
+
+			@media (prefers-reduced-motion: no-preference) {
+				.spin {
+					animation: spin 1s linear infinite;
+				}
+			}
+
+			@keyframes spin {
+				to {
+					transform: rotate(360deg);
+				}
+			}
+
+			.notice {
+				margin: 8px 0;
+			}
+
+			.notice.reading {
+				color: var(--secondary-text-color);
+			}
+
+			sk-file-table.stale {
+				opacity: 0.5;
+			}
+		`,
+	];
+
+	protected render() {
+		const device = this.device;
+		return device
+			? html`<ha-card>${this._renderBody(device)}</ha-card>`
+			: nothing;
+	}
+
+	private _renderBody(device: SkellyDevice) {
+		const { status, error } = this._files;
+		const payload = this._payload;
+		const live = status === "live" && payload !== undefined;
+		const transfer = payload?.transfer;
+		const transferring = transfer?.in_progress === true;
+		// The backend is reading the file list (e.g. after a transfer)
+		const reading = live && payload.refreshing;
+		const readOnly = !live || !payload.available || !this._actionTarget;
+		const addBlocked = this._addBlockedReason(live, payload);
+		return html`
+			<div class="status">
+				<span class="dot ${live && !payload.available ? "unavailable" : status}"></span>
+				<strong>${payload?.name ?? device.name}</strong>
+				<span class="secondary">${strings.status[status]}</span>
+				<span class="spacer"></span>
+				${payload ? this._renderStorage(payload) : nothing}
+				<label class="toggle" title=${strings.detailsTitle}>
+					<input
+						type="checkbox"
+						.checked=${this.details}
+						@change=${this._onDetailsChange}
+					/>
+					${strings.details}
+				</label>
+				<button
+					class="refresh"
+					title=${strings.refreshTitle}
+					aria-label=${strings.refresh}
+					?disabled=${!live || this._refreshing || reading || transferring}
+					@click=${this._refresh}
+				>
+					<ha-icon
+						class=${this._refreshing || reading ? "spin" : ""}
+						icon="mdi:refresh"
+					></ha-icon>
+					<span class="label">${strings.refresh}</span>
+				</button>
+				<button
+					class="add"
+					title=${addBlocked ?? strings.addFileTitle}
+					aria-label=${strings.addFile}
+					?disabled=${addBlocked !== undefined}
+					@click=${this._openAddDialog}
+				>
+					<ha-icon icon="mdi:plus"></ha-icon>
+					<span class="label">${strings.addFile}</span>
+				</button>
+			</div>
+			${error ? html`<p class="error">${error}</p>` : nothing}
+			${
+				status === "reloading"
+					? html`<p class="notice warning">${strings.reloadingNotice}</p>`
+					: nothing
+			}
+			${
+				live && !payload.available
+					? html`<p class="notice warning">${strings.unavailable}</p>`
+					: nothing
+			}
+			${
+				live && payload.available && !this._actionTarget
+					? html`<p class="notice warning">${strings.noDeviceId}</p>`
+					: nothing
+			}
+			${
+				reading && payload.available
+					? html`<p class="notice reading" role="status">
+							${strings.readingFiles}
+						</p>`
+					: nothing
+			}
+			${this._renderSmallChunks(live, payload)}
+			<sk-transfer-bar
+				.transfer=${transfer}
+				?cancelling=${this._cancelling}
+				?disabled=${readOnly}
+				@sk-cancel=${this._cancelTransfer}
+			></sk-transfer-bar>
+			${
+				// While reading, "no files" may just mean they're not read yet
+				payload && !(reading && payload.files.length === 0)
+					? html`<sk-file-table
+							class=${live ? "" : "stale"}
+							.profile=${payload.device_profile}
+							.rows=${orderedFiles(this._shownPayload(payload))}
+							.playing=${this._playback.playingIndex(payload)}
+							.remaining=${this._playback.remaining(payload)}
+							.highlight=${
+								this._highlight?.entry_id === payload.entry_id
+									? this._highlight.file_index
+									: null
+							}
+							.busy=${this._busyIndices(payload)}
+							?disabled=${readOnly}
+							.disabledReason=${
+								transferring
+									? strings.transferBusy
+									: reading
+										? strings.readingBusy
+										: undefined
+							}
+							?narrow=${this.compact}
+							?details=${this.details}
+							?ordering=${this._orderSaving === payload.entry_id}
+							@sk-order=${this._onOrder}
+							@sk-order-drag=${this._onOrderDrag}
+							@sk-play=${this._onPlay}
+							@sk-stop=${this._onStop}
+							@sk-edit=${this._onEdit}
+							@sk-delete=${this._onDelete}
+						></sk-file-table>`
+					: nothing
+			}
+			<sk-edit-dialog
+				.profile=${payload?.device_profile}
+				.file=${this._editedFile(payload)}
+				.save=${this._saveEdit}
+				.readOnlyReason=${this._editBlockedReason(live, payload)}
+				?playing=${
+					payload !== undefined &&
+					this._editing !== undefined &&
+					this._playback.playingIndex(payload) ===
+						this._editedFile(payload)?.file_index
+				}
+				@sk-preview=${this._onPlay}
+				@sk-preview-stop=${this._onStop}
+				@sk-edit-closed=${this._onEditClosed}
+			></sk-edit-dialog>
+			<sk-add-file-dialog
+				.hass=${this.hass}
+				.profile=${payload?.device_profile}
+				.files=${payload?.files ?? []}
+				.uploadTarget=${device.upload_target}
+				.readOnlyReason=${addBlocked}
+				.send=${this._sendNew}
+				.transferSettings=${payload?.transfer_settings}
+			></sk-add-file-dialog>
+			<sk-confirm></sk-confirm>
+		`;
+	}
+
+	// Small chunks (a connection with a small MTU) make transfers take
+	// minutes; the override is easy to miss
+	private _renderSmallChunks(live: boolean, payload: FilesPayload | undefined) {
+		const chunk = payload?.transfer_settings.chunk_size;
+		if (
+			!live ||
+			!payload?.available ||
+			!chunk ||
+			chunk.override ||
+			chunk.auto === null ||
+			chunk.auto >= SMALL_CHUNK_SIZE
+		) {
+			return nothing;
+		}
+		return html`<p class="notice warning small-chunks">
+			${strings.smallChunksNotice(chunk.auto)}
+		</p>`;
+	}
+
+	private _renderStorage(payload: FilesPayload) {
+		const free = formatFree(payload.capacity.free_kb);
+		return html`<span class="secondary storage">
+			${free ? strings.freeSpace(free) : strings.freeSpaceUnknown} ·
+			${strings.fileCount(payload.files.length)}
+		</span>`;
+	}
+
+	// The payload of this card's Skelly, once it has arrived
+	private get _payload(): FilesPayload | undefined {
+		const payload = this._files.payload;
+		const device = this.device;
+		return payload && device && payload.entry_id === device.entry_id
+			? payload
+			: undefined;
+	}
+
+	// The actions need a device_id
+	private get _actionTarget(): ActionTarget | undefined {
+		const deviceId = this._payload?.device_id ?? this.device?.device_id;
+		return deviceId ? { device_id: deviceId } : undefined;
+	}
+
+	// The payload with a play order change that the Skelly hasn't reported
+	// yet
+	private _shownPayload(payload: FilesPayload): FilesPayload {
+		const pending = this._order;
+		return pending && pending.entry_id === payload.entry_id
+			? withOrder(payload, pending.order)
+			: payload;
+	}
+
+	// The table changed the play order: show it, and write it once the
+	// changes stop for a moment
+	private _onOrder(ev: CustomEvent<OrderEventDetail>): void {
+		const payload = this._payload;
+		const target = this._actionTarget;
+		if (!payload || !target || this._orderSaving === payload.entry_id) {
+			return;
+		}
+		clearTimeout(this._settleTimer);
+		this._settleTimer = undefined;
+		this._order = {
+			entry_id: payload.entry_id,
+			target,
+			order: ev.detail.order,
+		};
+		this._scheduleOrder();
+	}
+
+	private _scheduleOrder(): void {
+		clearTimeout(this._orderTimer);
+		this._orderTimer = undefined;
+		if (!this._dragging) {
+			this._orderTimer = setTimeout(
+				() => this._writeOrder(),
+				ORDER_DEBOUNCE_MS,
+			);
+		}
+	}
+
+	// The wait for more changes doesn't run out while a row is dragged
+	private _onOrderDrag(ev: CustomEvent<DragEventDetail>): void {
+		this._dragging = ev.detail.dragging;
+		if (this._order && !this._order.written) {
+			this._scheduleOrder();
+		}
+	}
+
+	// Writes the waiting play order change, if there is one. On failure the
+	// table goes back to the Skelly's order.
+	private async _writeOrder(): Promise<void> {
+		clearTimeout(this._orderTimer);
+		this._orderTimer = undefined;
+		const pending = this._order;
+		const hass = this.hass;
+		// One write at a time; a change made meanwhile goes out after it
+		if (!pending || pending.written || this._orderSaving !== undefined) {
+			return;
+		}
+		const payload = this._files.payload;
+		const current =
+			payload?.entry_id === pending.entry_id ? payload : undefined;
+		const order = current
+			? existingOnly(pending.order, current)
+			: pending.order;
+		if (
+			!hass ||
+			!order.length ||
+			(current && sameOrder(order, enabledIndices(orderedFiles(current))))
+		) {
+			// Nothing to write (e.g. changed and changed back)
+			this._dropOrder();
+			return;
+		}
+		this._orderSaving = pending.entry_id;
+		try {
+			await this._sendOrder(hass, pending, order, payload);
+		} finally {
+			this._orderSaving = undefined;
+		}
+	}
+
+	// before: the payload when the write started
+	private async _sendOrder(
+		hass: HomeAssistant,
+		pending: PendingOrder,
+		order: number[],
+		before: FilesPayload | undefined,
+	): Promise<void> {
+		let reported: number[] | undefined;
+		try {
+			// The device can't change the order while it plays a file, so a
+			// file we started is stopped first
+			const playing = this._playback.playing;
+			if (playing?.entry_id === pending.entry_id) {
+				try {
+					await stopFile(hass, pending.target, playing.file_index);
+				} catch {
+					// Writing says why, if the device is still busy
+				}
+				this._playback.drop(playing);
+			}
+			const response = await setFileOrder(hass, pending.target, {
+				file_indices: order,
+			});
+			reported = response?.file_order?.map((entry) => entry.file_index);
+		} catch (err) {
+			if (this._order === pending) {
+				this._dropOrder();
+			}
+			this._toast(strings.orderFailed(errorMessage(err)));
+			return;
+		}
+		if (this._order !== pending) {
+			return;
+		}
+		const latest = this._files.payload;
+		if (
+			// The Skelly's order differs from the one asked for
+			(reported && !sameOrder(order, reported)) ||
+			// The new file list came during the write
+			latest !== before
+		) {
+			this._dropOrder();
+			return;
+		}
+		this._order = { ...pending, order, written: { seen: latest } };
+		this._settleTimer = setTimeout(() => this._dropOrder(), ORDER_SETTLE_MS);
+	}
+
+	// The files of this Skelly with an action in progress
+	private _busyIndices(payload: FilesPayload): ReadonlySet<number> {
+		return new Set(
+			payload.files
+				.filter((f) => this._busy.has(busyKey(payload.entry_id, f.file_index)))
+				.map((f) => f.file_index),
+		);
+	}
+
+	private _setBusy(key: string, busy: boolean) {
+		const next = new Set(this._busy);
+		if (busy) {
+			next.add(key);
+		} else {
+			next.delete(key);
+		}
+		this._busy = next;
+	}
+
+	// Runs an action on one file of the shown Skelly; the row is disabled
+	// meanwhile, and a failure is shown as a toast. Resolves to the Skelly's
+	// entry_id if the action succeeded.
+	private async _fileAction(
+		file: FileRef,
+		action: (hass: HomeAssistant, target: ActionTarget) => Promise<unknown>,
+		failed: (name: string, message: string) => string,
+	): Promise<string | undefined> {
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			return undefined;
+		}
+		const key = busyKey(entryId, file.file_index);
+		if (this._busy.has(key)) {
+			return undefined;
+		}
+		this._setBusy(key, true);
+		try {
+			await action(hass, target);
+			return entryId;
+		} catch (err) {
+			this._toast(failed(file.name, errorMessage(err)));
+			return undefined;
+		} finally {
+			this._setBusy(key, false);
+		}
+	}
+
+	private _onPlay(ev: CustomEvent<FileEventDetail>) {
+		void this._play(ev.detail.file);
+	}
+
+	private async _play(file: FileRef) {
+		// A waiting play order change goes first: writing it would stop the
+		// file again
+		if (this._order && !this._order.written) {
+			await this._writeOrder();
+		}
+		const seen = this._playback.seen;
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => playFile(hass, target, file.file_index),
+			strings.playFailed,
+		);
+		if (!entryId || !this.isConnected) {
+			return;
+		}
+		this._playback.started(entryId, file, seen);
+	}
+
+	private async _onStop(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => stopFile(hass, target, file.file_index),
+			strings.stopFailed,
+		);
+		if (entryId) {
+			this._clearPlaying(entryId, file);
+		}
+	}
+
+	// The edited file's current entry: undefined while there's no payload of
+	// its Skelly, null once the file is gone
+	private _editedFile(
+		payload: FilesPayload | undefined,
+	): FileEntry | null | undefined {
+		const editing = this._editing;
+		if (!editing || !payload || payload.entry_id !== editing.entry_id) {
+			return undefined;
+		}
+		return payload.files.find((f) => f.name === editing.name) ?? null;
+	}
+
+	// Why the edit dialog can't save right now, if it can't
+	private _editBlockedReason(
+		live: boolean,
+		payload: FilesPayload | undefined,
+	): string | undefined {
+		if (!live || !payload) {
+			return this._files.status === "reloading"
+				? strings.reloadingNotice
+				: strings.editWaiting;
+		}
+		if (!payload.available) {
+			return strings.editDisconnected;
+		}
+		if (!this._actionTarget) {
+			return strings.noDeviceId;
+		}
+		if (payload.transfer.in_progress) {
+			return strings.transferBusy;
+		}
+		if (payload.refreshing) {
+			return strings.readingBusy;
+		}
+		return undefined;
+	}
+
+	private async _onEdit(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const entryId = this._payload?.entry_id;
+		const dialog = this._editDialog;
+		if (!entryId || !dialog) {
+			return;
+		}
+		this._editing = { entry_id: entryId, name: file.name };
+		await dialog.open(file);
+	}
+
+	private get _editDialog(): SkEditDialog | null {
+		return this.renderRoot.querySelector<SkEditDialog>("sk-edit-dialog");
+	}
+
+	private _onEditClosed() {
+		this._editing = undefined;
+	}
+
+	// Saves the edit dialog's changes. The device can't change a file's
+	// settings while it plays one, so a file we started is stopped first.
+	private readonly _saveEdit: SaveHandler = async (file, changes) => {
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			throw new Error(strings.editWaiting);
+		}
+		const playing = this._playback.playing;
+		if (playing?.entry_id === entryId) {
+			try {
+				await stopFile(hass, target, playing.file_index);
+			} catch {
+				// Saving says why, if the device is still busy
+			}
+			this._playback.drop(playing);
+		}
+		// The file's current index (it may have changed since the dialog opened)
+		const current =
+			this._payload?.files.find((f) => f.name === file.name) ?? file;
+		const key = busyKey(entryId, current.file_index);
+		this._setBusy(key, true);
+		try {
+			await editFile(hass, target, file.name, changes);
+		} finally {
+			this._setBusy(key, false);
+		}
+		this._toast(strings.saved(file.name));
+	};
+
+	private async _onDelete(ev: CustomEvent<FileEventDetail>) {
+		const { file } = ev.detail;
+		const confirm = this.renderRoot.querySelector<SkConfirm>("sk-confirm");
+		if (
+			!confirm ||
+			!(await confirm.ask({
+				title: strings.deleteTitle,
+				message: strings.deleteMessage(file.name),
+				confirmLabel: strings.delete,
+				destructive: true,
+			}))
+		) {
+			return;
+		}
+		const entryId = await this._fileAction(
+			file,
+			(hass, target) => deleteFile(hass, target, file.name),
+			strings.deleteFailed,
+		);
+		if (entryId) {
+			this._clearPlaying(entryId, file);
+			this._toast(strings.deleted(file.name));
+		}
+	}
+
+	private _clearPlaying(entryId: string, file: FileRef) {
+		this._playback.clear(entryId, file.file_index);
+	}
+
+	private async _refresh() {
+		const device = this.device;
+		if (!this.hass || !device || this._refreshing) {
+			return;
+		}
+		this._refreshing = true;
+		try {
+			// The new list arrives through the subscription as well
+			await refreshFiles(this.hass, targetOf(device));
+		} catch (err) {
+			this._toast(strings.refreshFailed(errorMessage(err)));
+		} finally {
+			this._refreshing = false;
+		}
+	}
+
+	private async _cancelTransfer() {
+		const target = this._actionTarget;
+		if (!this.hass || !target || this._cancelling) {
+			return;
+		}
+		this._cancelling = true;
+		try {
+			await cancelTransfer(this.hass, target);
+		} catch (err) {
+			this._toast(strings.transferCancelFailed(errorMessage(err)));
+		} finally {
+			this._cancelling = false;
+		}
+	}
+
+	// Why no file can be added right now, if one can't
+	private _addBlockedReason(
+		live: boolean,
+		payload: FilesPayload | undefined,
+	): string | undefined {
+		if (!live || !payload) {
+			return this._files.status === "reloading"
+				? strings.reloadingNotice
+				: strings.editWaiting;
+		}
+		if (!payload.available) {
+			return strings.addDisconnected;
+		}
+		if (!this._actionTarget) {
+			return strings.noDeviceId;
+		}
+		if (payload.transfer.in_progress || this._sending !== undefined) {
+			return strings.addBusy;
+		}
+		// One send at a time, also to another Skelly: the panel waits for
+		// each one's result
+		if (this.sendingTo !== undefined) {
+			return this.sendingTo === payload.entry_id
+				? strings.addBusy
+				: strings.addBusyOther;
+		}
+		if (payload.refreshing) {
+			return strings.readingBusy;
+		}
+		return undefined;
+	}
+
+	private get _fileTable(): SkFileTable | null {
+		return this.renderRoot.querySelector<SkFileTable>("sk-file-table");
+	}
+
+	private get _addDialog(): SkAddFileDialog | null {
+		return this.renderRoot.querySelector<SkAddFileDialog>("sk-add-file-dialog");
+	}
+
+	private async _openAddDialog() {
+		await this._addDialog?.open();
+	}
+
+	// Sends the file picked in the add dialog. The service call lasts until
+	// the transfer ends; the transfer bar shows its progress meanwhile.
+	private readonly _sendNew: SendHandler = (request) => {
+		void this._send(request);
+	};
+
+	private async _send(request: SendRequest) {
+		const { filename } = request;
+		const hass = this.hass;
+		const target = this._actionTarget;
+		const entryId = this._payload?.entry_id;
+		if (!hass || !target || !entryId) {
+			return;
+		}
+		if (this._sending !== undefined || this.sendingTo !== undefined) {
+			// The Add button is disabled meanwhile, so this is a rare race
+			this._toast(
+				strings.sendFailed(
+					filename,
+					this.sendingTo !== undefined && this.sendingTo !== entryId
+						? strings.addBusyOther
+						: strings.addBusy,
+				),
+			);
+			return;
+		}
+		this._sending = entryId;
+		this.onSending?.(entryId, true);
+		let sent: Awaited<ReturnType<typeof sendFile>>;
+		try {
+			sent = request.speech
+				? await sendFileFromTts(hass, target, {
+						...request.speech,
+						target_filename: filename,
+					})
+				: await sendFile(hass, target, request.filePath, filename);
+		} catch (err) {
+			this._toast(strings.sendFailed(filename, errorMessage(err)));
+			return;
+		} finally {
+			this._sending = undefined;
+			this.onSending?.(entryId, false);
+		}
+		const name = sent?.filename ?? filename;
+		const fileIndex = sent?.file_index ?? null;
+		// Play needs the panel (and its Skelly's files) still open
+		if (fileIndex === null || !this.isConnected) {
+			this._toast(strings.sent(name));
+			return;
+		}
+		void this._showNew(entryId, fileIndex);
+		this._toast(
+			strings.sent(name),
+			{
+				text: strings.playNow,
+				action: () => this._playSent(entryId, fileIndex, name),
+			},
+			SENT_TOAST_MS,
+		);
+	}
+
+	// Points out a file just added, for a moment
+	private async _showNew(entryId: string, fileIndex: number) {
+		clearTimeout(this._highlightTimer);
+		this._highlightTimer = undefined;
+		// Cleared for one update first, so the same row's highlight (a file
+		// replaced twice in a row) starts over
+		if (this._highlight) {
+			this._highlight = undefined;
+			await this.updateComplete;
+			await this._fileTable?.updateComplete;
+		}
+		// Left meanwhile: disconnectedCallback has cleaned up already
+		if (!this.isConnected) {
+			return;
+		}
+		this._highlight = { entry_id: entryId, file_index: fileIndex };
+		this._highlightTimer = setTimeout(() => {
+			this._highlight = undefined;
+			this._highlightTimer = undefined;
+		}, HIGHLIGHT_MS);
+	}
+
+	// The sent toast's Play: only while that Skelly is still shown
+	private _playSent(entryId: string, fileIndex: number, name: string) {
+		if (!this.isConnected || this._payload?.entry_id !== entryId) {
+			return;
+		}
+		const file = this._payload.files.find(
+			(f) => f.file_index === fileIndex,
+		) ?? { file_index: fileIndex, name };
+		void this._play(file);
+	}
+
+	private _onDetailsChange(ev: Event) {
+		this.dispatchEvent(
+			new CustomEvent<DetailsEventDetail>("sk-details", {
+				detail: { details: (ev.target as HTMLInputElement).checked },
+				bubbles: true,
+				composed: true,
+			}),
+		);
+	}
+
+	private _toast(
+		message: string,
+		action?: { text: string; action: () => void },
+		duration?: number,
+	) {
+		const name = this._payload?.name ?? this.device?.name;
+		// A card no longer shown names its Skelly too: the toast could be
+		// taken to be about the one shown now
+		const named = this.named || !this.isConnected;
+		showToast(
+			this,
+			named && name ? strings.skellyToast(name, message) : message,
+			action,
+			duration,
+		);
+	}
+}

@@ -1,13 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "../src/main";
+import { PLAY_CONFIRM_MS } from "../src/api/playback";
 import type { FilesPayload, SkellyDevice } from "../src/api/types";
 import type { SkAddFileDialog } from "../src/components/sk-add-file-dialog";
 import { PANEL_ELEMENT } from "../src/constants";
 import {
 	ORDER_DEBOUNCE_MS,
 	ORDER_SETTLE_MS,
-	PLAY_CONFIRM_MS,
-} from "../src/panel/skelly-ultra-panel";
+} from "../src/panel/sk-skelly-files";
 import devicesFixture from "./fixtures/devices.json";
 import filesFixture from "./fixtures/files-payload.json";
 
@@ -31,11 +31,22 @@ const idlePayload: FilesPayload = {
 	},
 };
 
+type Updating = HTMLElement & { updateComplete: Promise<boolean> };
+
+// The shadow root of the panel's card for one Skelly (the first by default)
+const view = (panel: Panel, index = 0) =>
+	(panel.shadowRoot?.querySelectorAll("sk-skelly-files")[index]?.shadowRoot ??
+		document.createDocumentFragment()) as ShadowRoot;
+
 const settle = async (panel: Panel) => {
 	for (let i = 0; i < 5; i++) {
 		await new Promise((resolve) => setTimeout(resolve, 0));
 		await panel.updateComplete;
-		const table = panel.shadowRoot?.querySelector("sk-file-table") as
+		for (const files of panel.shadowRoot?.querySelectorAll("sk-skelly-files") ??
+			[]) {
+			await (files as Updating).updateComplete;
+		}
+		const table = view(panel).querySelector("sk-file-table") as
 			| (HTMLElement & { updateComplete: Promise<boolean> })
 			| null;
 		await table?.updateComplete;
@@ -116,13 +127,12 @@ async function showPanel(hass: unknown, width = 1000): Promise<Panel> {
 
 const text = (panel: Panel) =>
 	(panel.shadowRoot?.textContent ?? "") +
-	(panel.shadowRoot?.querySelector("sk-file-table")?.shadowRoot?.textContent ??
-		"") +
-	(panel.shadowRoot?.querySelector("sk-transfer-bar")?.shadowRoot
-		?.textContent ?? "");
+	(view(panel)?.textContent ?? "") +
+	(view(panel).querySelector("sk-file-table")?.shadowRoot?.textContent ?? "") +
+	(view(panel).querySelector("sk-transfer-bar")?.shadowRoot?.textContent ?? "");
 
 const table = (panel: Panel) =>
-	panel.shadowRoot?.querySelector("sk-file-table")?.shadowRoot as ShadowRoot;
+	view(panel).querySelector("sk-file-table")?.shadowRoot as ShadowRoot;
 
 const row = (panel: Panel, fileIndex: number) =>
 	table(panel).querySelector(`[data-file-index="${fileIndex}"]`) as HTMLElement;
@@ -131,12 +141,10 @@ const button = (panel: Panel, fileIndex: number, cls: string) =>
 	row(panel, fileIndex).querySelector(`button.${cls}`) as HTMLButtonElement;
 
 const refreshButton = (panel: Panel) =>
-	(panel.shadowRoot as ShadowRoot).querySelector(
-		"button.refresh",
-	) as HTMLButtonElement;
+	view(panel).querySelector("button.refresh") as HTMLButtonElement;
 
 const confirmDialog = (panel: Panel) =>
-	panel.shadowRoot?.querySelector("sk-confirm")?.shadowRoot as ShadowRoot;
+	view(panel).querySelector("sk-confirm")?.shadowRoot as ShadowRoot;
 
 function toasts(): string[] {
 	const messages: string[] = [];
@@ -148,9 +156,39 @@ function toasts(): string[] {
 
 const one = devicesFixture as SkellyDevice[];
 
+const SANTA_ENTRY = devicesFixture[0].entry_id;
+const lily = {
+	...devicesFixture[0],
+	entry_id: "e2",
+	device_id: "d2",
+	name: "Lily",
+} as SkellyDevice;
+const two = [devicesFixture[0] as SkellyDevice, lily];
+
+// The cards shown, one per Skelly
+const views = (panel: Panel) =>
+	panel.shadowRoot?.querySelectorAll("sk-skelly-files").length ?? 0;
+
+// The picker's checkbox of a Skelly, or its "All" checkbox
+const pickBox = (panel: Panel, entryId?: string) =>
+	panel.shadowRoot?.querySelector(
+		entryId
+			? `.picker label[data-entry-id="${entryId}"] input`
+			: ".picker label.all input",
+	) as HTMLInputElement;
+
+const pick = async (panel: Panel, entryId?: string) => {
+	pickBox(panel, entryId).click();
+	await settle(panel);
+};
+
+const urlDevices = () =>
+	new URL(window.location.href).searchParams.getAll("device");
+
 describe("panel", () => {
 	afterEach(() => {
 		document.body.innerHTML = "";
+		localStorage.removeItem("skelly_ultra.panel.skellies");
 		history.replaceState(null, "", "/");
 	});
 
@@ -169,7 +207,7 @@ describe("panel", () => {
 		expect(text(panel)).toContain("3.9 MB free");
 		expect(text(panel)).toContain("2 files");
 		// One Skelly: no picker
-		expect(panel.shadowRoot?.querySelector("select")).toBeNull();
+		expect(panel.shadowRoot?.querySelector(".picker")).toBeNull();
 
 		const rows = [...table(panel).querySelectorAll("tbody tr")];
 		expect(rows.map((r) => r.getAttribute("data-file-index"))).toEqual([
@@ -471,7 +509,7 @@ describe("panel", () => {
 			"can't be played, edited, reordered or deleted",
 		);
 
-		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
+		const bar = view(panel).querySelector("sk-transfer-bar")
 			?.shadowRoot as ShadowRoot;
 		(bar.querySelector("button") as HTMLButtonElement).click();
 		await settle(panel);
@@ -531,7 +569,7 @@ describe("panel", () => {
 		const { hass } = fakeHass(one);
 		const panel = await showPanel(hass);
 		expect(text(panel)).not.toContain("1010");
-		const toggle = panel.shadowRoot?.querySelector(
+		const toggle = view(panel).querySelector(
 			".toggle input",
 		) as HTMLInputElement;
 		toggle.checked = true;
@@ -585,41 +623,220 @@ describe("panel", () => {
 		expect(table(panel).querySelector("table")).not.toBeNull();
 	});
 
-	it("picks the Skelly from the URL and switches on request", async () => {
-		const second = {
-			...devicesFixture[0],
-			entry_id: "e2",
-			device_id: "d2",
-			name: "Lily",
-		};
-		const { hass, subscribed, unsubscribe } = fakeHass([
-			devicesFixture[0] as SkellyDevice,
-			second,
+	it("shows every Skelly by default, each in its own card", async () => {
+		const { hass, subscribed } = fakeHass(two);
+		const panel = await showPanel(hass);
+
+		expect(views(panel)).toBe(2);
+		expect(subscribed).toEqual([
+			{ type: "skelly_ultra/files/subscribe", device_id: DEVICE_ID },
+			{ type: "skelly_ultra/files/subscribe", device_id: "d2" },
 		]);
+		expect(view(panel, 0).textContent).toContain("Skelly Santa");
+		expect(view(panel, 1).textContent).toContain("Lily");
+		expect(pickBox(panel).checked).toBe(true);
+		expect(pickBox(panel).indeterminate).toBe(false);
+		expect(pickBox(panel, SANTA_ENTRY).checked).toBe(true);
+		expect(pickBox(panel, "e2").checked).toBe(true);
+		expect(urlDevices()).toEqual([]);
+	});
+
+	it("shows the Skellies from the URL, and others on request", async () => {
+		const { hass, subscribed, unsubscribe } = fakeHass(two);
 		history.replaceState(null, "", "/skelly-ultra?device=d2");
 		const panel = await showPanel(hass);
 
-		expect(subscribed.at(-1)).toMatchObject({ device_id: "d2" });
+		expect(subscribed).toEqual([
+			{ type: "skelly_ultra/files/subscribe", device_id: "d2" },
+		]);
+		expect(views(panel)).toBe(1);
 		expect(text(panel)).toContain("Lily");
+		expect(pickBox(panel).checked).toBe(false);
+		expect(pickBox(panel).indeterminate).toBe(true);
+		expect(pickBox(panel, SANTA_ENTRY).checked).toBe(false);
+		expect(pickBox(panel, "e2").checked).toBe(true);
 
-		// Playing state belongs to the Skelly it was played on
+		// Ticking Santa too shows all of them, so the URL names none
+		await pick(panel, SANTA_ENTRY);
+		expect(views(panel)).toBe(2);
+		expect(subscribed.at(-1)).toMatchObject({ device_id: DEVICE_ID });
+		expect(pickBox(panel).checked).toBe(true);
+		expect(urlDevices()).toEqual([]);
+
+		// Unticking Lily leaves Santa
+		await pick(panel, "e2");
+		expect(unsubscribe).toHaveBeenCalled();
+		expect(views(panel)).toBe(1);
+		expect(view(panel).textContent).toContain("Skelly Santa");
+		expect(urlDevices()).toEqual([DEVICE_ID]);
+	});
+
+	it("takes a Skelly's entry_id in the URL too", async () => {
+		const { hass } = fakeHass(two);
+		history.replaceState(null, "", "/skelly-ultra?device=e2");
+		const panel = await showPanel(hass);
+		expect(views(panel)).toBe(1);
+		expect(view(panel).textContent).toContain("Lily");
+		// Picked again, it's named by its device_id
+		await pick(panel, SANTA_ENTRY);
+		await pick(panel, SANTA_ENTRY);
+		expect(urlDevices()).toEqual(["d2"]);
+	});
+
+	it("shows several Skellies named in the URL", async () => {
+		const third = { ...lily, entry_id: "e3", device_id: "d3", name: "Bones" };
+		const { hass } = fakeHass([...two, third]);
+		history.replaceState(
+			null,
+			"",
+			`/skelly-ultra?device=d3&device=${DEVICE_ID}&device=gone`,
+		);
+		const panel = await showPanel(hass);
+		// In the order of the list, not of the URL
+		expect(views(panel)).toBe(2);
+		expect(view(panel, 0).textContent).toContain("Skelly Santa");
+		expect(view(panel, 1).textContent).toContain("Bones");
+		expect(pickBox(panel).indeterminate).toBe(true);
+		// A pick drops the stale id
+		await pick(panel, "e2");
+		await pick(panel, "e2");
+		expect(urlDevices()).toEqual([DEVICE_ID, "d3"]);
+	});
+
+	it("remembers the ticked Skellies in this browser", async () => {
+		const { hass } = fakeHass(two);
+		let panel = await showPanel(hass);
+		await pick(panel, SANTA_ENTRY);
+		expect(localStorage.getItem("skelly_ultra.panel.skellies")).toBe('["d2"]');
+
+		// Next visit, without the URL: Lily only
+		panel.remove();
+		history.replaceState(null, "", "/skelly-ultra");
+		panel = await showPanel(hass);
+		expect(views(panel)).toBe(1);
+		expect(view(panel).textContent).toContain("Lily");
+
+		// A card's link wins, and doesn't change what's remembered
+		panel.remove();
+		history.replaceState(null, "", `/skelly-ultra?device=${DEVICE_ID}`);
+		panel = await showPanel(hass);
+		expect(views(panel)).toBe(1);
+		expect(view(panel).textContent).toContain("Skelly Santa");
+		expect(localStorage.getItem("skelly_ultra.panel.skellies")).toBe('["d2"]');
+
+		// All ticked, or none: nothing remembered, so all are shown next time
+		await pick(panel);
+		expect(localStorage.getItem("skelly_ultra.panel.skellies")).toBeNull();
+		await pick(panel, "e2");
+		await pick(panel);
+		await pick(panel);
+		expect(views(panel)).toBe(0);
+		expect(localStorage.getItem("skelly_ultra.panel.skellies")).toBeNull();
+	});
+
+	it("shows all Skellies if what's remembered isn't valid", async () => {
+		const { hass } = fakeHass(two);
+		localStorage.setItem("skelly_ultra.panel.skellies", "{oops");
+		let panel = await showPanel(hass);
+		expect(views(panel)).toBe(2);
+		panel.remove();
+		localStorage.setItem("skelly_ultra.panel.skellies", "[1,2]");
+		panel = await showPanel(hass);
+		expect(views(panel)).toBe(2);
+	});
+
+	it("shows all Skellies if the URL names none that's still there", async () => {
+		const { hass } = fakeHass(two);
+		history.replaceState(null, "", "/skelly-ultra?device=gone");
+		const panel = await showPanel(hass);
+		expect(views(panel)).toBe(2);
+		expect(pickBox(panel).checked).toBe(true);
+	});
+
+	it("unticks and ticks all Skellies with All", async () => {
+		const { hass } = fakeHass(two);
+		history.replaceState(null, "", "/skelly-ultra?device=d2");
+		const panel = await showPanel(hass);
+
+		// Some ticked: All ticks the rest
+		await pick(panel);
+		expect(views(panel)).toBe(2);
+		expect(pickBox(panel, SANTA_ENTRY).checked).toBe(true);
+		expect(urlDevices()).toEqual([]);
+
+		// All ticked: All unticks them
+		await pick(panel);
+		expect(views(panel)).toBe(0);
+		expect(pickBox(panel).checked).toBe(false);
+		expect(pickBox(panel).indeterminate).toBe(false);
+		expect(pickBox(panel, "e2").checked).toBe(false);
+		expect(text(panel)).toContain("No Skelly is ticked");
+
+		await pick(panel, "e2");
+		expect(views(panel)).toBe(1);
+		expect(urlDevices()).toEqual(["d2"]);
+	});
+
+	it("keeps the playing file to its own Skelly's card", async () => {
+		const { hass } = fakeHass(two);
+		const panel = await showPanel(hass);
 		button(panel, 1, "play").click();
 		await settle(panel);
+		const lilyRow = (fileIndex: number) =>
+			view(panel, 1)
+				.querySelector("sk-file-table")
+				?.shadowRoot?.querySelector(
+					`[data-file-index="${fileIndex}"]`,
+				) as HTMLElement;
 		expect(row(panel, 1).classList.contains("playing")).toBe(true);
-
-		const select = panel.shadowRoot?.querySelector(
-			"select",
-		) as HTMLSelectElement;
-		select.value = DEVICE_ID;
-		select.dispatchEvent(new Event("change"));
-		await settle(panel);
-
-		expect(unsubscribe).toHaveBeenCalled();
-		expect(subscribed.at(-1)).toMatchObject({ device_id: DEVICE_ID });
-		expect(new URL(window.location.href).searchParams.get("device")).toBe(
-			DEVICE_ID,
+		expect(lilyRow(1).classList.contains("playing")).toBe(false);
+		expect(hass.callService).toHaveBeenLastCalledWith(
+			"skelly_ultra",
+			"play_file",
+			{ device_id: DEVICE_ID, file_index: 1 },
+			undefined,
+			false,
+			false,
 		);
-		expect(row(panel, 1).classList.contains("playing")).toBe(false);
+	});
+
+	it("names the Skelly in its toasts while several are shown", async () => {
+		const { hass } = fakeHass(two);
+		const panel = await showPanel(hass);
+		const messages = toasts();
+		hass.callService.mockRejectedValueOnce(new Error("Busy"));
+		button(panel, 1, "play").click();
+		await settle(panel);
+		expect(messages.at(-1)).toMatch(/^Skelly Santa: /);
+
+		// One shown: no name
+		await pick(panel, "e2");
+		hass.callService.mockRejectedValueOnce(new Error("Busy"));
+		button(panel, 2, "play").click();
+		await settle(panel);
+		expect(messages.at(-1)).not.toMatch(/^Skelly Santa: /);
+	});
+
+	it("shows the Details columns for every Skelly alike", async () => {
+		const { hass } = fakeHass(two);
+		const panel = await showPanel(hass);
+		const toggle = (index: number) =>
+			view(panel, index).querySelector(".toggle input") as HTMLInputElement;
+		const details = (index: number) =>
+			(
+				view(panel, index).querySelector("sk-file-table") as HTMLElement & {
+					details: boolean;
+				}
+			).details;
+		toggle(1).click();
+		await settle(panel);
+		expect(details(0)).toBe(true);
+		expect(details(1)).toBe(true);
+		expect(toggle(0).checked).toBe(true);
+		toggle(0).click();
+		await settle(panel);
+		expect(details(1)).toBe(false);
+		expect(toggle(1).checked).toBe(false);
 	});
 
 	it("keeps Stop working during a transfer", async () => {
@@ -663,13 +880,7 @@ describe("panel", () => {
 	});
 
 	it("keeps a pending action to the Skelly it was started on", async () => {
-		const second = {
-			...devicesFixture[0],
-			entry_id: "e2",
-			device_id: "d2",
-			name: "Lily",
-		};
-		const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+		const { hass } = fakeHass(two);
 		let finish = () => {};
 		hass.callService.mockImplementationOnce(
 			() =>
@@ -682,12 +893,9 @@ describe("panel", () => {
 		await settle(panel);
 		expect(button(panel, 1, "play").disabled).toBe(true);
 
-		const select = panel.shadowRoot?.querySelector(
-			"select",
-		) as HTMLSelectElement;
-		select.value = "d2";
-		select.dispatchEvent(new Event("change"));
-		await settle(panel);
+		// Santa unticked: Lily's card is the only one
+		await pick(panel, SANTA_ENTRY);
+		expect(views(panel)).toBe(1);
 		// Lily's file 1 isn't busy, and isn't playing once Santa's play returns
 		expect(button(panel, 1, "play").disabled).toBe(false);
 		finish();
@@ -729,7 +937,7 @@ describe("panel", () => {
 				}),
 		);
 		const panel = await showPanel(hass);
-		const bar = panel.shadowRoot?.querySelector("sk-transfer-bar")
+		const bar = view(panel).querySelector("sk-transfer-bar")
 			?.shadowRoot as ShadowRoot;
 		const cancel = () => bar.querySelector("button") as HTMLButtonElement;
 		cancel().click();
@@ -812,7 +1020,7 @@ describe("panel", () => {
 
 	describe("edit dialog", () => {
 		const editor = (panel: Panel) =>
-			panel.shadowRoot?.querySelector("sk-edit-dialog") as HTMLElement & {
+			view(panel).querySelector("sk-edit-dialog") as HTMLElement & {
 				updateComplete: Promise<boolean>;
 			};
 		const ed = (panel: Panel) => editor(panel).shadowRoot as ShadowRoot;
@@ -1129,22 +1337,14 @@ describe("panel", () => {
 			);
 		});
 
-		it("closes when another Skelly is picked", async () => {
-			const second = {
-				...devicesFixture[0],
-				entry_id: "e2",
-				device_id: "d2",
-				name: "Lily",
-			};
-			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+		it("goes away when its Skelly is unticked", async () => {
+			const { hass } = fakeHass(two);
 			const panel = await showPanel(hass);
 			await openEditor(panel);
-			const select = panel.shadowRoot?.querySelector(
-				"select",
-			) as HTMLSelectElement;
-			select.value = "d2";
-			select.dispatchEvent(new Event("change"));
-			await flush(panel);
+			const dialog = edDialog(panel);
+			expect(dialog.open).toBe(true);
+			await pick(panel, SANTA_ENTRY);
+			expect(dialog.isConnected).toBe(false);
 			expect(edDialog(panel).open).toBe(false);
 		});
 	});
@@ -1344,9 +1544,7 @@ describe("panel", () => {
 		it("moves a dragged file, by its handle", async () => {
 			const { hass } = fakeHass(one, three);
 			const panel = await showPanel(hass);
-			const sk = panel.shadowRoot?.querySelector(
-				"sk-file-table",
-			) as unknown as {
+			const sk = view(panel).querySelector("sk-file-table") as unknown as {
 				_sortable: {
 					el: HTMLElement;
 					options: Record<string, unknown> & {
@@ -1396,11 +1594,8 @@ describe("panel", () => {
 			};
 		};
 		const hooks = (panel: Panel) =>
-			(
-				(panel.shadowRoot as ShadowRoot).querySelector(
-					"sk-file-table",
-				) as unknown as SortableHooks
-			)._sortable.options;
+			(view(panel).querySelector("sk-file-table") as unknown as SortableHooks)
+				._sortable.options;
 
 		it("doesn't write while a row is still being dragged", async () => {
 			const { hass } = fakeHass(one, three);
@@ -1621,9 +1816,7 @@ describe("panel", () => {
 		it("can't drag with one file in the play order, and has no handle for files out of it", async () => {
 			const { hass } = fakeHass(one);
 			const panel = await showPanel(hass);
-			const sk = panel.shadowRoot?.querySelector(
-				"sk-file-table",
-			) as unknown as {
+			const sk = view(panel).querySelector("sk-file-table") as unknown as {
 				_sortable: { options: { disabled: boolean } };
 			};
 			expect(sk._sortable.options.disabled).toBe(true);
@@ -1633,9 +1826,7 @@ describe("panel", () => {
 		it("has handles and checkboxes in the narrow list too", async () => {
 			const { hass } = fakeHass(one, three);
 			const panel = await showPanel(hass, 400);
-			const sk = panel.shadowRoot?.querySelector(
-				"sk-file-table",
-			) as unknown as {
+			const sk = view(panel).querySelector("sk-file-table") as unknown as {
 				_sortable: { el: HTMLElement };
 			};
 			expect(sk._sortable.el.tagName).toBe("UL");
@@ -1645,22 +1836,11 @@ describe("panel", () => {
 			expect(row(panel, 2).classList.contains("off")).toBe(true);
 		});
 
-		it("writes a waiting change at once when another Skelly is picked", async () => {
-			const second = {
-				...devicesFixture[0],
-				entry_id: "e2",
-				device_id: "d2",
-				name: "Lily",
-			};
-			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+		it("writes a waiting change at once when its Skelly is unticked", async () => {
+			const { hass } = fakeHass(two);
 			const panel = await showPanel(hass);
 			await click(panel, 2);
-			const select = panel.shadowRoot?.querySelector(
-				"select",
-			) as HTMLSelectElement;
-			select.value = "d2";
-			select.dispatchEvent(new Event("change"));
-			await settle(panel);
+			await pick(panel, SANTA_ENTRY);
 			expect(orderCalls(hass).map((c) => c[2])).toEqual([
 				{ device_id: DEVICE_ID, file_indices: [1, 2] },
 			]);
@@ -1688,11 +1868,9 @@ describe("panel", () => {
 
 	describe("adding a file", () => {
 		const addButton = (panel: Panel) =>
-			(panel.shadowRoot as ShadowRoot).querySelector(
-				"button.add",
-			) as HTMLButtonElement;
+			view(panel).querySelector("button.add") as HTMLButtonElement;
 		const addDialog = (panel: Panel) =>
-			panel.shadowRoot?.querySelector("sk-add-file-dialog") as HTMLElement & {
+			view(panel).querySelector("sk-add-file-dialog") as HTMLElement & {
 				updateComplete: Promise<boolean>;
 			};
 		const inDialog = (panel: Panel) =>
@@ -1765,7 +1943,7 @@ describe("panel", () => {
 				response: { filename: "boo.mp3", file_index: 1 },
 			});
 			const panel = await showPanel(hass);
-			const addDialog = panel.shadowRoot?.querySelector(
+			const addDialog = view(panel).querySelector(
 				"sk-add-file-dialog",
 			) as SkAddFileDialog;
 			addDialog.send?.({
@@ -1825,13 +2003,7 @@ describe("panel", () => {
 		});
 
 		it("sends one file at a time, also to another Skelly", async () => {
-			const second = {
-				...devicesFixture[0],
-				entry_id: "e2",
-				device_id: "d2",
-				name: "Lily",
-			};
-			const { hass } = fakeHass([devicesFixture[0] as SkellyDevice, second]);
+			const { hass } = fakeHass(two);
 			const panel = await showPanel(hass);
 			const notes: { message: string }[] = [];
 			window.addEventListener("hass-notification", (ev) => {
@@ -1842,23 +2014,98 @@ describe("panel", () => {
 				() => new Promise((resolve) => (finish = resolve)),
 			);
 			await sendUrl(panel);
-			const select = panel.shadowRoot?.querySelector(
-				"select",
-			) as HTMLSelectElement;
-			select.value = "d2";
-			select.dispatchEvent(new Event("change"));
 			await settle(panel);
 			// Lily can't get a file while Santa's is sent
+			const lilyAdd = () =>
+				view(panel, 1).querySelector("button.add") as HTMLButtonElement;
+			expect(lilyAdd().disabled).toBe(true);
+			expect(lilyAdd().title).toBe("A file is being sent to another Skelly");
 			expect(addButton(panel).disabled).toBe(true);
 			finish({
 				context: {},
 				response: { filename: "Scream.mp3", file_index: 2 },
 			});
 			await settle(panel);
+			expect(lilyAdd().disabled).toBe(false);
+			expect(notes.at(-1)?.message).toBe(
+				"Skelly Santa: Sent Scream.mp3 to the Skelly",
+			);
+			// Santa's new file is pointed out in Santa's table, not Lily's
+			expect(row(panel, 2).classList.contains("new")).toBe(true);
+			expect(
+				view(panel, 1)
+					.querySelector("sk-file-table")
+					?.shadowRoot?.querySelector('[data-file-index="2"]')
+					?.classList.contains("new"),
+			).toBe(false);
+		});
+
+		it("lets other Skellies get files once a send from an unticked card ends", async () => {
+			const { hass } = fakeHass(two);
+			const panel = await showPanel(hass);
+			let finish: (value: unknown) => void = () => {};
+			hass.callService.mockImplementationOnce(
+				() => new Promise((resolve) => (finish = resolve)),
+			);
+			await sendUrl(panel);
+			await pick(panel, SANTA_ENTRY);
+			expect(addButton(panel).disabled).toBe(true);
+			finish({ context: {}, response: { filename: "Scream.mp3" } });
+			await settle(panel);
 			expect(addButton(panel).disabled).toBe(false);
-			expect(notes.at(-1)?.message).toBe("Sent Scream.mp3 to the Skelly");
-			// Santa's new file isn't pointed out in Lily's table
-			expect(row(panel, 2).classList.contains("new")).toBe(false);
+		});
+
+		it("names the Skelly of an unticked card in its toasts, and its Play does nothing", async () => {
+			const { hass } = fakeHass(two);
+			history.replaceState(null, "", `/skelly-ultra?device=${DEVICE_ID}`);
+			// HA's root shows toasts from elements that left the page
+			document.body.append(document.createElement("home-assistant"));
+			const panel = await showPanel(hass);
+			const notes: {
+				message: string;
+				action?: { action: () => void };
+			}[] = [];
+			window.addEventListener("hass-notification", (ev) => {
+				notes.push((ev as CustomEvent).detail);
+			});
+			let finish: (value: unknown) => void = () => {};
+			hass.callService.mockImplementationOnce(
+				() => new Promise((resolve) => (finish = resolve)),
+			);
+			await sendUrl(panel);
+			// Only Lily shown now
+			await pick(panel, "e2");
+			await pick(panel, SANTA_ENTRY);
+			expect(views(panel)).toBe(1);
+			finish({
+				context: {},
+				response: { filename: "Scream.mp3", file_index: 2 },
+			});
+			await settle(panel);
+			const note = notes.at(-1);
+			expect(note?.message).toBe("Skelly Santa: Sent Scream.mp3 to the Skelly");
+			const calls = hass.callService.mock.calls.length;
+			note?.action?.action();
+			await settle(panel);
+			expect(hass.callService.mock.calls.length).toBe(calls);
+		});
+
+		it("keeps Add busy on a card ticked again while its send runs", async () => {
+			const { hass } = fakeHass(two);
+			const panel = await showPanel(hass);
+			let finish: (value: unknown) => void = () => {};
+			hass.callService.mockImplementationOnce(
+				() => new Promise((resolve) => (finish = resolve)),
+			);
+			await sendUrl(panel);
+			await pick(panel, SANTA_ENTRY);
+			await pick(panel, SANTA_ENTRY);
+			expect(views(panel)).toBe(2);
+			expect(addButton(panel).disabled).toBe(true);
+			expect(addButton(panel).title).toBe("A file is being sent to the Skelly");
+			finish({ context: {}, response: { filename: "Scream.mp3" } });
+			await settle(panel);
+			expect(addButton(panel).disabled).toBe(false);
 		});
 
 		it("says why sending failed", async () => {
