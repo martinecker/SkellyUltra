@@ -66,6 +66,53 @@ async def test_file_list_with_unicode_names(client, device):
     assert [f.file_index for f in files] == [1, 2]
 
 
+async def test_file_list_ignores_leftovers_and_repeats(client, device):
+    """Each file once, even with file info left over from an earlier read."""
+    # An earlier read (of two files) left its replies in the queue
+    await client.query_file_list()
+    await asyncio.sleep(0)
+    assert client.events.qsize() == 2
+    # Something else waiting meanwhile keeps its own events
+    device.finish_playback(2)
+    await asyncio.sleep(0)
+    device.add_file("laugh.mp3")
+
+    # The device repeats each reply to this read
+    original = device._cmd_AAD0
+
+    def twice(p):
+        original(p)
+        original(p)
+
+    device._cmd_AAD0 = twice
+    files = await client.get_file_list(timeout=2)
+    assert [f.file_index for f in files] == [1, 2, 3]
+    ev = await client._wait_for_event(lambda e: type(e).__name__ == "PlaybackEvent")
+    assert ev.file_index == 2
+
+
+async def test_file_list_starts_over_on_a_late_reply(client, device):
+    """A late reply to an earlier read, with an older total, doesn't count."""
+    # An earlier read's replies (two files), still on the way
+    late = []
+    notify = device._notify
+    device._notify = late.append
+    device._cmd_AAD0(b"")
+    device._notify = notify
+    device.add_file("laugh.mp3")
+    original = device._cmd_AAD0
+
+    def after_a_late_one(p):
+        notify(late[0])
+        original(p)
+
+    device._cmd_AAD0 = after_a_late_one
+    files = await client.get_file_list(timeout=2)
+    assert [f.file_index for f in files] == [1, 2, 3]
+    assert [f.total_files for f in files] == [3, 3, 3]
+    assert client.events.empty()
+
+
 async def test_drop_during_query_fails_fast(client, device):
     device.unresponsive = True
     task = asyncio.create_task(client.get_volume(timeout=30))

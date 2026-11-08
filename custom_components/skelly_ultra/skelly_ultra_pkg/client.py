@@ -159,6 +159,21 @@ class SkellyClient:
         while not self.events.empty():
             self.events.get_nowait()
 
+    def _drop_queued_file_info(self) -> None:
+        """Drop queued file info events; keep every other event, in order."""
+        kept = []
+        dropped = 0
+        while not self.events.empty():
+            ev = self.events.get_nowait()
+            if isinstance(ev, parser.FileInfoEvent):
+                dropped += 1
+            else:
+                kept.append(ev)
+        for ev in kept:
+            self.events.put_nowait(ev)
+        if dropped:
+            logger.debug("Dropped %d stale FileInfoEvents", dropped)
+
     def _notify_disconnected(self) -> None:
         """Call the registered disconnected handler, if any."""
         if self._disconnected_handler:
@@ -867,16 +882,24 @@ class SkellyClient:
         Returns:
             List of FileInfoEvent objects received from the device
 
+        File info left in the queue from an earlier read (one that timed out,
+        or entries another waiter put back) is dropped first. A file reported
+        twice is counted once, its later report winning, and a report with a
+        different total (a late reply to an earlier read) starts the count
+        over, so the list has each file once.
+
         Raises:
             TimeoutError: If not all events are received within the timeout period
         """
+        self._drop_queued_file_info()
         await self.query_file_list()
 
         loop = asyncio.get_running_loop()
         deadline = loop.time() + timeout
         connection_lost = self._connection_lost
         temp = []
-        file_info_events = []
+        # By file_index, in the order first reported
+        by_index: dict[int, parser.FileInfoEvent] = {}
         expected_count = None
 
         try:
@@ -891,8 +914,22 @@ class SkellyClient:
                 ev = await self._next_event(remaining, connection_lost)
 
                 if isinstance(ev, parser.FileInfoEvent):
-                    file_info_events.append(ev)
-                    logger.debug("Received FileInfoEvent %d", len(file_info_events))
+                    if expected_count is not None and ev.total_files != expected_count:
+                        # A late reply to an earlier read, or the files changed
+                        # meanwhile: count again from this report on
+                        logger.debug(
+                            "FileInfoEvent total changed from %d to %d, starting over",
+                            expected_count,
+                            ev.total_files,
+                        )
+                        by_index.clear()
+                        expected_count = None
+                    if ev.file_index in by_index:
+                        logger.debug(
+                            "Repeated FileInfoEvent for file %d", ev.file_index
+                        )
+                    by_index[ev.file_index] = ev
+                    logger.debug("Received FileInfoEvent %d", len(by_index))
 
                     # First event tells us how many total to expect
                     if expected_count is None:
@@ -903,12 +940,12 @@ class SkellyClient:
                         )
 
                     # Check if we've received all expected events
-                    if len(file_info_events) >= expected_count:
+                    if len(by_index) >= expected_count:
                         logger.debug(
                             "Collected all %d FileInfoEvents",
-                            len(file_info_events),
+                            len(by_index),
                         )
-                        return file_info_events
+                        return list(by_index.values())
                 else:
                     # Non-FileInfoEvent - save for re-queuing
                     logger.debug(
