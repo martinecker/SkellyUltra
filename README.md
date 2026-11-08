@@ -2,7 +2,7 @@
 
 Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly and 12 ft Skelly Halloween animatronics and the 7 ft Lethal Lily animatronic witch BLE devices.
 
-![Example Skelly Dashboard](ha_skelly_ultra.jpg)
+![Example Skelly Dashboard](screenshots/dashboard.jpg)
 
 See the [Quick Start Guide](QUICK_START.md) or keep reading for detailed instructions.
 
