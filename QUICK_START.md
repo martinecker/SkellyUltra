@@ -47,6 +47,16 @@ You now have control over:
 
 **That's it!** You can now control your device from Home Assistant dashboards and automations.
 
+### 💀 Manage Files in the Skelly Panel
+
+The integration adds a **Skelly** item to the sidebar. Open it to play the files on your device, change each file's lights, eyes and movement, pick which files play and in what order, and add new files from your computer, a URL, the media library or text-to-speech.
+
+For your dashboard, add the **Skelly Ultra** card from the card picker: it plays your files and, with Live Mode set up (see below), says whatever you type through your Skelly.
+
+![The Skelly panel](screenshots/panel.png)
+
+See [Skelly Panel and Dashboard Card](README.md#-skelly-panel-and-dashboard-card) in the README for more.
+
 ## 🎤 Advanced Setup: Live Mode Audio (Optional)
 
 Want to make your Skelly speak using Text-to-Speech? This requires additional setup.

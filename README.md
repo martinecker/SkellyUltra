@@ -17,6 +17,7 @@ There is a companion project that provides a fully web browser-based controller 
 - [🔄 BLE Proxy Mode (Alternative Connection Method)](#-ble-proxy-mode-alternative-connection-method)
 - [🚀 Installation](#-installation)
 - [🎮 Usage](#-usage)
+  - [💀 Skelly Panel and Dashboard Card](#-skelly-panel-and-dashboard-card)
   - [📦 Available Entities](#-available-entities)
   - [🔊 Playing Audio](#-playing-audio)
   - [🤖 Automation Examples](#-automation-examples)
@@ -30,6 +31,7 @@ There is a companion project that provides a fully web browser-based controller 
 
 ## ✨ Features
 
+- 💀 **Skelly panel and dashboard card**: A sidebar panel to manage the files on your devices (play, edit lights, eyes and movement, reorder, upload, record with text-to-speech, delete) and a card that says text through the Skelly and plays its files
 - 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
 - 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly), Torso (12ft Skelly) or Lantern (Lethal Lily)
 - 🔌 **Switch entities**:
@@ -267,6 +269,56 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - Verify the device is paired and trusted in `bluetoothctl`
 
 ## 🎮 Usage
+
+### 💀 Skelly Panel and Dashboard Card
+
+The integration comes with a **Skelly** sidebar panel and a **Skelly Ultra** dashboard card. Both are installed with the integration, with no extra download and no dashboard resources to add.
+
+#### The Skelly Panel
+
+Open **Skelly** in the sidebar to manage the files stored on your devices. With more than one device, tick the ones to show at the top; each browser remembers your choice.
+
+![The Skelly panel with three devices](screenshots/panel.png)
+
+For each device the panel shows its connection status, free space and files, with each file's lights, movement and eye icon. From there you can:
+
+- ▶️ **Play** a file on the device, and stop it again
+- ✏️ **Edit** a file: which parts move, the eye icon, and each light's color, brightness, effect and color cycle. **Preview** plays the file with its saved settings.
+- ☑️ **Choose which files play, and in what order**: tick a file to add it to the play order, and drag the handle to move it
+- ➕ **Add a file** from your computer (**Upload**, administrators only), from Home Assistant's **Media library**, from a **URL**, or record it with any **Text to speech** engine. Uploaded files are kept in Media › My media › skelly_ultra, so you can send them again later.
+- 🗑️ **Delete** a file
+- 🔄 **Refresh** the file list from the device. **Details** shows each file's index and cluster.
+
+<p>
+  <img src="screenshots/edit-file.png" alt="Editing a file's movement, eye icon and lights" width="49%">
+  <img src="screenshots/add-file-tts.png" alt="Adding a file recorded with text to speech" width="49%">
+</p>
+
+While a file is sent, a progress bar shows with a **Cancel** button. The panel also works on a phone and in the Home Assistant companion app:
+
+<img src="screenshots/panel-phone.png" alt="The Skelly panel on a phone" width="320">
+
+The panel is shown to all users. To hide it, open **Settings** → **Devices & Services** → **Skelly Ultra** → **Configure** on each device and turn off **Show the Skelly sidebar panel**; the panel shows while at least one device has it on.
+
+#### The Skelly Ultra Card
+
+Add the card to a dashboard from the card picker (search for **Skelly Ultra**) and pick your device in the card's settings; no YAML needed. The card shows the device's status and free space, a **Say something** box with a **Live mode** switch, and the first files in the play order with play buttons. **Manage files** opens the device in the Skelly panel (shown while the panel is on).
+
+![Two Skelly Ultra cards on a dashboard](screenshots/card.png)
+
+- **Say** speaks the message through the Skelly in live mode, and turns live mode on first when it's off. This needs the [REST server](#️-skelly-ultra-rest-server) and live mode set up. For administrators, the gear button opens the engine, language, voice and extra options.
+- Card options: the device, the text-to-speech engine (leave empty to use the last one used), whether to show the Say box and the files, and how many files to show (1 to 20).
+
+In YAML:
+
+```yaml
+type: custom:skelly-ultra-card
+device_id: <your device id>  # the id in the device page's URL; the visual editor fills it in
+tts_entity: tts.piper        # optional
+show_tts: true               # optional
+show_files: true             # optional
+max_files: 5                 # optional, 1-20
+```
 
 ### 📦 Available Entities
 
