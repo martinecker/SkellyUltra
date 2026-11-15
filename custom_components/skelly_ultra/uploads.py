@@ -30,7 +30,7 @@ from homeassistant.components.media_source.const import (
     URI_SCHEME_REGEX as MEDIA_SOURCE_URI_SCHEME_REGEX,
 )
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import raise_if_invalid_path, slugify
 
@@ -285,11 +285,34 @@ async def async_resolve_audio_source(
         # filesystem, so run it in the executor.
         return await hass.async_add_executor_job(_resolve_media_url_path, hass, source)
 
-    # Assume local filesystem path
-    local_file = Path(source)
-    if not local_file.exists():
+    return await async_resolve_local_file(hass, source)
+
+
+def _resolve_local_file(hass: HomeAssistant, source: str) -> Path:
+    """Return source as a Path if HA may read it (see async_resolve_local_file)."""
+    if not hass.config.is_allowed_path(source):
+        raise ServiceValidationError(
+            f"Not allowed to read {source}: add its folder to "
+            "allowlist_external_dirs in configuration.yaml, or use a "
+            "media-source://media_source/local/... ID"
+        )
+    # Resolved, so a symlink swapped after the check can't lead elsewhere
+    local_file = Path(source).resolve()
+    if not local_file.is_file():
         raise HomeAssistantError(f"File not found: {source}")
     return local_file
+
+
+async def async_resolve_local_file(hass: HomeAssistant, source: str) -> Path:
+    """Return a local file path, if it is in a folder HA may read.
+
+    Like HA's own integrations, only folders in allowlist_external_dirs
+    (which include the media folders) may be read, since any user who can
+    call an action could otherwise read any file HA can. Raises
+    HomeAssistantError if the path isn't allowed or isn't a file.
+    """
+    # Both checks touch the filesystem
+    return await hass.async_add_executor_job(_resolve_local_file, hass, source)
 
 
 async def async_upload_audio(

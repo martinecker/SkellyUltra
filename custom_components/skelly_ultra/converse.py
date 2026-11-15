@@ -590,7 +590,7 @@ class _Converse:
         if action:
             speaker.movement_sent = True
             await stage.async_send_movement(action)
-        return await stage.live_player().async_start_playback(str(audio_path))
+        return await stage.live_player().async_start_playback(audio_path)
 
     async def _async_restore(self) -> None:
         """Restore the look of every Skelly the conversation changed."""

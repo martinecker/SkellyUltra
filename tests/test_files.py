@@ -160,11 +160,39 @@ async def test_too_long_filename_is_refused_before_upload(
     assert not any(w[:2] == b"\xaa\xc0" for w in device.writes)
 
 
-async def test_missing_source_file(hass, setup_integration, device):
+async def test_missing_source_file(hass, setup_integration, device, tmp_path):
     with pytest.raises(HomeAssistantError, match="not found"):
+        await action(
+            hass,
+            "send_file",
+            file_path=str(tmp_path / "missing.mp3"),
+            target_filename="x.mp3",
+        )
+
+
+async def test_source_file_outside_allowed_folders_is_refused(
+    hass, setup_integration, device, tone, tmp_path_factory
+):
+    """Only folders in allowlist_external_dirs can be read, like elsewhere in HA."""
+    # mktemp folders sit next to tmp_path, which is the allowed folder
+    outside = tmp_path_factory.mktemp("outside") / "secret.wav"
+    outside.write_bytes(tone.read_bytes())
+    link = tone.parent / "link.wav"
+    link.symlink_to(outside)
+    for path in (
+        outside,
+        tone.parent / ".." / outside.parent.name / outside.name,
+        link,
+    ):
+        with pytest.raises(HomeAssistantError, match="Not allowed to read"):
+            await action(
+                hass, "send_file", file_path=str(path), target_filename="x.mp3"
+            )
+    with pytest.raises(HomeAssistantError, match="Not allowed to read"):
         await action(
             hass, "send_file", file_path="/nope/missing.mp3", target_filename="x.mp3"
         )
+    assert not any(w[:2] == b"\xaa\xc0" for w in device.writes)
 
 
 async def test_cancel_without_transfer(hass, setup_integration):
@@ -334,9 +362,7 @@ async def test_edit_file_refused_while_playing(hass, setup_integration, device):
     coordinator(hass, setup_integration).mark_playback_inactive()
 
 
-async def test_edit_file_works_right_after_stop_file(
-    hass, setup_integration, device
-):
+async def test_edit_file_works_right_after_stop_file(hass, setup_integration, device):
     # The panel stops a playing file and saves right away, before the
     # device's "stopped" event arrives
     from .conftest import coordinator

@@ -349,9 +349,10 @@ async def async_send_file_service(
 
     Downloads/processes the file and uploads it to the device.
     The file_path can be:
-    - Local file path
+    - Local file path, in a folder listed in allowlist_external_dirs
     - HTTP/HTTPS URL (will be downloaded)
     - Home Assistant media URL (/media/...)
+    - Media source ID (media-source://...), including text-to-speech
 
     Returns the filename and file index on the device, so automations can
     play it next (file_index is None if the file list couldn't be

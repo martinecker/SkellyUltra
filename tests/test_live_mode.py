@@ -360,8 +360,10 @@ async def test_speaker_play_failures_raise(
             blocking=True,
         )
 
-    with pytest.raises(HomeAssistantError, match="Media file not found"):
+    with pytest.raises(HomeAssistantError, match="File not found"):
         await play(tmp_path / "missing.mp3")
+    with pytest.raises(HomeAssistantError, match="Not allowed to read"):
+        await play("/etc/passwd")
 
     clip = tmp_path / "tone.mp3"
     clip.write_bytes(tone_mp3)

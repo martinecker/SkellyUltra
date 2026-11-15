@@ -86,8 +86,13 @@ def onboarded():
 
 @pytest.fixture(autouse=True)
 def own_config_dir(hass: HomeAssistant, tmp_path):
-    """Give each test its own config dir, so files (e.g. TTS cache) don't leak."""
+    """Give each test its own config dir, so files (e.g. TTS cache) don't leak.
+
+    The test's tmp_path is in allowlist_external_dirs, as a user's sound
+    folder would be, so local files there may be played and uploaded.
+    """
     hass.config.config_dir = str(tmp_path)
+    hass.config.allowlist_external_dirs = {str(tmp_path)}
 
 
 class _FastAsyncio:

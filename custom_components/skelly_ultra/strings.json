@@ -148,7 +148,7 @@
         },
         "file_path": {
           "name": "File path",
-          "description": "Path to the audio file. Can be a local file path, HTTP/HTTPS URL, Home Assistant media path (/media/...), or media source ID (media-source://...), including text-to-speech media."
+          "description": "Path to the audio file. Can be a local file path (in a folder listed in allowlist_external_dirs), HTTP/HTTPS URL, Home Assistant media path (/media/...), or media source ID (media-source://...), including text-to-speech media."
         },
         "target_filename": {
           "name": "Target filename",

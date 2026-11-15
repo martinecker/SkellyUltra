@@ -84,7 +84,7 @@ send_file:
       example: "sensor.skelly_ultra_volume"
     file_path:
       name: File path
-      description: Path to the audio file. Can be a local filesystem path, an HTTP/HTTPS URL to download, a Home Assistant media URL (e.g., /media/local/sounds/file.mp3), or a media source ID (e.g., media-source://media_source/local/sounds/file.mp3). Text-to-speech media source IDs work too, but send_file_from_tts is easier to use.
+      description: Path to the audio file. Can be a local filesystem path in a folder listed in allowlist_external_dirs, an HTTP/HTTPS URL to download, a Home Assistant media URL (e.g., /media/local/sounds/file.mp3), or a media source ID (e.g., media-source://media_source/local/sounds/file.mp3). Text-to-speech media source IDs work too, but send_file_from_tts is easier to use.
       required: true
       example: "/media/local/sounds/announcement.mp3"
       selector:

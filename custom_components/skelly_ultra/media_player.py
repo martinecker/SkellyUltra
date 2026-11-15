@@ -34,6 +34,7 @@ from .entity import SkellyCoordinatorEntity, async_run_command
 from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
+from .uploads import async_resolve_local_file
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -259,8 +260,13 @@ class SkellyLiveMediaPlayer(
             media_id: Path to local audio file, URL, or media source URI
             **kwargs: Additional arguments
 
-        Raises HomeAssistantError if playback didn't start.
+        Raises HomeAssistantError if playback didn't start. A local file
+        must be in a folder HA may read (allowlist_external_dirs).
         """
+        await self._async_play(media_id)
+
+    async def _async_play(self, media_id: str, own_file: Path | None = None) -> None:
+        """Play media_id, or own_file: a file this integration made (no checks)."""
         if not self.available:
             raise HomeAssistantError("Live mode isn't connected")
 
@@ -268,7 +274,7 @@ class SkellyLiveMediaPlayer(
         await self._async_stop(raise_errors=False)
 
         # Resolve media source URIs (e.g., from TTS services)
-        if media_source.is_media_source_id(media_id):
+        if own_file is None and media_source.is_media_source_id(media_id):
             _LOGGER.debug("Resolving media source URI: %s", media_id)
             play_item = await media_source.async_resolve_media(
                 self.hass, media_id, self.entity_id
@@ -278,7 +284,7 @@ class SkellyLiveMediaPlayer(
 
         # Determine if media_id is a URL or local file path
         parsed = urlparse(media_id)
-        is_url = parsed.scheme in ("http", "https")
+        is_url = own_file is None and parsed.scheme in ("http", "https")
 
         temp_file = None
         try:
@@ -311,9 +317,9 @@ class SkellyLiveMediaPlayer(
                     )
             else:
                 # Local file path
-                media_path = Path(media_id)
-                if not await self.hass.async_add_executor_job(media_path.is_file):
-                    raise HomeAssistantError(f"Media file not found: {media_id}")
+                media_path = own_file or await async_resolve_local_file(
+                    self.hass, media_id
+                )
 
             # Extract filename for display
             if is_url:
@@ -416,22 +422,21 @@ class SkellyLiveMediaPlayer(
                         cleanup_err,
                     )
 
-    async def async_start_playback(self, media_id: str) -> asyncio.Task:
-        """Start playing media and return a task that ends with the playback.
+    async def async_start_playback(self, audio_file: Path) -> asyncio.Task:
+        """Start playing an audio file and return a task that ends with it.
+
+        audio_file is one this integration made (e.g. rendered speech), so
+        it may be outside allowlist_external_dirs (it's in the temp folder).
 
         Used by skelly_ultra.perform and converse. Raises HomeAssistantError
         if playback didn't start, like async_play_media. Await the task with
         asyncio.shield: cancelling it would leave the state stuck on playing.
         """
         self._monitor_task = None
-        await self.async_play_media(MediaType.MUSIC, media_id)
+        await self._async_play(str(audio_file), own_file=audio_file)
         if self._monitor_task is None:
             raise HomeAssistantError("Live mode playback didn't start")
         return self._monitor_task
-
-    async def async_play_and_wait(self, media_id: str) -> None:
-        """Play media and return once playback has finished."""
-        await asyncio.shield(await self.async_start_playback(media_id))
 
     async def _monitor_playback_status(self) -> None:
         """Monitor playback status via REST server and update state when done."""

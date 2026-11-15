@@ -324,7 +324,7 @@ class _Perform:
                 movement_sent = True
                 await stage.async_send_movement(new_action)
 
-            playback = await stage.live_player().async_start_playback(str(audio_path))
+            playback = await stage.live_player().async_start_playback(audio_path)
             started.set_result(None)
             await asyncio.shield(playback)
         except HomeAssistantError:
