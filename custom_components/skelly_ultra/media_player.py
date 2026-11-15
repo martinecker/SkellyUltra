@@ -7,25 +7,24 @@ import base64
 import contextlib
 from functools import partial
 import logging
-from pathlib import Path
-import tempfile
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlparse
 
-from homeassistant.components import media_source
 from homeassistant.components.media_player import (
     BrowseMedia,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
-    async_process_play_media_url,
+)
+from homeassistant.components.media_source.const import (
+    URI_SCHEME as MEDIA_SOURCE_URI_SCHEME,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import DOMAIN
@@ -34,7 +33,7 @@ from .entity import SkellyCoordinatorEntity, async_run_command
 from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
-from .uploads import async_resolve_local_file
+from .uploads import async_resolve_audio_source, remove_temp_files
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -62,6 +61,17 @@ LEAD_IN_NOISE_DB = -45.0
 
 # How often the live speaker asks the REST server whether its clip still plays
 STATUS_POLL_INTERVAL = 1.0
+
+
+def _media_title(media_id: str) -> str:
+    """Return a title to show for media_id: its file name, if it has one."""
+    if media_id.startswith(MEDIA_SOURCE_URI_SCHEME):
+        if media_id.startswith(f"{MEDIA_SOURCE_URI_SCHEME}tts/"):
+            return "Text to speech"
+        path = media_id.removeprefix(MEDIA_SOURCE_URI_SCHEME)
+    else:
+        path = urlparse(media_id).path
+    return PurePosixPath(path.partition("?")[0]).name or "Audio"
 
 
 def _is_playing_on(status: dict[str, Any], mac: str | None) -> bool:
@@ -271,67 +281,26 @@ class SkellyLiveMediaPlayer(
         await self._async_play(media_id)
 
     async def _async_play(self, media_id: str, own_file: Path | None = None) -> None:
-        """Play media_id, or own_file: a file this integration made (no checks)."""
+        """Play media_id, or own_file: a file this integration made (no checks).
+
+        media_id can be anything skelly_ultra.send_file takes: a media source
+        ID (including text-to-speech), an http(s) URL, a /media/... path or
+        a local file in an allowed folder (see async_resolve_audio_source).
+        """
         if not self.available:
             raise HomeAssistantError("Live mode isn't connected")
 
         # Stop any existing playback
         await self._async_stop(raise_errors=False)
 
-        # Resolve media source URIs (e.g., from TTS services)
-        if own_file is None and media_source.is_media_source_id(media_id):
-            _LOGGER.debug("Resolving media source URI: %s", media_id)
-            play_item = await media_source.async_resolve_media(
-                self.hass, media_id, self.entity_id
-            )
-            media_id = async_process_play_media_url(self.hass, play_item.url)
-            _LOGGER.info("Resolved media source to URL: %s", media_id)
-
-        # Determine if media_id is a URL or local file path
-        parsed = urlparse(media_id)
-        is_url = own_file is None and parsed.scheme in ("http", "https")
-
-        temp_file = None
+        temp_files: list[Path] = []
         try:
-            if is_url:
-                # Download the file from URL
-                _LOGGER.info("Downloading audio from URL: %s", media_id)
-                session = async_get_clientsession(self.hass)
-
-                async with session.get(media_id) as response:
-                    if response.status != 200:
-                        # The path only: the URL may carry an access token
-                        raise HomeAssistantError(
-                            f"Couldn't download {parsed.path}: HTTP {response.status}"
-                        )
-
-                    # Save to temporary file
-                    audio_content = await response.read()
-                    # Create temp file with suffix from URL
-                    suffix = Path(parsed.path).suffix or ".mp3"
-                    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                    await self.hass.async_add_executor_job(
-                        temp_file.write, audio_content
-                    )
-                    await self.hass.async_add_executor_job(temp_file.close)
-                    media_path = Path(temp_file.name)
-                    _LOGGER.debug(
-                        "Downloaded %d bytes to temporary file: %s",
-                        len(audio_content),
-                        media_path,
-                    )
-            else:
-                # Local file path
-                media_path = own_file or await async_resolve_local_file(
-                    self.hass, media_id
-                )
-
-            # Extract filename for display
-            if is_url:
-                # For URLs, use the last part of the path or a generic name
-                self._current_media_title = Path(parsed.path).name or "Audio"
-            else:
-                self._current_media_title = media_path.name
+            media_path = own_file or await async_resolve_audio_source(
+                self.hass, media_id, temp_files
+            )
+            self._current_media_title = (
+                media_path.name if own_file else _media_title(media_id)
+            )
 
             _LOGGER.info(
                 "Processing audio file: %s (format: %s)",
@@ -417,17 +386,8 @@ class SkellyLiveMediaPlayer(
                 f"Couldn't play the audio: {str(err) or type(err).__name__}"
             ) from err
         finally:
-            # Clean up temporary file if it was created
-            if temp_file is not None:
-                try:
-                    await self.hass.async_add_executor_job(Path(temp_file.name).unlink)
-                    _LOGGER.debug("Cleaned up temporary file: %s", temp_file.name)
-                except (OSError, FileNotFoundError) as cleanup_err:
-                    _LOGGER.debug(
-                        "Failed to clean up temporary file %s: %s",
-                        temp_file.name,
-                        cleanup_err,
-                    )
+            if temp_files:
+                await self.hass.async_add_executor_job(remove_temp_files, temp_files)
 
     async def async_start_playback(self, audio_file: Path) -> asyncio.Task:
         """Start playing an audio file and return a task that ends with it.

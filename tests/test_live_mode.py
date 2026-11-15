@@ -9,6 +9,7 @@ import aiohttp
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.setup import async_setup_component
 
 from custom_components.skelly_ultra import media_player as media_player_module
 from custom_components.skelly_ultra import stage as stage_module
@@ -530,3 +531,80 @@ async def test_perform_stopped_midway_silences_and_restores(
     assert hass.states.get(speaker).state == "idle"
     manager = hass.data[DOMAIN][setup_integration.entry_id]["perform"]
     assert not manager.running
+
+
+@pytest.fixture
+async def speaker_on(hass, setup_integration, rest_server):
+    """The Live Mode Speaker, with live mode on and clips that keep playing."""
+    await async_setup_component(hass, "media_source", {})
+    await turn_on_live_mode(hass, setup_integration, rest_server)
+    rest_server.clip_polls = 1000
+    return entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
+
+
+@pytest.fixture
+def temp_dir(tmp_path, monkeypatch):
+    path = tmp_path / "temp"
+    path.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(path))
+    return path
+
+
+async def test_speaker_plays_local_media_source(
+    hass, speaker_on, rest_server, media_dir, tone_mp3
+):
+    """A file from My media is read from disk, not fetched over HTTP."""
+    (media_dir / "sounds").mkdir(parents=True)
+    (media_dir / "sounds" / "boo.mp3").write_bytes(tone_mp3)
+    await play_clip(
+        hass, speaker_on, "media-source://media_source/local/sounds/boo.mp3"
+    )
+    state = hass.states.get(speaker_on)
+    assert state.state == "playing"
+    assert state.attributes["media_title"] == "boo.mp3"
+    assert len(rest_server.plays) == 1
+
+
+async def test_speaker_plays_tts_without_ha_url(
+    hass, speaker_on, rest_server, tts_entity, temp_dir
+):
+    """Speech is fetched from the TTS manager, so no HA URL is needed."""
+    from homeassistant.components import tts
+
+    media_id = tts.generate_media_source_id(hass, "Boo", engine="tts.fake_voice")
+    await play_clip(hass, speaker_on, media_id)
+    state = hass.states.get(speaker_on)
+    assert state.state == "playing"
+    assert state.attributes["media_title"] == "Text to speech"
+    assert tts_entity.spoken[-1][0] == "Boo"
+    assert list(temp_dir.iterdir()) == [], "the speech's temp file was removed"
+
+
+async def test_speaker_plays_url_and_cleans_up(
+    hass, speaker_on, rest_server, aioclient_mock, tone_mp3, temp_dir
+):
+    aioclient_mock.get("http://example.com/sounds/howl.mp3?x=1", content=tone_mp3)
+    await play_clip(hass, speaker_on, "http://example.com/sounds/howl.mp3?x=1")
+    state = hass.states.get(speaker_on)
+    assert state.state == "playing"
+    assert state.attributes["media_title"] == "howl.mp3"
+    assert list(temp_dir.iterdir()) == [], "the download was removed"
+
+
+@pytest.mark.parametrize(
+    ("media_id", "message"),
+    [
+        ("media-source://media_source/local/nope.mp3", "nope.mp3"),
+        ("/media/local/nope.mp3", "Media file not found"),
+        ("http://example.com/gone.mp3", "HTTP 404"),
+    ],
+)
+async def test_speaker_unresolvable_media_raises(
+    hass, speaker_on, rest_server, aioclient_mock, media_dir, media_id, message
+):
+    media_dir.mkdir(exist_ok=True)
+    aioclient_mock.get("http://example.com/gone.mp3", status=404)
+    with pytest.raises(HomeAssistantError, match=message):
+        await play_clip(hass, speaker_on, media_id)
+    assert hass.states.get(speaker_on).state == "idle"
+    assert not rest_server.plays
