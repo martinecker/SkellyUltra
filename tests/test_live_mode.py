@@ -1,5 +1,6 @@
 """Live mode: the Skelly as a Bluetooth speaker, and the perform action."""
 
+import asyncio
 import tempfile
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from custom_components.skelly_ultra import stage as stage_module
 from custom_components.skelly_ultra import uploads
 from custom_components.skelly_ultra.const import DOMAIN
 
-from .conftest import advance, entity_id, wait_for
+from .conftest import advance, coordinator, entity_id, wait_for
 from .device_sim import Light
 from .rest_sim import LIVE_MAC
 
@@ -227,3 +228,113 @@ async def test_send_file_from_tts_is_not_cached_and_cleans_up(
     tts_cache = Path(hass.config.path("tts"))
     assert not tts_cache.exists() or list(tts_cache.iterdir()) == [], "cache=False"
     assert device.file("boo.mp3")
+
+
+async def turn_on_live_mode(hass, entry, rest_server):
+    switch = entity_id(hass, entry, "switch", "live_mode")
+    await hass.services.async_call(
+        "switch", "turn_on", {ATTR_ENTITY_ID: switch}, blocking=True
+    )
+    await wait_for(hass, lambda: rest_server.connected)
+    return switch
+
+
+async def test_speaker_waits_only_for_its_own_skelly(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    """Another Skelly playing on the same REST server doesn't keep this one busy."""
+    rest_server.other_playing = True
+    async with asyncio.timeout(10):
+        result = await perform(hass, message="Hi", mood="none", movement=["none"])
+    assert result["status"] == "ok"
+    speaker = entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
+    assert hass.states.get(speaker).state == "idle"
+    assert rest_server.other_playing, "the other Skelly's audio was left alone"
+
+
+async def test_speaker_stop_stops_only_its_own_skelly(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    rest_server.clip_polls = 1000
+    rest_server.other_playing = True
+    result = await perform(
+        hass, message="Hi", mood="none", movement=["none"], wait_until_done=False
+    )
+    assert result["status"] == "ok" and rest_server.playing
+    speaker = entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
+    assert hass.states.get(speaker).state == "playing"
+
+    await hass.services.async_call(
+        "media_player", "media_stop", {ATTR_ENTITY_ID: speaker}, blocking=True
+    )
+    assert rest_server.stops == [LIVE_MAC]
+    assert not rest_server.playing
+    assert rest_server.other_playing, "the other Skelly kept playing"
+    # The perform ends once its playback monitor notices
+    manager = hass.data[DOMAIN][setup_integration.entry_id]["perform"]
+    await wait_for(hass, lambda: not manager.running, timeout=5)
+
+
+async def test_live_mode_survives_rest_server_hiccup(
+    hass, setup_integration, device, rest_server, caplog
+):
+    entry = setup_integration
+    switch = await turn_on_live_mode(hass, entry, rest_server)
+    client = hass.data[DOMAIN][entry.entry_id]["adapter"].client
+
+    rest_server.up = False  # status answers 503 for two polls
+    await advance(hass, 31)
+    await advance(hass, 31)
+    assert client.live_mode_client_address == LIVE_MAC
+    assert rest_server.connected
+    assert hass.states.get(switch).state == STATE_ON
+    assert caplog.text.count("Could not check live mode device") == 1
+
+    rest_server.up = True
+    await advance(hass, 31)
+    assert client.live_mode_client_address == LIVE_MAC
+    assert hass.states.get(switch).state == STATE_ON
+
+
+async def test_live_mode_dropped_by_server_is_restored_in_background(
+    hass, setup_integration, device, rest_server
+):
+    entry = setup_integration
+    switch = await turn_on_live_mode(hass, entry, rest_server)
+    coord = coordinator(hass, entry)
+    client = hass.data[DOMAIN][entry.entry_id]["adapter"].client
+
+    # The REST server lost the link (e.g. it restarted); pairing again is slow
+    rest_server.connected = False
+    rest_server.pair_gate = asyncio.Event()
+    await advance(hass, 31)
+    await wait_for(hass, rest_server.pair_started.is_set)
+    # The poll finished without waiting for the pairing, and holds no lock
+    assert coord.last_update_success
+    assert not coord.action_lock.locked()
+    assert client.live_mode_client_address is None
+
+    rest_server.pair_gate.set()
+    await wait_for(hass, lambda: rest_server.connected)
+    await wait_for(hass, lambda: client.live_mode_client_address == LIVE_MAC)
+    assert hass.states.get(switch).state == STATE_ON
+
+
+async def test_live_mode_off_cancels_background_restore(
+    hass, setup_integration, device, rest_server
+):
+    entry = setup_integration
+    switch = await turn_on_live_mode(hass, entry, rest_server)
+
+    rest_server.connected = False
+    rest_server.pair_gate = asyncio.Event()
+    await advance(hass, 31)
+    await wait_for(hass, rest_server.pair_started.is_set)
+
+    await hass.services.async_call(
+        "switch", "turn_off", {ATTR_ENTITY_ID: switch}, blocking=True
+    )
+    rest_server.pair_gate.set()
+    await advance(hass, 1)
+    assert not rest_server.connected, "the restore didn't reconnect behind our back"
+    assert hass.states.get(switch).state == STATE_OFF

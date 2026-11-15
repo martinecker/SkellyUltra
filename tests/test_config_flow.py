@@ -188,3 +188,60 @@ async def test_scan_show_all_includes_other_devices(hass, rest_server):
     )
     choices = result["data_schema"].schema["address"].container
     assert "33:33:33:33:33:33" in choices
+
+
+async def test_same_skelly_cannot_be_added_twice(hass, rest_server, bluetooth_entry):
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], form())
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == "AA:BB:CC:DD:EE:FF"
+
+    # Again, typed in lower case and through a REST server this time
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        form(address="aa:bb:cc:dd:ee:ff", **{CONF_USE_BLE_PROXY: True}),
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_configured"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_scan_leaves_out_skellies_already_set_up(hass, rest_server):
+    MockConfigEntry(domain=DOMAIN, unique_id="11:11:11:11:11:11").add_to_hass(hass)
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        form(**{CONF_USE_BLE_PROXY: True, "mode": "scan", "address": ""}),
+    )
+    choices = result["data_schema"].schema["address"].container
+    assert "11:11:11:11:11:11" not in choices
+    assert "22:22:22:22:22:22" in choices
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"address": "__show_all__"}
+    )
+    choices = result["data_schema"].schema["address"].container
+    assert "11:11:11:11:11:11" not in choices and "33:33:33:33:33:33" in choices
+
+
+async def test_scan_without_skellies_offers_retry_show_all_or_manual(hass, rest_server):
+    rest_server.devices = [{"name": "Kitchen Speaker", "address": "33:33:33:33:33:33"}]
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        form(**{CONF_USE_BLE_PROXY: True, "mode": "scan", "address": ""}),
+    )
+    assert result["step_id"] == "scan"
+    assert result["errors"] == {"base": "no_devices_found"}
+    assert result["data_schema"].schema["action"].container == [
+        "retry",
+        "show_all",
+        "manual",
+    ]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "show_all"}
+    )
+    choices = result["data_schema"].schema["address"].container
+    assert "33:33:33:33:33:33" in choices

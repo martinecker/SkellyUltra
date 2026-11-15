@@ -8,6 +8,7 @@ name, PIN, whether classic Bluetooth was enabled over BLE).
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any
 
@@ -19,6 +20,8 @@ from pytest_homeassistant_custom_component.test_util.aiohttp import (
 from .device_sim import FakeSkellyDevice, Light
 
 LIVE_MAC = "11:22:33:44:55:66"
+# Another Skelly's speaker on the same REST server
+OTHER_MAC = "AA:BB:CC:00:11:22"
 
 
 @dataclass
@@ -38,6 +41,13 @@ class FakeRestServer:
         self.paired_mac: str | None = None
         self.connected = False
         self.playing = False
+        # Audio playing to another Skelly on this server
+        self.other_playing = False
+        self.stops: list[str | None] = []
+        # Set pair_gate to hold pairing until it is set; pair_started is set
+        # once a pairing waits on it
+        self.pair_gate: asyncio.Event | None = None
+        self.pair_started = asyncio.Event()
         # Number of status polls a clip keeps playing for
         self.clip_polls = 1
         self._polls_left = 0
@@ -65,6 +75,9 @@ class FakeRestServer:
         return self._reply(method, url, {"status": "ok"})
 
     async def _pair(self, method, url, data):
+        if self.pair_gate is not None:
+            self.pair_started.set()
+            await self.pair_gate.wait()
         d = self.device
         if not d.classic_bt_enabled or data.get("device_name") not in (
             None,
@@ -98,10 +111,28 @@ class FakeRestServer:
         devices = (
             [{"mac": LIVE_MAC, "name": self.device.live_name}] if self.connected else []
         )
+        # Like the real server: is_playing is True while any target plays,
+        # and sessions has one entry per target (upper-case MAC)
+        sessions = []
+        if self.playing:
+            sessions.append(
+                {"target": LIVE_MAC, "file_path": "/tmp/a", "is_playing": True}
+            )
+        if self.other_playing:
+            sessions.append(
+                {"target": OTHER_MAC, "file_path": "/tmp/b", "is_playing": True}
+            )
         return self._reply(
             method,
             url,
-            {"bluetooth": {"devices": devices}, "audio": {"is_playing": self.playing}},
+            {
+                "bluetooth": {"devices": devices},
+                "audio": {
+                    "is_playing": self.playing or self.other_playing,
+                    "active_sessions": len(sessions),
+                    "sessions": sessions,
+                },
+            },
         )
 
     async def _play(self, method, url, data):
@@ -118,7 +149,12 @@ class FakeRestServer:
         return self._reply(method, url, {"success": True, "is_playing": True})
 
     async def _stop(self, method, url, data):
-        self.playing = False
+        mac = (data or {}).get("mac")
+        self.stops.append(mac)
+        if mac is None or mac.upper() == LIVE_MAC:
+            self.playing = False
+        if mac is None or mac.upper() == OTHER_MAC:
+            self.other_playing = False
         return self._reply(method, url, {"success": True})
 
     async def _link_quality(self, method, url, data):

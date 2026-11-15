@@ -79,6 +79,33 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             _LOGGER.exception("Error validating REST server")
             return {"base": "rest_server_error"}
 
+    async def _async_create_device_entry(self, address: str, device_name: str):
+        """Create the entry for a Skelly, unless one already manages it.
+
+        The unique ID is the Skelly's BLE address, whether it is reached
+        directly or through a REST server: one Skelly takes one BLE link, so
+        two entries for it would fight over it.
+        """
+        await self.async_set_unique_id(address.upper())
+        self._abort_if_unique_id_configured()
+        title = build_device_identifier(
+            device_name, address, self._server_url if self._use_ble_proxy else None
+        )
+        return self.async_create_entry(
+            title=title,
+            data={
+                CONF_ADDRESS: address,
+                CONF_NAME: device_name,
+                CONF_SERVER_URL: self._server_url,
+                CONF_USE_BLE_PROXY: self._use_ble_proxy,
+                CONF_DEVICE_TYPE: self._device_type,
+            },
+        )
+
+    def _not_configured(self, address: str) -> bool:
+        """Return True if no entry manages the Skelly at this address yet."""
+        return address.upper() not in self._async_current_ids()
+
     async def async_step_user(self, user_input: dict[str, Any] | None = None):
         """Entry point — go straight to the connection form."""
         return await self.async_step_connection()
@@ -157,19 +184,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
             )
 
         device_name = user_input.get(CONF_NAME) or default_name
-        title = build_device_identifier(
-            device_name, address, server_url if use_ble_proxy else None
-        )
-        return self.async_create_entry(
-            title=title,
-            data={
-                CONF_ADDRESS: address,
-                CONF_NAME: device_name,
-                CONF_SERVER_URL: server_url,
-                CONF_USE_BLE_PROXY: use_ble_proxy,
-                CONF_DEVICE_TYPE: self._device_type,
-            },
-        )
+        return await self._async_create_device_entry(address, device_name)
 
     async def async_step_server_warning(self, user_input: dict[str, Any] | None = None):
         """Show warning about REST server not being available.
@@ -187,19 +202,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
             address = self._user_input.get(CONF_ADDRESS, "")
             device_name = self._user_input.get(CONF_NAME) or self._default_name
-            title = build_device_identifier(
-                device_name, address, self._server_url if self._use_ble_proxy else None
-            )
-            return self.async_create_entry(
-                title=title,
-                data={
-                    CONF_ADDRESS: address,
-                    CONF_NAME: device_name,
-                    CONF_SERVER_URL: self._server_url,
-                    CONF_USE_BLE_PROXY: self._use_ble_proxy,
-                    CONF_DEVICE_TYPE: self._device_type,
-                },
-            )
+            return await self._async_create_device_entry(address, device_name)
 
         # Show warning form with link to documentation
         # Note: Empty schemas don't display descriptions in Home Assistant,
@@ -276,7 +279,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
                     for d in rest_devices:
                         addr = d.get("address")
-                        if not addr:
+                        if not addr or not self._not_configured(addr):
                             continue
                         name = d.get("name", "Unknown")
                         display = (
@@ -309,7 +312,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
 
                     for d in devices:
                         addr = getattr(d, "address", None)
-                        if not addr:
+                        if not addr or not self._not_configured(addr):
                             continue
                         name = getattr(d, "name", None)
                         display = f"{name} ({addr})" if name else addr
@@ -355,7 +358,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                     name_lower = name.lower()
                     if not any(f in name_lower for f in ALL_BLE_NAME_FILTERS):
                         continue
-                    if addr:
+                    if addr and self._not_configured(addr):
                         display = f"{name} ({addr})"
                         choices[addr] = display
             else:
@@ -416,16 +419,11 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         continue
 
                     addr = d.address
+                    if not self._not_configured(addr):
+                        continue
                     name = d.name
                     display = f"{name} ({addr})" if name else addr
                     choices[addr] = display
-
-            # Offer an explicit "show all" choice in case the filtered
-            # results aren't what the user expects. Selecting this will
-            # route the flow to the unfiltered show_all branch.
-            choices[SHOW_ALL_TOKEN] = "Show all devices"
-            self._discovered = choices
-            _LOGGER.debug("filtered choices populated: %s", choices)
 
             if not choices:
                 # Nothing found; show a form allowing retry, show_all (fallback), or manual entry
@@ -436,7 +434,18 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
                         )
                     }
                 )
-                return self.async_show_form(step_id="scan", data_schema=schema)
+                return self.async_show_form(
+                    step_id="scan",
+                    data_schema=schema,
+                    errors={"base": "no_devices_found"},
+                )
+
+            # Offer an explicit "show all" choice in case the filtered
+            # results aren't what the user expects. Selecting this will
+            # route the flow to the unfiltered show_all branch.
+            choices[SHOW_ALL_TOKEN] = "Show all devices"
+            self._discovered = choices
+            _LOGGER.debug("filtered choices populated: %s", choices)
 
             schema = vol.Schema({vol.Required(CONF_ADDRESS): vol.In(choices)})
             return self.async_show_form(
@@ -469,19 +478,7 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         if inferred:
             self._device_type = inferred
 
-        title = build_device_identifier(
-            device_name, address, self._server_url if self._use_ble_proxy else None
-        )
-        return self.async_create_entry(
-            title=title,
-            data={
-                CONF_ADDRESS: address,
-                CONF_NAME: device_name,
-                CONF_SERVER_URL: self._server_url,
-                CONF_USE_BLE_PROXY: self._use_ble_proxy,
-                CONF_DEVICE_TYPE: self._device_type,
-            },
-        )
+        return await self._async_create_device_entry(address, device_name)
 
 
 class SkellyOptionsFlow(config_entries.OptionsFlow):

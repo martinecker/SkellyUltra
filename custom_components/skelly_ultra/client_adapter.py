@@ -282,6 +282,30 @@ class SkellyClientAdapter:
                 "Automatic live-mode restore did not complete successfully"
             )
 
+    def start_live_mode_restore(self) -> None:
+        """Restore live mode in the background, if it is wanted.
+
+        For when live mode dropped while BLE stayed up. Runs as the same
+        tracked task as the restore after a connect, so turning live mode
+        off, disconnecting or a new connect cancels it, and it never holds
+        up the caller (a pairing can take 30 s or more). Does nothing while
+        such a restore already runs.
+        """
+        if not self._live_mode_should_connect:
+            return
+        if self._after_connect_task is not None and not self._after_connect_task.done():
+            return
+        self._after_connect_task = self.hass.async_create_background_task(
+            self._run_as_connect_task(self._restore_live_mode_logged()),
+            name=f"skelly_ultra live restore {self.address}",
+        )
+
+    async def _restore_live_mode_logged(self) -> None:
+        try:
+            await self.restore_live_mode_if_needed()
+        except Exception:
+            self._logger.exception("Error while restoring live mode")
+
     async def _retry_connect(
         self,
         attempts: int,

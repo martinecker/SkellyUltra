@@ -9,7 +9,7 @@ import logging
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
@@ -34,6 +34,39 @@ PLATFORMS: list[Platform] = [
 ]
 
 
+@callback
+def _async_set_missing_unique_id(
+    hass: HomeAssistant, entry: ConfigEntry, address: str | None
+) -> None:
+    """Give an entry made before unique IDs its Skelly's address as unique ID.
+
+    The config flow then won't add the same Skelly again. If another entry
+    already has that ID, both manage the same Skelly: this one is left
+    without an ID and a warning is logged.
+    """
+    if entry.unique_id is not None or not address:
+        return
+    unique_id = address.upper()
+    other = next(
+        (
+            e
+            for e in hass.config_entries.async_entries(DOMAIN)
+            if e.unique_id == unique_id and e.entry_id != entry.entry_id
+        ),
+        None,
+    )
+    if other is not None:
+        _LOGGER.warning(
+            "%s and %s are set up for the same Skelly (%s); remove one of them, "
+            "since they compete for its Bluetooth connection",
+            entry.title,
+            other.title,
+            address,
+        )
+        return
+    hass.config_entries.async_update_entry(entry, unique_id=unique_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up a Skelly Ultra config entry.
 
@@ -53,6 +86,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.config_entries.async_update_entry(entry, options=options)
 
     address = entry.data.get("address")
+    _async_set_missing_unique_id(hass, entry, address)
     server_url = entry.data.get(CONF_SERVER_URL, DEFAULT_SERVER_URL)
     use_ble_proxy = entry.data.get(CONF_USE_BLE_PROXY, False)
     device_info = get_device_info(hass, entry)

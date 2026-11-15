@@ -1,5 +1,12 @@
 {
   "config": {
+    "abort": {
+      "already_configured": "This Skelly is already set up",
+      "already_in_progress": "This Skelly is already being set up",
+      "bluetooth_integration_required": "Bluetooth integration is required to configure this device",
+      "no_devices_found": "No devices found",
+      "unknown": "Unexpected error"
+    },
     "error": {
       "bluetooth_integration_required": "Bluetooth integration is required to configure this device",
       "no_devices_found": "No devices found",
