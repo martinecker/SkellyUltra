@@ -326,7 +326,12 @@ class _Perform:
 
             playback = await stage.live_player().async_start_playback(audio_path)
             started.set_result(None)
-            await asyncio.shield(playback)
+            try:
+                await asyncio.shield(playback)
+            except asyncio.CancelledError:
+                # Stopped (e.g. the automation was): silence the Skelly too
+                await stage.async_stop_playback("Perform")
+                raise
         except HomeAssistantError:
             raise
         except Exception as err:

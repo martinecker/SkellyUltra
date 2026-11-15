@@ -569,7 +569,7 @@ class _Converse:
         except asyncio.CancelledError:
             # Stopped (e.g. the automation was): silence the Skelly speaking
             if speaking is not None:
-                await _async_stop_playback(speaking)
+                await speaking.stage.async_stop_playback("Converse")
             raise
         finally:
             await self._async_restore()
@@ -602,16 +602,6 @@ class _Converse:
                 )
             if participant.movement_sent and self.data["restore_movement"]:
                 await stage.async_restore_movement(participant.old_action)
-
-
-async def _async_stop_playback(participant: _Participant) -> None:
-    """Stop a line that is playing. Best effort."""
-    try:
-        await participant.stage.live_player().async_media_stop()
-    except HomeAssistantError as err:
-        _LOGGER.warning("Converse: couldn't stop %s: %s", participant.name, err)
-    except Exception:
-        _LOGGER.exception("Converse: failed to stop %s", participant.name)
 
 
 def _log_background_result(task: asyncio.Task) -> None:

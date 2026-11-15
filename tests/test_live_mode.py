@@ -504,3 +504,29 @@ async def test_speaker_monitor_can_be_cancelled(
     assert monitor.cancelled()
     await hass.async_block_till_done()
     assert hass.states.get(speaker).state == "idle"
+
+
+async def test_perform_stopped_midway_silences_and_restores(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    """Cancelling a perform (e.g. a restarted automation) stops the line too."""
+    rest_server.clip_polls = 1000  # the line plays for a long time
+    task = hass.async_create_task(perform(hass, message="Boo", mood="spooky"))
+    # Not wait_for: block_till_done would wait for the perform itself
+    for _ in range(200):
+        if rest_server.playing:
+            break
+        await asyncio.sleep(0.05)
+    assert rest_server.playing
+    assert device.eye_icon == 9, "spooky look on"
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    await hass.async_block_till_done()
+    assert rest_server.stops == [LIVE_MAC], "the line was stopped"
+    assert not rest_server.playing
+    assert device.eye_icon == 1, "look restored"
+    speaker = entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
+    assert hass.states.get(speaker).state == "idle"
+    manager = hass.data[DOMAIN][setup_integration.entry_id]["perform"]
+    assert not manager.running

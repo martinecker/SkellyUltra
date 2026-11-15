@@ -240,6 +240,18 @@ class SkellyStage:
             raise HomeAssistantError("Live Mode Speaker entity not found")
         return player
 
+    async def async_stop_playback(self, caller: str) -> None:
+        """Stop the line this Skelly is saying. Best effort: failures are logged.
+
+        caller names the action for the log, e.g. "Perform".
+        """
+        try:
+            await self.live_player().async_media_stop()
+        except HomeAssistantError as err:
+            _LOGGER.warning("%s: couldn't stop %s: %s", caller, self.name, err)
+        except Exception:
+            _LOGGER.exception("%s: failed to stop %s", caller, self.name)
+
     def movement_action(
         self, mood: str, movement: list[str], parts_bits: int | None
     ) -> int | None:
