@@ -8,6 +8,7 @@ Home Assistant shows the new state.
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
@@ -245,3 +246,135 @@ async def test_12ft_head_movement_uses_its_own_bit(hass, mock_ble):
     )
     # Captured from the 12ft Skelly's app: head is bit 0x02 on this model.
     assert mock_ble.action == 0x02
+
+
+@pytest.mark.parametrize(
+    ("domain", "service", "suffix", "data"),
+    [
+        ("number", "set_value", "volume_number", {"value": 50}),
+        ("number", "set_value", "effect_speed_0", {"value": 10}),
+        ("select", "select_option", "eye_icon", None),
+        ("select", "select_option", "effect_mode_0", None),
+        ("light", "turn_on", "light_0", {"rgb_color": (1, 2, 3)}),
+        ("light", "turn_on", "light_0", {"brightness": 10}),
+        ("light", "turn_off", "light_0", {}),
+        ("switch", "turn_on", "color_cycle_0", {}),
+        ("switch", "turn_on", "movement_head", {}),
+        ("media_player", "volume_set", "internal_files", {"volume_level": 0.5}),
+    ],
+)
+async def test_failed_command_raises_and_changes_nothing(
+    hass, setup_integration, device, domain, service, suffix, data
+):
+    """A command the Skelly didn't get shows an error, not a fake success."""
+    eid = entity_id(hass, setup_integration, domain, suffix)
+    before = hass.states.get(eid)
+    if data is None:
+        option = next(o for o in before.attributes["options"] if o != before.state)
+        data = {"option": option}
+    # The link is gone but HA hasn't noticed yet, and reconnecting fails
+    device.reachable = False
+    device.drop_connection(notify=False)
+
+    with pytest.raises(HomeAssistantError, match="^Couldn't"):
+        await call(hass, domain, service, eid, **data)
+    after = hass.states.get(eid)
+    assert after.state == before.state
+    assert after.attributes == before.attributes
+
+
+async def test_failed_movement_trigger_raises(hass, setup_integration, device):
+    entry = setup_integration
+    await call(
+        hass, "switch", "turn_on", entity_id(hass, entry, "switch", "movement_head")
+    )
+    device.reachable = False
+    device.drop_connection(notify=False)
+    with pytest.raises(HomeAssistantError, match="Couldn't trigger the movement"):
+        await call(
+            hass,
+            "button",
+            "press",
+            entity_id(hass, entry, "button", "trigger_movement"),
+        )
+
+
+async def test_movement_trigger_needs_a_movement_switch(
+    hass, setup_integration, device
+):
+    entry = setup_integration
+    assert device.action == 0
+    writes = len(device.writes)
+    with pytest.raises(ServiceValidationError, match="movement switch"):
+        await call(
+            hass,
+            "button",
+            "press",
+            entity_id(hass, entry, "button", "trigger_movement"),
+        )
+    assert len(device.writes) == writes
+
+
+async def test_override_values_need_their_switch(hass, setup_integration):
+    entry = setup_integration
+    chunk_size = entity_id(hass, entry, "number", "chunk_size")
+    bitrate = entity_id(hass, entry, "select", "bitrate")
+    with pytest.raises(ServiceValidationError, match="Override Chunk Size"):
+        await call(hass, "number", "set_value", chunk_size, value=100)
+    with pytest.raises(ServiceValidationError, match="Override Bitrate"):
+        await call(hass, "select", "select_option", bitrate, option="64k")
+
+    await call(
+        hass,
+        "switch",
+        "turn_on",
+        entity_id(hass, entry, "switch", "override_chunk_size"),
+    )
+    await call(
+        hass, "switch", "turn_on", entity_id(hass, entry, "switch", "override_bitrate")
+    )
+    await call(hass, "number", "set_value", chunk_size, value=100)
+    await call(hass, "select", "select_option", bitrate, option="64k")
+    assert hass.states.get(chunk_size).state == "100"
+    assert hass.states.get(bitrate).state == "64k"
+
+
+async def test_internal_files_rejects_unknown_file(hass, setup_integration):
+    player = entity_id(hass, setup_integration, "media_player", "internal_files")
+    with pytest.raises(ServiceValidationError, match="File not found"):
+        await call(hass, "media_player", "select_source", player, source="nope.mp3")
+    with pytest.raises(ServiceValidationError, match="Invalid file index"):
+        await call(
+            hass,
+            "media_player",
+            "play_media",
+            player,
+            media_content_id="nope",
+            media_content_type="music",
+        )
+
+
+async def test_connected_switch_reports_failed_connect(hass, setup_integration, device):
+    switch = entity_id(hass, setup_integration, "switch", "connected")
+    await call(hass, "switch", "turn_off", switch)
+    device.reachable = False
+    with pytest.raises(HomeAssistantError, match="Couldn't connect to the Skelly"):
+        await call(hass, "switch", "turn_on", switch)
+    assert hass.states.get(switch).state == STATE_OFF
+    assert setup_integration.options["connected"] is False
+
+
+async def test_internal_files_reports_failed_play(hass, setup_integration, device):
+    player = entity_id(hass, setup_integration, "media_player", "internal_files")
+    device.reachable = False
+    device.drop_connection(notify=False)
+    with pytest.raises(HomeAssistantError, match="Couldn't play file 1"):
+        await call(
+            hass,
+            "media_player",
+            "play_media",
+            player,
+            media_content_id="1",
+            media_content_type="music",
+        )
+    assert hass.states.get(player).state == "idle"

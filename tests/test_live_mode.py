@@ -338,3 +338,52 @@ async def test_live_mode_off_cancels_background_restore(
     await advance(hass, 1)
     assert not rest_server.connected, "the restore didn't reconnect behind our back"
     assert hass.states.get(switch).state == STATE_OFF
+
+
+async def test_speaker_play_failures_raise(
+    hass, setup_integration, rest_server, tone_mp3, tmp_path
+):
+    """Playing to the live speaker reports why nothing played."""
+    entry = setup_integration
+    await turn_on_live_mode(hass, entry, rest_server)
+    speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
+
+    async def play(path):
+        await hass.services.async_call(
+            "media_player",
+            "play_media",
+            {
+                ATTR_ENTITY_ID: speaker,
+                "media_content_id": str(path),
+                "media_content_type": "music",
+            },
+            blocking=True,
+        )
+
+    with pytest.raises(HomeAssistantError, match="Media file not found"):
+        await play(tmp_path / "missing.mp3")
+
+    clip = tmp_path / "tone.mp3"
+    clip.write_bytes(tone_mp3)
+    rest_server.connected = False  # the server lost the Skelly
+    with pytest.raises(
+        HomeAssistantError, match="REST server couldn't start playback: not connected"
+    ):
+        await play(clip)
+    state = hass.states.get(speaker)
+    assert state.state == "idle"
+    assert "media_title" not in state.attributes
+    assert not rest_server.plays
+
+
+async def test_live_mode_switch_reports_failed_connect(
+    hass, setup_integration, device, rest_server
+):
+    rest_server.up = False  # the REST server doesn't answer
+    switch = entity_id(hass, setup_integration, "switch", "live_mode")
+    with pytest.raises(HomeAssistantError, match="Couldn't connect live mode"):
+        await hass.services.async_call(
+            "switch", "turn_on", {ATTR_ENTITY_ID: switch}, blocking=True
+        )
+    assert not rest_server.connected
+    assert hass.states.get(switch).state == STATE_OFF

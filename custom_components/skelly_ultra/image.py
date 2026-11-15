@@ -9,17 +9,17 @@ the integration's `images/<image_folder>/` folder (per device profile) as
 from __future__ import annotations
 
 import logging
-from typing import Any
 from datetime import datetime, timezone
+from typing import Any
 
 from homeassistant.components.image import ImageEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .entity import SkellyCoordinatorEntity
 from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 
 _LOGGER = logging.getLogger(__name__)
@@ -40,10 +40,9 @@ async def async_setup_entry(
         )
 
 
-class SkellyEyeImage(CoordinatorEntity, ImageEntity):
+class SkellyEyeImage(SkellyCoordinatorEntity, ImageEntity):
     """Image entity that serves the currently selected eye icon image."""
 
-    _attr_has_entity_name = True
     _attr_content_type = "image/png"
 
     def __init__(
@@ -55,21 +54,13 @@ class SkellyEyeImage(CoordinatorEntity, ImageEntity):
     ) -> None:
         """Initialize the image entity.
 
-        coordinator: the update coordinator with `eye_icon` in data
-        entry_id: used for unique id
-        device_info: device registry info for grouping entities
-        profile: device profile providing the eye icon list and image folder
+        profile is the device profile providing the eye icon list and image
+        folder.
         """
-        # Initialize CoordinatorEntity
-        super().__init__(coordinator)
-        # Initialize ImageEntity internal state (requires hass)
         ImageEntity.__init__(self, coordinator.hass)
-
-        self.coordinator = coordinator
-        self._entry_id = entry_id
-        self._attr_name = "Eye Icon"
-        self._attr_unique_id = f"{entry_id}_eye_icon_image"
-        self._attr_device_info = device_info
+        super().__init__(
+            coordinator, entry_id, device_info, "eye_icon_image", "Eye Icon"
+        )
 
         self._profile = profile
         # Eye icon currently shown, so polls that don't change it don't

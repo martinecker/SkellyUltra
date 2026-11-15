@@ -2,22 +2,19 @@
 
 from __future__ import annotations
 
-import contextlib
-import logging
+from functools import partial
 
 from homeassistant.components.select import SelectEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .entity import SkellyCoordinatorEntity
 from .helpers import get_device_info, get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
-
-_LOGGER = logging.getLogger(__name__)
-
 
 # Bitrate options for MP3 encoding
 BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
@@ -58,10 +55,8 @@ async def async_setup_entry(
     async_add_entities(entities)
 
 
-class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
+class SkellyEyeIconSelect(SkellyCoordinatorEntity, SelectEntity):
     """Select entity to set the skelly eye icon."""
-
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -70,97 +65,40 @@ class SkellyEyeIconSelect(CoordinatorEntity, SelectEntity):
         device_info: DeviceInfo | None,
         options: list[str],
     ) -> None:
-        """Initialize the eye icon select entity.
+        """Initialize the eye icon select.
 
-        Parameters
-        ----------
-        coordinator: SkellyCoordinator
-            Coordinator providing access to the adapter/client
-        entry_id: str
-            Config entry id used to form unique id
-        device_info: DeviceInfo | None
-            Device registry info for grouping entities
-        options: list[str]
-            Eye icon labels for this device type, in device index order
+        options are this device type's eye icon labels in device index order,
+        each starting with its 1-based index (e.g. "10 Fire").
         """
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Eye Icon"
-        self._attr_unique_id = f"{entry_id}_eye_icon"
-        self._options = options
-        self._attr_device_info = device_info
-
-    @property
-    def options(self) -> list[str]:
-        """Return the available eye icon options."""
-        return self._options
+        super().__init__(coordinator, entry_id, device_info, "eye_icon", "Eye Icon")
+        self._attr_options = options
 
     @property
     def current_option(self) -> str | None:
         """Return the currently selected option, if any."""
-        # Return authoritative coordinator data (updated by coordinator polling)
-        data = getattr(self.coordinator, "data", None)
-        if data:
-            eye = data.get("eye_icon")
-            if isinstance(eye, int) and 1 <= eye <= len(self._options):
-                return self._options[eye - 1]
+        eye = self.coordinator_data.get("eye_icon")
+        if isinstance(eye, int) and 1 <= eye <= len(self.options):
+            return self.options[eye - 1]
         return None
 
     async def async_select_option(self, option: str) -> None:
-        """Handle when an option is selected in the UI.
-
-        Parses the leading integer from the option label and sends it to
-        the device via the adapter client.
-        """
-        # Parse the leading integer index from the option string
-        index_str = option.split(" ", 1)[0]
+        """Send the eye icon whose index the option starts with."""
         try:
-            icon_index = int(index_str)
+            icon_index = int(option.split(" ", 1)[0])
         except ValueError:
-            _LOGGER.error("Failed to parse eye icon index from option: %s", option)
-            return
+            raise ServiceValidationError(f"Unknown eye icon: {option}") from None
 
-        _LOGGER.info("Setting eye icon to %d (%s)", icon_index, option)
-
-        # Send command to device via adapter client
-        try:
-            await self.coordinator.adapter.client.set_eye_icon(icon_index)
-            _LOGGER.info("Successfully sent eye icon command")
-        except Exception:
-            _LOGGER.exception("Failed to send eye icon command")
-            return
-
-        # Push optimistic value into the coordinator cache so other
-        # CoordinatorEntity consumers see the update immediately, then
-        # request a refresh to get authoritative state from the device.
-        self.coordinator.async_update_data_optimistic("eye_icon", icon_index)
-
-        self.async_write_ha_state()
-
-        # Request an immediate coordinator refresh so we get authoritative state
-        with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
-
-    async def async_added_to_hass(self) -> None:
-        """Attempt to read the current eye icon from the device when entity is added.
-
-        This uses the adapter client's `get_eye_icon` helper. If the read
-        fails, the entity will remain with no current option until the user
-        selects one in the UI.
-        """
-        await super().async_added_to_hass()
-        # Ensure the entity state reflects whatever is currently in the
-        # coordinator cache. The coordinator stores `eye_icon` as a 1-based
-        # int index; the `current_option` property reads from coordinator.data.
-        data = getattr(self.coordinator, "data", None)
-        if data and data.get("eye_icon") is not None:
-            self.async_write_ha_state()
+        await self._async_command(
+            self.coordinator.adapter.client.set_eye_icon(icon_index),
+            "Couldn't set the eye icon",
+            partial(
+                self.coordinator.async_update_data_optimistic, "eye_icon", icon_index
+            ),
+        )
 
 
-class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
+class SkellyEffectModeSelect(SkellyCoordinatorEntity, SelectEntity):
     """Select entity to set the light effect mode (Static, Strobe, Pulse)."""
-
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -171,96 +109,58 @@ class SkellyEffectModeSelect(CoordinatorEntity, SelectEntity):
         label: str,
         options: list[str],
     ) -> None:
-        """Initialize the effect mode select entity.
+        """Initialize the effect mode select for a light channel.
 
-        Parameters
-        ----------
-        coordinator: SkellyCoordinator
-            Coordinator providing access to the adapter/client
-        entry_id: str
-            Config entry id used to form unique id
-        device_info: DeviceInfo | None
-            Device registry info for grouping entities
-        channel: int
-            Light channel number
-        label: str
-            Human-readable light name (e.g., "Torso Light", "Lantern")
-        options: list[str]
-            Device-specific mode names in order (index + 1 = mode value sent to device)
+        label is the light's name (e.g. "Torso Light", "Lantern"); options
+        are the device's mode names in order (index + 1 = mode value).
         """
-        super().__init__(coordinator)
-        self.coordinator = coordinator
+        super().__init__(
+            coordinator,
+            entry_id,
+            device_info,
+            f"effect_mode_{channel}",
+            f"{label} Effect Mode",
+        )
         self.channel = channel
-        self._attr_name = f"{label} Effect Mode"
-        self._attr_unique_id = f"{entry_id}_effect_mode_{channel}"
-        self._options = options
-        self._attr_device_info = device_info
-
-    @property
-    def options(self) -> list[str]:
-        """Return the available effect mode options."""
-        return self._options
+        self._attr_options = options
 
     @property
     def current_option(self) -> str | None:
         """Return the currently selected option, if any."""
-        # Return authoritative coordinator data
-        data = getattr(self.coordinator, "data", None)
-        if data:
-            lights = data.get("lights", [])
-            if self.channel < len(lights):
-                light_data = lights[self.channel]
-                effect_type = light_data.get("effect_type")
-                if effect_type and 1 <= effect_type <= len(self._options):
-                    return self._options[effect_type - 1]
+        effect_type = self.light_data(self.channel).get("effect_type")
+        if effect_type and 1 <= effect_type <= len(self.options):
+            return self.options[effect_type - 1]
         return None
 
     async def async_select_option(self, option: str) -> None:
-        """Handle when an option is selected in the UI."""
+        """Send the effect mode."""
         try:
-            effect_type = self._options.index(option) + 1
+            effect_type = self.options.index(option) + 1
         except ValueError:
-            return
+            raise ServiceValidationError(f"Unknown effect mode: {option}") from None
 
-        # Send command to device via adapter client
-        try:
-            await self.coordinator.adapter.client.set_light_mode(
+        await self._async_command(
+            self.coordinator.adapter.client.set_light_mode(
                 channel=self.channel, mode=effect_type
-            )
-        except Exception:  # device/IO errors surfaced here
-            return
-
-        # Push optimistic value into the coordinator cache
-        data = self.coordinator.data or {}
-        lights = list(data.get("lights", [{}, {}]))
-        if self.channel < len(lights):
-            light_data = dict(lights[self.channel])
-            light_data["effect_type"] = effect_type
-            lights[self.channel] = light_data
-            self.coordinator.async_update_data_optimistic("lights", lights)
-
-        self.async_write_ha_state()
-
-        # Request an immediate coordinator refresh
-        with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
-
-    async def async_added_to_hass(self) -> None:
-        """Ensure entity state reflects current coordinator data."""
-        await super().async_added_to_hass()
-        data = getattr(self.coordinator, "data", None)
-        if data and data.get("lights"):
-            self.async_write_ha_state()
+            ),
+            "Couldn't set the effect mode",
+            partial(
+                self.coordinator.async_update_light,
+                self.channel,
+                effect_type=effect_type,
+            ),
+        )
 
 
-class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
+class SkellyBitrateSelect(SkellyCoordinatorEntity, SelectEntity):
     """Select entity for the file transfer bitrate override value.
 
     Shows the current bitrate when override is off (uses default),
     or allows manual selection when override is on.
     """
 
-    _attr_has_entity_name = True
+    _attr_icon = "mdi:music-note"
+    _attr_options = BITRATE_OPTIONS
 
     def __init__(
         self,
@@ -269,54 +169,25 @@ class SkellyBitrateSelect(CoordinatorEntity, SelectEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the bitrate select entity."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
         # Named to sort next to the "Override Bitrate" switch in the HA UI
-        self._attr_name = "Override Bitrate Value"
-        self._attr_unique_id = f"{entry_id}_bitrate"
-        self._attr_icon = "mdi:music-note"
-        self._attr_device_info = device_info
-
-    @property
-    def options(self) -> list[str]:
-        """Return the available bitrate options."""
-        return BITRATE_OPTIONS
+        super().__init__(
+            coordinator, entry_id, device_info, "bitrate", "Override Bitrate Value"
+        )
 
     @property
     def current_option(self) -> str | None:
-        """Return current bitrate.
-
-        If override is enabled, returns the user-set value.
-        If override is disabled, returns the default.
-        """
-        data = self.coordinator.data
-        if not data:
-            return AudioProcessor.MP3_BITRATE
-
-        override_enabled = data.get("override_bitrate", False)
-
-        if override_enabled:
-            # Return user-set value
+        """Return the user-set bitrate while the override is on, else the default."""
+        data = self.coordinator_data
+        if data.get("override_bitrate", False):
             return data.get("bitrate_override", AudioProcessor.MP3_BITRATE)
-
-        # Return default when override is disabled
         return AudioProcessor.MP3_BITRATE
 
     async def async_select_option(self, option: str) -> None:
-        """Set the bitrate override value.
+        """Set the bitrate override value; only while the override is on."""
+        if not self.coordinator_data.get("override_bitrate", False):
+            raise ServiceValidationError(
+                "Turn on Override Bitrate to change the bitrate"
+            )
 
-        Only works when override switch is enabled.
-        """
-        data = self.coordinator.data
-        if not data:
-            return
-
-        override_enabled = data.get("override_bitrate", False)
-        if not override_enabled:
-            # Don't allow changes when override is disabled
-            return
-
-        # Store the override value
         self.coordinator.async_update_data_optimistic("bitrate_override", option)
-
         self.async_write_ha_state()

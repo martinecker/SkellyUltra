@@ -8,11 +8,12 @@ from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .entity import SkellyCoordinatorEntity, SkellyEntity, async_run_command
 from .helpers import get_device_info
 from .perform import PerformManager
 
@@ -38,7 +39,7 @@ async def async_setup_entry(
     )
 
 
-class SkellyTriggerMovementButton(CoordinatorEntity, ButtonEntity):
+class SkellyTriggerMovementButton(SkellyCoordinatorEntity, ButtonEntity):
     """Button that triggers one movement using the enabled movement switches.
 
     The device performs a movement when the movement action bitfield is set,
@@ -46,7 +47,6 @@ class SkellyTriggerMovementButton(CoordinatorEntity, ButtonEntity):
     movement switch sends when it is turned on).
     """
 
-    _attr_has_entity_name = True
     _attr_icon = "mdi:run"
 
     def __init__(
@@ -56,36 +56,25 @@ class SkellyTriggerMovementButton(CoordinatorEntity, ButtonEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the trigger movement button."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Trigger Movement"
-        self._attr_unique_id = f"{entry_id}_trigger_movement"
-        self._attr_device_info = device_info
-
-    @property
-    def available(self) -> bool:
-        """The button is available after coordinator has a successful update."""
-        return bool(getattr(self.coordinator, "last_update_success", False))
+        super().__init__(
+            coordinator, entry_id, device_info, "trigger_movement", "Trigger Movement"
+        )
 
     async def async_press(self) -> None:
         """Resend the current movement action bitfield to the device."""
         async with self.coordinator.action_lock:
-            data = getattr(self.coordinator, "data", None)
-            action = data.get("action", 0) if data else 0
-
+            action = self.coordinator_data.get("action") or 0
             if not action:
-                _LOGGER.warning(
-                    "Trigger Movement pressed but no movement switch is enabled"
+                raise ServiceValidationError(
+                    "Turn on a movement switch to choose what moves"
                 )
-                return
-
-            try:
-                await self.coordinator.adapter.client.set_movement_action(action)
-            except Exception:
-                _LOGGER.exception("Failed to trigger movement")
+            await async_run_command(
+                self.coordinator.adapter.client.set_movement_action(action),
+                "Couldn't trigger the movement",
+            )
 
 
-class SkellyPushSettingsButton(CoordinatorEntity, ButtonEntity):
+class SkellyPushSettingsButton(SkellyCoordinatorEntity, ButtonEntity):
     """Button that sends HA's light, eye and volume settings to the device.
 
     The device can show a different look than it reports (e.g. after a
@@ -94,7 +83,6 @@ class SkellyPushSettingsButton(CoordinatorEntity, ButtonEntity):
     which does the same on every connect, is on.
     """
 
-    _attr_has_entity_name = True
     _attr_icon = "mdi:upload"
     _attr_entity_category = EntityCategory.CONFIG
 
@@ -105,29 +93,27 @@ class SkellyPushSettingsButton(CoordinatorEntity, ButtonEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the push settings button."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Push Settings to Skelly"
-        self._attr_unique_id = f"{entry_id}_push_settings"
-        self._attr_device_info = device_info
+        super().__init__(
+            coordinator,
+            entry_id,
+            device_info,
+            "push_settings",
+            "Push Settings to Skelly",
+        )
 
     @property
     def available(self) -> bool:
         """Available while the device is connected and has been polled."""
-        return bool(
-            getattr(self.coordinator, "last_update_success", False)
-            and self.coordinator.adapter.client.is_connected
-        )
+        return super().available and self.coordinator.adapter.client.is_connected
 
     async def async_press(self) -> None:
         """Send the settings; raises HomeAssistantError if that isn't possible."""
         await self.coordinator.async_push_settings()
 
 
-class SkellyClearPerformHistoryButton(ButtonEntity):
+class SkellyClearPerformHistoryButton(SkellyEntity, ButtonEntity):
     """Button that forgets the AI lines skelly_ultra.perform told not to repeat."""
 
-    _attr_has_entity_name = True
     _attr_icon = "mdi:history"
     _attr_entity_category = EntityCategory.CONFIG
 
@@ -138,10 +124,10 @@ class SkellyClearPerformHistoryButton(ButtonEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the clear perform history button."""
+        super().__init__(
+            entry_id, device_info, "clear_perform_history", "Clear Perform History"
+        )
         self._manager = manager
-        self._attr_name = "Clear Perform History"
-        self._attr_unique_id = f"{entry_id}_clear_perform_history"
-        self._attr_device_info = device_info
 
     async def async_press(self) -> None:
         """Clear the perform line history."""

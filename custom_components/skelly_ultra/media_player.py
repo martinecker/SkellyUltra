@@ -23,14 +23,14 @@ from homeassistant.components.media_player import (
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.device_registry import DeviceInfo
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .entity import SkellyCoordinatorEntity, async_run_command
 from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.audio_processor import AudioProcessor, AudioProcessingError
@@ -106,8 +106,7 @@ async def async_setup_entry(
 class _SkellyVolumeControlMixin:
     """Shared 0-100 <-> 0.0-1.0 volume control against the coordinator's cached volume.
 
-    Used by both media player entities. Requires `self.coordinator`
-    (a SkellyCoordinator) on the including class.
+    Used by both media player entities, which are SkellyCoordinatorEntity.
     """
 
     @property
@@ -117,14 +116,12 @@ class _SkellyVolumeControlMixin:
         Returns:
             float | None: Volume level as a fraction (0.0-1.0), or None if unknown.
         """
-        data = getattr(self.coordinator, "data", None)
-        if data and (vol := data.get("volume")) is not None:
-            try:
-                # Convert from 0-100 percentage to 0.0-1.0 fraction
-                return int(vol) / 100.0
-            except (ValueError, TypeError):
-                return None
-        return None
+        vol = self.coordinator_data.get("volume")
+        try:
+            # Convert from 0-100 percentage to 0.0-1.0 fraction
+            return int(vol) / 100.0 if vol is not None else None
+        except (ValueError, TypeError):
+            return None
 
     async def async_set_volume_level(self, volume: float) -> None:
         """Set volume level (0.0 to 1.0).
@@ -134,25 +131,13 @@ class _SkellyVolumeControlMixin:
         """
         # Convert from 0.0-1.0 fraction to 0-100 percentage
         volume_percent = int(volume * 100)
-
-        try:
-            await self.coordinator.adapter.client.set_volume(volume_percent)
-        except (OSError, RuntimeError, ValueError):
-            # Setting failed; do not change state
-            return
-
-        # Update coordinator cache for immediate UI update. Goes through
-        # async_update_data_optimistic (not async_set_updated_data directly)
-        # so the coordinator's optimistic-update counter is incremented -
-        # otherwise a poll running concurrently with this call could
-        # overwrite it with stale fetched data.
-        self.coordinator.async_update_data_optimistic("volume", volume_percent)
-
-        self.async_write_ha_state()
-
-        # Request refresh to get authoritative state
-        with contextlib.suppress(Exception):
-            await self.coordinator.async_request_refresh()
+        await self._async_command(
+            self.coordinator.adapter.client.set_volume(volume_percent),
+            "Couldn't set the volume",
+            partial(
+                self.coordinator.async_update_data_optimistic, "volume", volume_percent
+            ),
+        )
 
     async def async_volume_up(self) -> None:
         """Turn volume up by 5%."""
@@ -172,11 +157,10 @@ class _SkellyVolumeControlMixin:
 
 
 class SkellyLiveMediaPlayer(
-    _SkellyVolumeControlMixin, CoordinatorEntity, MediaPlayerEntity
+    _SkellyVolumeControlMixin, SkellyCoordinatorEntity, MediaPlayerEntity
 ):
     """Media player for playing audio to Skelly's classic BT speaker in live mode."""
 
-    _attr_has_entity_name = True
     _attr_supported_features = (
         MediaPlayerEntityFeature.PLAY_MEDIA
         | MediaPlayerEntityFeature.STOP
@@ -192,12 +176,11 @@ class SkellyLiveMediaPlayer(
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the media player entity."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
+        super().__init__(
+            coordinator, entry_id, device_info, "live_mode_speaker", "Live Mode Speaker"
+        )
         self.adapter = adapter
         self._entry_id = entry_id
-        self._attr_name = "Live Mode Speaker"
-        self._attr_unique_id = f"{entry_id}_live_mode_speaker"
         self._attr_media_content_type = MediaType.MUSIC
 
         # Store playback state
@@ -208,9 +191,6 @@ class SkellyLiveMediaPlayer(
         self._current_media_title: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
         self._monitor_task: asyncio.Task | None = None
-
-        # Device grouping
-        self._attr_device_info = device_info
 
     @property
     def available(self) -> bool:
@@ -278,13 +258,14 @@ class SkellyLiveMediaPlayer(
             media_type: Type of media (should be 'music' or similar)
             media_id: Path to local audio file, URL, or media source URI
             **kwargs: Additional arguments
+
+        Raises HomeAssistantError if playback didn't start.
         """
         if not self.available:
-            _LOGGER.warning("Cannot play media: live mode is not connected")
-            return
+            raise HomeAssistantError("Live mode isn't connected")
 
         # Stop any existing playback
-        await self.async_media_stop()
+        await self._async_stop(raise_errors=False)
 
         # Resolve media source URIs (e.g., from TTS services)
         if media_source.is_media_source_id(media_id):
@@ -308,12 +289,10 @@ class SkellyLiveMediaPlayer(
 
                 async with session.get(media_id) as response:
                     if response.status != 200:
-                        _LOGGER.error(
-                            "Failed to download audio from %s: HTTP %d",
-                            media_id,
-                            response.status,
+                        # The path only: the URL may carry an access token
+                        raise HomeAssistantError(
+                            f"Couldn't download {parsed.path}: HTTP {response.status}"
                         )
-                        return
 
                     # Save to temporary file
                     audio_content = await response.read()
@@ -333,9 +312,8 @@ class SkellyLiveMediaPlayer(
             else:
                 # Local file path
                 media_path = Path(media_id)
-                if not media_path.is_file():
-                    _LOGGER.error("Media file does not exist: %s", media_id)
-                    return
+                if not await self.hass.async_add_executor_job(media_path.is_file):
+                    raise HomeAssistantError(f"Media file not found: {media_id}")
 
             # Extract filename for display
             if is_url:
@@ -398,13 +376,10 @@ class SkellyLiveMediaPlayer(
             )
 
             if not data.get("success"):
-                _LOGGER.error(
-                    "REST server failed to start playback: %s",
-                    data.get("error", "Unknown error"),
+                raise HomeAssistantError(
+                    "The REST server couldn't start playback: "
+                    f"{data.get('error', 'unknown error')}"
                 )
-                self._current_media_title = None
-                self.async_write_ha_state()
-                return
 
             _LOGGER.info("REST server started playback successfully")
             self._is_playing = True
@@ -417,16 +392,17 @@ class SkellyLiveMediaPlayer(
             task.add_done_callback(self._background_tasks.discard)
             self._monitor_task = task
 
-        except AudioProcessingError as err:
-            _LOGGER.error("Failed to process audio file: %s", err)
+        except Exception as err:
             self._current_media_title = None
             self._is_playing = False
             self.async_write_ha_state()
-        except (OSError, RuntimeError):
-            _LOGGER.exception("Failed to read or process audio file")
-            self._current_media_title = None
-            self._is_playing = False
-            self.async_write_ha_state()
+            if isinstance(err, HomeAssistantError):
+                raise
+            if isinstance(err, AudioProcessingError):
+                raise HomeAssistantError(f"Couldn't process the audio: {err}") from err
+            raise HomeAssistantError(
+                f"Couldn't play the audio: {str(err) or type(err).__name__}"
+            ) from err
         finally:
             # Clean up temporary file if it was created
             if temp_file is not None:
@@ -443,19 +419,15 @@ class SkellyLiveMediaPlayer(
     async def async_start_playback(self, media_id: str) -> asyncio.Task:
         """Start playing media and return a task that ends with the playback.
 
-        Used by skelly_ultra.perform. Unlike async_play_media, which only logs
-        its errors, this raises HomeAssistantError if playback didn't start.
-        Await the task with asyncio.shield: cancelling it would leave the
-        state stuck on playing.
+        Used by skelly_ultra.perform and converse. Raises HomeAssistantError
+        if playback didn't start, like async_play_media. Await the task with
+        asyncio.shield: cancelling it would leave the state stuck on playing.
         """
         self._monitor_task = None
         await self.async_play_media(MediaType.MUSIC, media_id)
-        task = self._monitor_task
-        if task is None or not self._is_playing:
-            raise HomeAssistantError(
-                "Live mode playback failed to start, see the log for details"
-            )
-        return task
+        if self._monitor_task is None:
+            raise HomeAssistantError("Live mode playback didn't start")
+        return self._monitor_task
 
     async def async_play_and_wait(self, media_id: str) -> None:
         """Play media and return once playback has finished."""
@@ -491,6 +463,13 @@ class SkellyLiveMediaPlayer(
 
     async def async_media_stop(self) -> None:
         """Stop any currently playing media via REST server."""
+        await self._async_stop(raise_errors=True)
+
+    async def _async_stop(self, *, raise_errors: bool) -> None:
+        """Stop this Skelly's playback; a failure is raised or logged.
+
+        Either way the speaker shows as stopped afterwards.
+        """
         if not self._is_playing:
             return
 
@@ -498,26 +477,24 @@ class SkellyLiveMediaPlayer(
 
         # Only this Skelly's playback: without a MAC the server stops all
         mac = self._playing_mac or self.adapter.client.live_mode_client_address
-        if mac is None:
-            _LOGGER.warning("Not stopping playback: live-mode address unknown")
-            self._is_playing = False
-            self._current_media_title = None
-            self.async_write_ha_state()
-            return
-
         try:
-            # Use the client to stop playback
-            data = await self.adapter.client.stop_audio_live_mode(mac=mac)
-
-            if data.get("success"):
-                _LOGGER.debug("REST server stopped playback successfully")
-            else:
-                _LOGGER.warning(
-                    "REST server reported stop failure: %s", data.get("error")
+            if mac is None:
+                raise HomeAssistantError(
+                    "Couldn't stop playback: live-mode address unknown"
                 )
-
-        except Exception:
-            _LOGGER.exception("Failed to stop media playback via REST server")
+            data = await async_run_command(
+                self.adapter.client.stop_audio_live_mode(mac=mac),
+                "Couldn't stop playback",
+            )
+            if not data.get("success"):
+                raise HomeAssistantError(
+                    f"Couldn't stop playback: {data.get('error', 'unknown error')}"
+                )
+            _LOGGER.debug("REST server stopped playback successfully")
+        except HomeAssistantError as err:
+            if raise_errors:
+                raise
+            _LOGGER.warning("%s", err)
         finally:
             self._is_playing = False
             self._current_media_title = None
@@ -525,7 +502,7 @@ class SkellyLiveMediaPlayer(
 
     async def async_will_remove_from_hass(self) -> None:
         """Clean up when entity is removed."""
-        await self.async_media_stop()
+        await self._async_stop(raise_errors=False)
         # Unregister live mode callback
         self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
         entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
@@ -549,11 +526,10 @@ class SkellyLiveMediaPlayer(
 
 
 class SkellyInternalFilesPlayer(
-    _SkellyVolumeControlMixin, CoordinatorEntity, MediaPlayerEntity
+    _SkellyVolumeControlMixin, SkellyCoordinatorEntity, MediaPlayerEntity
 ):
     """Media player for playing files stored on the device's internal storage."""
 
-    _attr_has_entity_name = True
     _attr_supported_features = (
         MediaPlayerEntityFeature.PLAY
         | MediaPlayerEntityFeature.PLAY_MEDIA
@@ -575,12 +551,10 @@ class SkellyInternalFilesPlayer(
         profile: dict,
     ) -> None:
         """Initialize the internal files media player entity."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
+        super().__init__(
+            coordinator, entry_id, device_info, "internal_files", "Internal Files"
+        )
         self.adapter = adapter
-        self._entry_id = entry_id
-        self._attr_name = "Internal Files"
-        self._attr_unique_id = f"{entry_id}_internal_files"
         self._attr_media_content_type = MediaType.MUSIC
 
         # Playlist state
@@ -592,9 +566,6 @@ class SkellyInternalFilesPlayer(
         # Cache for eye icon images (loaded asynchronously on startup)
         self._profile = profile
         self._eye_icon_cache: dict[int, str] = {}
-
-        # Device grouping
-        self._attr_device_info = device_info
 
     async def async_added_to_hass(self) -> None:
         """When entity is added to hass, load the file list and start event monitoring."""
@@ -821,31 +792,35 @@ class SkellyInternalFilesPlayer(
 
     async def async_media_play(self) -> None:
         """Play the current file or first file if none selected."""
-        if self._current_file_index is None and self.coordinator.file_list:
+        if self._current_file_index is None:
+            if not self.coordinator.file_list:
+                raise ServiceValidationError("There are no files on the Skelly")
             # No file selected, play first file
             self._current_file_index = self.coordinator.file_list[0].file_index
 
         if self._current_file_index is not None:
-            try:
-                # Holds off coordinator polling right away, before the
-                # device's PlaybackEvent arrives; that event refines the
-                # timeout with the real duration.
-                await self.coordinator.async_play_file(self._current_file_index)
-                self._is_playing = True
-                self.async_write_ha_state()
-            except Exception:
-                _LOGGER.exception("Failed to play file %d", self._current_file_index)
+            # Holds off coordinator polling right away, before the device's
+            # PlaybackEvent arrives; that event refines the timeout with the
+            # real duration.
+            await async_run_command(
+                self.coordinator.async_play_file(self._current_file_index),
+                f"Couldn't play file {self._current_file_index}",
+            )
+            self._is_playing = True
+            self.async_write_ha_state()
 
     async def async_media_stop(self) -> None:
         """Stop the currently playing file."""
-        if self._current_file_index is not None:
-            try:
-                await self.adapter.client.stop_file(self._current_file_index)
-            except Exception:
-                _LOGGER.exception("Failed to stop file %d", self._current_file_index)
-        self._is_playing = False
-        self.coordinator.mark_playback_inactive()
-        self.async_write_ha_state()
+        try:
+            if self._current_file_index is not None:
+                await async_run_command(
+                    self.adapter.client.stop_file(self._current_file_index),
+                    f"Couldn't stop file {self._current_file_index}",
+                )
+        finally:
+            self._is_playing = False
+            self.coordinator.mark_playback_inactive()
+            self.async_write_ha_state()
 
     async def async_media_next_track(self) -> None:
         """Play the next file in the list."""
@@ -901,7 +876,7 @@ class SkellyInternalFilesPlayer(
                 self.async_write_ha_state()
                 return
 
-        _LOGGER.warning("File not found: %s", source)
+        raise ServiceValidationError(f"File not found: {source}")
 
     async def async_browse_media(
         self, media_content_type: str | None = None, media_content_id: str | None = None
@@ -953,7 +928,7 @@ class SkellyInternalFilesPlayer(
         """Play a file by its index."""
         try:
             file_index = int(media_id)
-            self._current_file_index = file_index
-            await self.async_media_play()
         except ValueError:
-            _LOGGER.error("Invalid file index: %s", media_id)
+            raise ServiceValidationError(f"Invalid file index: {media_id}") from None
+        self._current_file_index = file_index
+        await self.async_media_play()

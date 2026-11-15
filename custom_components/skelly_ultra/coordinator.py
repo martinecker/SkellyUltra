@@ -181,6 +181,24 @@ class SkellyCoordinator(DataUpdateCoordinator):
 
         self.async_set_updated_data(new_data)
 
+    def async_update_lights(self, changes: dict[int, dict[str, Any]]) -> None:
+        """Update light channels optimistically, see async_update_data_optimistic.
+
+        changes maps a channel to the fields that changed on it (rgb,
+        brightness, effect_type, effect_speed, color_cycle); the channel's
+        other fields stay as they are.
+        """
+        lights = [dict(light) for light in (self.data or {}).get("lights") or []]
+        for channel, fields in changes.items():
+            while len(lights) <= channel:
+                lights.append({})
+            lights[channel].update(fields)
+        self.async_update_data_optimistic("lights", lights)
+
+    def async_update_light(self, channel: int, **fields: Any) -> None:
+        """Update one light channel optimistically, see async_update_lights."""
+        self.async_update_lights({channel: fields})
+
     def _async_merge_data(self, updates: dict[str, Any]) -> None:
         """Merge updates into the cached data without marking a successful poll.
 

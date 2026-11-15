@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
-
 import logging
 import time
 from typing import Any
@@ -11,10 +12,12 @@ from typing import Any
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
+    PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
     SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
     EntityCategory,
@@ -23,10 +26,10 @@ from homeassistant.core import HassJob, HomeAssistant, callback
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
-from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .entity import SkellyCoordinatorEntity, SkellyEntity
 from .helpers import files_updated_signal, get_device_info
 
 _LOGGER = logging.getLogger(__name__)
@@ -34,6 +37,54 @@ _LOGGER = logging.getLogger(__name__)
 # Most often the transfer progress is signalled to file list subscribers
 # (about 4 times a second)
 TRANSFER_SIGNAL_INTERVAL = 0.25
+
+
+@dataclass(frozen=True, kw_only=True)
+class SkellySensorEntityDescription(SensorEntityDescription):
+    """A sensor showing a value from the coordinator's data."""
+
+    value_fn: Callable[[dict[str, Any]], Any]
+
+
+SENSORS: tuple[SkellySensorEntityDescription, ...] = (
+    SkellySensorEntityDescription(
+        key="volume",
+        name="Volume",
+        native_unit_of_measurement=PERCENTAGE,
+        value_fn=lambda data: data.get("volume"),
+    ),
+    SkellySensorEntityDescription(
+        key="live_name",
+        name="Live Name",
+        value_fn=lambda data: data.get("live_name"),
+    ),
+    SkellySensorEntityDescription(
+        key="capacity_kb",
+        name="Remaining Capacity",
+        native_unit_of_measurement="kB",
+        value_fn=lambda data: data.get("capacity_kb"),
+    ),
+    SkellySensorEntityDescription(
+        key="file_count_reported",
+        name="File Count Reported",
+        value_fn=lambda data: data.get("file_count_reported"),
+    ),
+    SkellySensorEntityDescription(
+        key="file_count_received",
+        name="File Count Received",
+        value_fn=lambda data: data.get("file_count_received"),
+    ),
+    SkellySensorEntityDescription(
+        key="file_order",
+        name="File Order",
+        value_fn=lambda data: str(data.get("file_order", [])),
+    ),
+    SkellySensorEntityDescription(
+        key="pin_code",
+        name="PIN Code",
+        value_fn=lambda data: data.get("pin_code"),
+    ),
+)
 
 
 async def async_setup_entry(
@@ -54,14 +105,11 @@ async def async_setup_entry(
 
     async_add_entities(
         [
-            SkellyVolumeSensor(coordinator, entry.entry_id, device_info),
-            SkellyLiveNameSensor(coordinator, entry.entry_id, device_info),
-            SkellyStorageCapacitySensor(coordinator, entry.entry_id, device_info),
-            SkellyFileCountReportedSensor(coordinator, entry.entry_id, device_info),
-            SkellyFileCountReceivedSensor(coordinator, entry.entry_id, device_info),
-            SkellyFileOrderSensor(coordinator, entry.entry_id, device_info),
+            *(
+                SkellySensor(coordinator, entry.entry_id, device_info, description)
+                for description in SENSORS
+            ),
             SkellyLiveBTMacSensor(coordinator, entry.entry_id, device_info),
-            SkellyPinCodeSensor(coordinator, entry.entry_id, device_info),
             transfer_sensor,
         ]
     )
@@ -78,171 +126,32 @@ async def async_setup_entry(
     async_add_entities(rssi_sensors)
 
 
-class SkellyVolumeSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the device volume as an integer percentage."""
+class SkellySensor(SkellyCoordinatorEntity, SensorEntity):
+    """Sensor showing one value from the coordinator's data."""
 
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the volume sensor with coordinator."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Volume"
-        self._attr_unique_id = f"{entry_id}_volume"
-        # Volume is expressed as a percentage (0-100)
-        self._attr_native_unit_of_measurement = "%"
-        # Device grouping
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the current volume (0-100) from coordinator data."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("volume")
-
-
-class SkellyLiveNameSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the device 'live name' as text."""
-
-    _attr_has_entity_name = True
+    entity_description: SkellySensorEntityDescription
 
     def __init__(
         self,
         coordinator: SkellyCoordinator,
         entry_id: str,
         device_info: DeviceInfo | None,
+        description: SkellySensorEntityDescription,
     ) -> None:
-        """Initialize the live name sensor with coordinator."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Live Name"
-        self._attr_unique_id = f"{entry_id}_live_name"
-        self._attr_device_info = device_info
+        """Initialize the sensor."""
+        super().__init__(coordinator, entry_id, device_info, description.key)
+        self.entity_description = description
 
     @property
-    def native_value(self):
-        """Return the current live name from coordinator data."""
+    def native_value(self) -> Any:
+        """Return the value from the coordinator's data."""
         if self.coordinator.data is None:
             return None
-        return self.coordinator.data.get("live_name")
+        return self.entity_description.value_fn(self.coordinator.data)
 
 
-class SkellyStorageCapacitySensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the remaining device storage capacity in kilobytes."""
-
-    _attr_has_entity_name = True
-    _attr_native_unit_of_measurement = "kB"
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the storage capacity sensor."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "Remaining Capacity"
-        self._attr_unique_id = f"{entry_id}_capacity_kb"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the remaining storage capacity in kilobytes from coordinator data."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("capacity_kb")
-
-
-class SkellyFileCountReportedSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the number of files reported by the device."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the file count reported sensor."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "File Count Reported"
-        self._attr_unique_id = f"{entry_id}_file_count_reported"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the file count reported from coordinator data."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("file_count_reported")
-
-
-class SkellyFileCountReceivedSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the number of files actually received from the device."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the file count received sensor."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "File Count Received"
-        self._attr_unique_id = f"{entry_id}_file_count_received"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the file count received from coordinator data."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("file_count_received")
-
-
-class SkellyFileOrderSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the file playback order as a list string."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the file order sensor."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "File Order"
-        self._attr_unique_id = f"{entry_id}_file_order"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the file order list as a string representation."""
-        if self.coordinator.data is None:
-            return None
-        file_order = self.coordinator.data.get("file_order", [])
-        return str(file_order)
-
-
-class SkellyLiveBTMacSensor(SensorEntity):
+class SkellyLiveBTMacSensor(SkellyEntity, SensorEntity):
     """Sensor exposing the Live Mode Bluetooth Classic MAC address."""
-
-    _attr_has_entity_name = True
 
     def __init__(
         self,
@@ -251,27 +160,24 @@ class SkellyLiveBTMacSensor(SensorEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the Live BT MAC sensor."""
+        super().__init__(entry_id, device_info, "live_bt_mac", "Live BT MAC")
         self.adapter = coordinator.adapter
-        self._attr_name = "Live BT MAC"
-        self._attr_unique_id = f"{entry_id}_live_bt_mac"
-        self._attr_device_info = device_info
 
     @property
     def native_value(self):
         """Return the Live Mode BT MAC address or '<not connected>'."""
-        client = getattr(self.adapter, "client", None)
-        mac = getattr(client, "live_mode_client_address", None) if client else None
-        return mac if mac else "<not connected>"
+        return self.adapter.client.live_mode_client_address or "<not connected>"
 
 
-class _SkellyLinkSignalSensor(SensorEntity):
+class _SkellyLinkSignalSensor(SkellyEntity, SensorEntity):
     """Base for sensors polling a link's RSSI from the REST server."""
 
-    _attr_has_entity_name = True
     _attr_device_class = SensorDeviceClass.SIGNAL_STRENGTH
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _transport: str  # "le" or "bredr", as reported by the server
+    _key: str
+    _name: str
 
     def __init__(
         self,
@@ -280,8 +186,8 @@ class _SkellyLinkSignalSensor(SensorEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the link signal sensor."""
+        super().__init__(entry_id, device_info, self._key, self._name)
         self.adapter = coordinator.adapter
-        self._attr_device_info = device_info
         self._error_logged = False
 
     def _link_address(self) -> str | None:
@@ -329,18 +235,9 @@ class SkellyBLESignalSensor(_SkellyLinkSignalSensor):
     """RSSI of the REST server's BLE link to the Skelly (proxy mode)."""
 
     _transport = "le"
+    _key = "ble_rssi"
+    _name = "BLE Signal Strength"
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS_MILLIWATT
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the BLE signal sensor."""
-        super().__init__(coordinator, entry_id, device_info)
-        self._attr_name = "BLE Signal Strength"
-        self._attr_unique_id = f"{entry_id}_ble_rssi"
 
     def _link_address(self) -> str | None:
         client = self.adapter.client
@@ -355,47 +252,12 @@ class SkellyLiveModeSignalSensor(_SkellyLinkSignalSensor):
     """
 
     _transport = "bredr"
+    _key = "live_mode_rssi"
+    _name = "Live Mode Signal Strength"
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the live mode signal sensor."""
-        super().__init__(coordinator, entry_id, device_info)
-        self._attr_name = "Live Mode Signal Strength"
-        self._attr_unique_id = f"{entry_id}_live_mode_rssi"
 
     def _link_address(self) -> str | None:
         return self.adapter.client.live_mode_client_address
-
-
-class SkellyPinCodeSensor(CoordinatorEntity, SensorEntity):
-    """Sensor exposing the device Bluetooth pairing PIN code."""
-
-    _attr_has_entity_name = True
-
-    def __init__(
-        self,
-        coordinator: SkellyCoordinator,
-        entry_id: str,
-        device_info: DeviceInfo | None,
-    ) -> None:
-        """Initialize the PIN code sensor."""
-        super().__init__(coordinator)
-        self.coordinator = coordinator
-        self._attr_name = "PIN Code"
-        self._attr_unique_id = f"{entry_id}_pin_code"
-        self._attr_device_info = device_info
-
-    @property
-    def native_value(self):
-        """Return the device PIN code from coordinator data."""
-        if self.coordinator.data is None:
-            return None
-        return self.coordinator.data.get("pin_code")
 
 
 def idle_transfer_state() -> dict[str, Any]:
@@ -409,14 +271,13 @@ def idle_transfer_state() -> dict[str, Any]:
     }
 
 
-class SkellyFileTransferProgressSensor(SensorEntity):
+class SkellyFileTransferProgressSensor(SkellyEntity, SensorEntity):
     """Sensor showing file transfer progress, errors, and cancellation status.
 
     Also keeps the transfer state for the files websocket API (see
     transfer_state), and signals files_updated_signal when it changes.
     """
 
-    _attr_has_entity_name = True
     _attr_should_poll = False
 
     def __init__(
@@ -426,12 +287,12 @@ class SkellyFileTransferProgressSensor(SensorEntity):
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the file transfer progress sensor."""
+        super().__init__(
+            entry_id, device_info, "file_transfer_progress", "File Transfer Progress"
+        )
         self.hass = hass
-        self._attr_name = "File Transfer Progress"
-        self._attr_unique_id = f"{entry_id}_file_transfer_progress"
         self._attr_native_value = "Idle"
         self._cancel_timer = None
-        self._attr_device_info = device_info
         self._entry_id = entry_id
         self._transfer = idle_transfer_state()
         self._last_progress_signal = 0.0

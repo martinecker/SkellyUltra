@@ -722,11 +722,15 @@ class SkellyClientAdapter:
         """Return the underlying SkellyClient instance."""
         return self._client
 
-    async def connect_live_mode(self, timeout: float = 30.0) -> str | None:
+    async def connect_live_mode(
+        self, timeout: float = 30.0, *, raise_errors: bool = False
+    ) -> str | None:
         """Connect to the classic/live Bluetooth device aka live mode.
 
         Args:
             timeout: Connection timeout in seconds
+            raise_errors: Raise a failure (e.g. for the Live Mode switch to
+                show it) instead of logging it and returning None
         """
         try:
             result = await self._client.connect_live_mode(
@@ -736,11 +740,16 @@ class SkellyClientAdapter:
             self._notify_live_mode_change()
             return result
         except Exception:
+            if raise_errors:
+                raise
             self._logger.exception("Failed to connect live mode via adapter")
             return None
 
-    async def disconnect_live_mode(self) -> None:
-        """Disconnect the classic/live-mode client managed by the underlying SkellyClient."""
+    async def disconnect_live_mode(self, *, raise_errors: bool = False) -> None:
+        """Disconnect the classic/live-mode client managed by the underlying SkellyClient.
+
+        A failure is logged, or raised with raise_errors.
+        """
         # A live-mode restore still running after a reconnect would otherwise
         # connect it again behind our back.
         await self._cancel_task(self._after_connect_task)
@@ -749,4 +758,6 @@ class SkellyClientAdapter:
             # Notify callbacks that connection state changed
             self._notify_live_mode_change()
         except Exception:
+            if raise_errors:
+                raise
             self._logger.exception("Error while disconnecting live-mode client")

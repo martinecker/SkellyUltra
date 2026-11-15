@@ -322,6 +322,8 @@ class SkellyStage:
                     options={**self.config_entry.options, "live_mode_connected": True},
                 )
                 await self.adapter.connect_live_mode()
+        except HomeAssistantError as err:
+            _LOGGER.warning("%s", err)
         except Exception:
             _LOGGER.exception("Failed to turn on live mode")
 
@@ -342,7 +344,6 @@ class SkellyStage:
 
     async def async_apply_mood(self, mood_def: dict) -> None:
         client = self.client
-        cache = self.coordinator.data or {}
         async with self.coordinator.action_lock:
             if self.profile.get("has_eye_image"):
                 icon = _eye_icon_index(self.profile, mood_def["eye_icon"])
@@ -365,7 +366,7 @@ class SkellyStage:
             color_cycle = 1 if mood_def["color_cycle"] else 0
             colors = mood_def["colors"]
 
-            lights = [dict(light) for light in cache.get("lights") or []]
+            changes: dict[int, dict[str, Any]] = {}
             for position, light_def in enumerate(self.profile["lights"]):
                 channel = light_def["channel"]
                 r, g, b = colors[min(position, len(colors) - 1)]
@@ -375,17 +376,15 @@ class SkellyStage:
                 if speed is not None:
                     await self._paced(client.set_light_speed(channel, speed))
 
-                while len(lights) <= channel:
-                    lights.append({})
-                lights[channel].update(
-                    rgb=(r, g, b),
-                    brightness=255,
-                    effect_type=mode,
-                    color_cycle=color_cycle,
-                )
+                changes[channel] = {
+                    "rgb": (r, g, b),
+                    "brightness": 255,
+                    "effect_type": mode,
+                    "color_cycle": color_cycle,
+                }
                 if speed is not None:
-                    lights[channel]["effect_speed"] = speed
-            self.coordinator.async_update_data_optimistic("lights", lights)
+                    changes[channel]["effect_speed"] = speed
+            self.coordinator.async_update_lights(changes)
 
     async def async_send_movement(self, action: int) -> None:
         async with self.coordinator.action_lock:

@@ -608,6 +608,8 @@ async def _async_stop_playback(participant: _Participant) -> None:
     """Stop a line that is playing. Best effort."""
     try:
         await participant.stage.live_player().async_media_stop()
+    except HomeAssistantError as err:
+        _LOGGER.warning("Converse: couldn't stop %s: %s", participant.name, err)
     except Exception:
         _LOGGER.exception("Converse: failed to stop %s", participant.name)
 
