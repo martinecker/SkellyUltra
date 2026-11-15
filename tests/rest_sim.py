@@ -51,6 +51,9 @@ class FakeRestServer:
         # Number of status polls a clip keeps playing for
         self.clip_polls = 1
         self._polls_left = 0
+        # Status polls answered so far, and an error to raise instead
+        self.status_polls = 0
+        self.status_error: Exception | None = None
         self.plays: list[Look] = []
         for method, path, handler in (
             ("get", "/health", self._health),
@@ -104,6 +107,9 @@ class FakeRestServer:
         return self._reply(method, url, {"success": True})
 
     async def _status(self, method, url, data):
+        self.status_polls += 1
+        if self.status_error is not None:
+            raise self.status_error
         if self.playing:
             if self._polls_left <= 0:
                 self.playing = False

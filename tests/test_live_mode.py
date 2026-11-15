@@ -3,11 +3,14 @@
 import asyncio
 import tempfile
 from pathlib import Path
+from unittest.mock import Mock
 
+import aiohttp
 import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
+from custom_components.skelly_ultra import media_player as media_player_module
 from custom_components.skelly_ultra import stage as stage_module
 from custom_components.skelly_ultra import uploads
 from custom_components.skelly_ultra.const import DOMAIN
@@ -389,3 +392,115 @@ async def test_live_mode_switch_reports_failed_connect(
         )
     assert not rest_server.connected
     assert hass.states.get(switch).state == STATE_OFF
+
+
+async def play_clip(hass, speaker, clip):
+    await hass.services.async_call(
+        "media_player",
+        "play_media",
+        {
+            ATTR_ENTITY_ID: speaker,
+            "media_content_id": str(clip),
+            "media_content_type": "music",
+        },
+        blocking=True,
+    )
+
+
+@pytest.fixture
+def clip(tmp_path, tone_mp3):
+    path = tmp_path / "tone.mp3"
+    path.write_bytes(tone_mp3)
+    return path
+
+
+@pytest.fixture
+def fast_status_polls(monkeypatch):
+    monkeypatch.setattr(media_player_module, "STATUS_POLL_INTERVAL", 0.01)
+
+
+async def test_speaker_unreadable_status_ends_playback_quietly(
+    hass, setup_integration, rest_server, tts_entity, fast_status_polls
+):
+    """A status reply that isn't JSON ends the clip; perform doesn't fail on it."""
+    rest_server.clip_polls = 1000
+    rest_server.status_error = aiohttp.ContentTypeError(
+        Mock(), (), message="Attempt to decode JSON with unexpected mimetype"
+    )
+    async with asyncio.timeout(10):
+        result = await perform(hass, message="Hi", mood="none", movement=["none"])
+    assert result["status"] == "ok"
+    speaker = entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
+    assert hass.states.get(speaker).state == "idle"
+
+
+async def test_speaker_playing_again_replaces_the_old_monitor(
+    hass, setup_integration, rest_server, clip, fast_status_polls
+):
+    """The second clip has one monitor, and the first one's can't end it."""
+    entry = setup_integration
+    await turn_on_live_mode(hass, entry, rest_server)
+    speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
+    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    rest_server.clip_polls = 1000
+
+    await play_clip(hass, speaker, clip)
+    first = player._monitor_task
+    await play_clip(hass, speaker, clip)
+    second = player._monitor_task
+    assert rest_server.stops == [LIVE_MAC], "the first clip was stopped"
+    await wait_for(hass, first.done)
+    assert not first.cancelled()
+
+    polls = rest_server.status_polls
+    await asyncio.sleep(0.2)
+    # About 20 polls from one monitor; two monitors would make about 40
+    assert 5 <= rest_server.status_polls - polls <= 30
+    assert not second.done()
+    assert hass.states.get(speaker).state == "playing"
+
+    rest_server.playing = False
+    await wait_for(hass, second.done)
+    assert hass.states.get(speaker).state == "idle"
+    assert player._monitor_task is None
+
+
+async def test_speaker_stop_ends_the_monitor_at_once(
+    hass, setup_integration, rest_server, clip
+):
+    """Stop doesn't leave the monitor polling until its next poll."""
+    entry = setup_integration
+    await turn_on_live_mode(hass, entry, rest_server)
+    speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
+    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    rest_server.clip_polls = 1000
+
+    await play_clip(hass, speaker, clip)
+    monitor = player._monitor_task
+    await hass.services.async_call(
+        "media_player", "media_stop", {ATTR_ENTITY_ID: speaker}, blocking=True
+    )
+    # Well under the 1 s poll interval
+    await asyncio.wait({monitor}, timeout=0.5)
+    assert monitor.done()
+    assert hass.states.get(speaker).state == "idle"
+
+
+async def test_speaker_monitor_can_be_cancelled(
+    hass, setup_integration, rest_server, clip
+):
+    """Cancelling the monitor (e.g. at shutdown) cancels it, and the state clears."""
+    entry = setup_integration
+    await turn_on_live_mode(hass, entry, rest_server)
+    speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
+    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    rest_server.clip_polls = 1000
+
+    await play_clip(hass, speaker, clip)
+    monitor = player._monitor_task
+    monitor.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await monitor
+    assert monitor.cancelled()
+    await hass.async_block_till_done()
+    assert hass.states.get(speaker).state == "idle"

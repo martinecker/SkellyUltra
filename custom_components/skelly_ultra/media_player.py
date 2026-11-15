@@ -60,6 +60,9 @@ TARGET_PEAK_DB = -6.7
 LEAD_IN_MS = 500
 LEAD_IN_NOISE_DB = -45.0
 
+# How often the live speaker asks the REST server whether its clip still plays
+STATUS_POLL_INTERVAL = 1.0
+
 
 def _is_playing_on(status: dict[str, Any], mac: str | None) -> bool:
     """Return True if the REST server's status shows audio playing to mac.
@@ -191,7 +194,9 @@ class SkellyLiveMediaPlayer(
         self._playing_mac: str | None = None
         self._current_media_title: str | None = None
         self._background_tasks: set[asyncio.Task] = set()
+        # The task watching the current playback, and the event that ends it
         self._monitor_task: asyncio.Task | None = None
+        self._monitor_stop: asyncio.Event | None = None
 
     @property
     def available(self) -> bool:
@@ -392,11 +397,13 @@ class SkellyLiveMediaPlayer(
             self._playing_mac = self.adapter.client.live_mode_client_address
             self.async_write_ha_state()
 
-            # Start background task to monitor playback status
-            task = asyncio.create_task(self._monitor_playback_status())
+            # Watch the REST server until the clip ends or is stopped
+            stop = asyncio.Event()
+            task = asyncio.create_task(self._monitor_playback_status(stop))
             self._background_tasks.add(task)
             task.add_done_callback(self._background_tasks.discard)
             self._monitor_task = task
+            self._monitor_stop = stop
 
         except Exception as err:
             self._current_media_title = None
@@ -429,8 +436,9 @@ class SkellyLiveMediaPlayer(
         it may be outside allowlist_external_dirs (it's in the temp folder).
 
         Used by skelly_ultra.perform and converse. Raises HomeAssistantError
-        if playback didn't start, like async_play_media. Await the task with
-        asyncio.shield: cancelling it would leave the state stuck on playing.
+        if playback didn't start, like async_play_media. The task ends when
+        the clip ends or is stopped. Await it with asyncio.shield: cancelling
+        it shows the speaker as idle while the clip keeps playing.
         """
         self._monitor_task = None
         await self._async_play(str(audio_file), own_file=audio_file)
@@ -438,33 +446,40 @@ class SkellyLiveMediaPlayer(
             raise HomeAssistantError("Live mode playback didn't start")
         return self._monitor_task
 
-    async def _monitor_playback_status(self) -> None:
-        """Monitor playback status via REST server and update state when done."""
+    async def _monitor_playback_status(self, stop: asyncio.Event) -> None:
+        """Poll the REST server until this playback ends, or stop is set.
+
+        Ends without an error when the clip ends, is stopped, or its status
+        can't be read (perform and converse await this task). Only a
+        cancellation is raised.
+        """
+        mac = self._playing_mac
         try:
-            # Poll the REST server status endpoint to detect when playback finishes
-            while self._is_playing:
-                await asyncio.sleep(1)
-
-                try:
-                    # Use the client to check status
-                    data = await self.adapter.client.get_audio_status_live_mode()
-
-                    # If server reports no playback to this Skelly, we're done
-                    if not _is_playing_on(data, self._playing_mac):
-                        _LOGGER.debug("Playback completed (detected via REST server)")
-                        break
-
-                except (OSError, RuntimeError, ValueError, KeyError):
-                    _LOGGER.debug("Failed to check playback status, assuming complete")
+            while not stop.is_set():
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), STATUS_POLL_INTERVAL)
+                if stop.is_set():
                     break
-
-        except (OSError, RuntimeError, asyncio.CancelledError):
-            _LOGGER.exception("Error monitoring playback status")
+                try:
+                    data = await self.adapter.client.get_audio_status_live_mode()
+                    playing = _is_playing_on(data, mac)
+                except Exception as err:  # noqa: BLE001 - any failure ends the watch
+                    _LOGGER.debug(
+                        "Couldn't check playback status, assuming it ended: %s",
+                        str(err) or type(err).__name__,
+                    )
+                    break
+                if not playing:
+                    _LOGGER.debug("Playback completed (detected via REST server)")
+                    break
         finally:
-            # Clear playback state
-            self._is_playing = False
-            self._current_media_title = None
-            self.async_write_ha_state()
+            # A newer playback (or a stop) has taken over the state otherwise
+            if self._monitor_task is asyncio.current_task():
+                self._monitor_task = None
+                self._monitor_stop = None
+                self._is_playing = False
+                self._current_media_title = None
+                self.async_write_ha_state()
 
     async def async_media_stop(self) -> None:
         """Stop any currently playing media via REST server."""
@@ -473,8 +488,14 @@ class SkellyLiveMediaPlayer(
     async def _async_stop(self, *, raise_errors: bool) -> None:
         """Stop this Skelly's playback; a failure is raised or logged.
 
-        Either way the speaker shows as stopped afterwards.
+        Either way the speaker shows as stopped afterwards, and the old
+        playback's monitor has ended (or is about to, without touching the
+        state).
         """
+        if self._monitor_stop is not None:
+            self._monitor_stop.set()
+        self._monitor_task = None
+        self._monitor_stop = None
         if not self._is_playing:
             return
 
