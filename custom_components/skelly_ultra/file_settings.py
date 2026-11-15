@@ -442,7 +442,22 @@ async def async_load_file_list_for_change(
     return coordinator.file_list
 
 
-def _find_file(
+def check_file_selector(
+    filename: str | None, file_index: int | None, cluster: int | None
+) -> None:
+    """Check that a file is given by name, or by file index and cluster."""
+    if filename:
+        if file_index is not None or cluster is not None:
+            raise HomeAssistantError(
+                "Cannot specify both filename and file_index/cluster"
+            )
+    elif file_index is None or cluster is None:
+        raise HomeAssistantError(
+            "Must provide either filename OR both file_index and cluster"
+        )
+
+
+def find_file(
     file_list: list[parser.FileInfoEvent],
     filename: str | None,
     file_index: int | None,
@@ -478,15 +493,7 @@ async def async_edit_file(
     filename = data.get("filename")
     file_index = data.get("file_index")
     cluster = data.get("cluster")
-    if filename:
-        if file_index is not None or cluster is not None:
-            raise HomeAssistantError(
-                "Cannot specify both filename and file_index/cluster"
-            )
-    elif file_index is None or cluster is None:
-        raise HomeAssistantError(
-            "Must provide either filename OR both file_index and cluster"
-        )
+    check_file_selector(filename, file_index, cluster)
 
     coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
     if not coordinator:
@@ -503,7 +510,7 @@ async def async_edit_file(
     # the file is looked up and edited.
     async with coordinator.action_lock:
         file_list = await async_load_file_list_for_change(adapter, coordinator)
-        file_info = _find_file(file_list, filename, file_index, cluster)
+        file_info = find_file(file_list, filename, file_index, cluster)
 
         current = settings_from_file_info(profile, file_info)
         # Compare speeds even for static lights, where settings_from_file_info

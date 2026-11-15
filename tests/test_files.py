@@ -224,6 +224,25 @@ async def test_delete_unknown_file(hass, setup_integration, device):
     assert len(device.files) == 3
 
 
+async def test_delete_refused_while_playing(hass, setup_integration, device):
+    """While a file plays the list can't be read: say so, not "not found"."""
+    from .conftest import coordinator
+
+    coordinator(hass, setup_integration).mark_playback_active(30)
+    with pytest.raises(HomeAssistantError, match="playing a file"):
+        await action(hass, "delete_file", filename="laugh.mp3")
+    assert len(device.files) == 3
+    coordinator(hass, setup_integration).mark_playback_inactive()
+
+
+async def test_delete_needs_name_or_index_and_cluster(hass, setup_integration, device):
+    with pytest.raises(HomeAssistantError, match="Cannot specify both"):
+        await action(hass, "delete_file", filename="laugh.mp3", file_index=1, cluster=0)
+    with pytest.raises(HomeAssistantError, match="Must provide either"):
+        await action(hass, "delete_file", file_index=1)
+    assert len(device.files) == 3
+
+
 # ---- per-file settings (edit_file) -----------------------------------------
 
 

@@ -113,6 +113,20 @@ async def test_file_list_starts_over_on_a_late_reply(client, device):
     assert client.events.empty()
 
 
+async def test_file_list_times_out_while_other_events_keep_coming(
+    client, device, monkeypatch
+):
+    """The deadline passing between events gives the timeout, not a crash."""
+
+    async def other_event(timeout, connection_lost):
+        await asyncio.sleep(0.02)
+        return object()  # not file info
+
+    monkeypatch.setattr(client, "_next_event", other_event)
+    with pytest.raises(TimeoutError, match="Timeout waiting for file info"):
+        await client.get_file_list(timeout=0.05)
+
+
 async def test_drop_during_query_fails_fast(client, device):
     device.unresponsive = True
     task = asyncio.create_task(client.get_volume(timeout=30))

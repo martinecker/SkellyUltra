@@ -908,7 +908,7 @@ class SkellyClient:
                 if remaining <= 0:
                     raise TimeoutError(
                         f"Timeout waiting for file info events. "
-                        f"Expected {expected_count}, received {len(file_info_events)}",
+                        f"Expected {expected_count}, received {len(by_index)}",
                     )
 
                 ev = await self._next_event(remaining, connection_lost)
