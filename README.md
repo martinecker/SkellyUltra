@@ -22,6 +22,7 @@ There is a companion project that provides a fully web browser-based controller 
   - [🔊 Playing Audio](#-playing-audio)
   - [🤖 Automation Examples](#-automation-examples)
   - [🎭 Perform: Lines with a Matching Mood](#-perform-lines-with-a-matching-mood)
+  - [💬 Converse: Skellys Talking to Each Other](#-converse-skellys-talking-to-each-other)
   - [📁 Using the Internal Files Media Player](#-using-the-internal-files-media-player)
   - [🎵 Playing Files Stored on Device (via Services)](#-playing-files-stored-on-device-via-services)
   - [📤 Uploading Audio Files to Device](#-uploading-audio-files-to-device)
@@ -53,6 +54,7 @@ There is a companion project that provides a fully web browser-based controller 
 - ⚙️ **Services**: Play/stop individual files stored on the device, enable classic Bluetooth
 - 📁 **File management**: Upload files from a path, URL or the media browser (`send_file`) or from any text-to-speech engine (`send_file_from_tts`); change a file's movement, eyes and lights (`edit_file`); choose which files play and in what order (`set_file_order`); delete files; plus a websocket API for a file manager UI
 - 🎭 **Perform action**: The device says a literal or AI-written line (optionally reacting to a camera snapshot) with eyes, lights and movement to match a mood, plus a ready-made blueprint
+- 💬 **Converse action**: Two or more devices hold an AI-written conversation, each in its own voice, with each line's mood shown by the device speaking it, plus a ready-made blueprint
 - 🎨 **Select entities**: Eye icon selection (18 options, Skelly only)
 - 🖼️ **Image entities**: Eye icon preview (Skelly only)
 
@@ -500,7 +502,7 @@ The `skelly_ultra.perform` action makes the device say one line in live mode and
 
 What it does, in order:
 
-1. Turns on Live Mode if it is off (and leaves it on), waiting up to `live_mode_timeout` seconds for the speaker. Meanwhile the AI writes the line.
+1. Turns on Live Mode if it is off (and leaves it on), waiting up to `live_mode_timeout` seconds for the speaker (it fails right away if the connection attempt fails). Meanwhile the AI writes the line.
 2. Renders the line with the TTS entity.
 3. Applies the mood's eyes and lights and sends the movement.
 4. Plays the line and waits until it has finished (with `wait_until_done: false`, the action returns here and the rest runs in the background).
@@ -573,6 +575,74 @@ Subtle movement is the head on the Skelly and head and eyes on Lethal Lily; full
 #### Line History
 
 The last 10 AI lines per device are kept (also across restarts) and added to the prompt with a request not to repeat them. Press the device's **Clear Perform History** button to start fresh. Literal messages aren't recorded.
+
+### 💬 Converse: Skellys Talking to Each Other
+
+The `skelly_ultra.converse` action lets two or more devices hold a short conversation. An [AI Task](https://www.home-assistant.io/integrations/ai_task/) entity writes the whole script in one request from your `prompt` (optionally looking at a camera snapshot), each line is spoken in its device's own voice, and the lines play one after another through each device's Live Mode speaker. The mood of each line (eyes, lights and movement) is shown by the device speaking it; the others keep their look.
+
+**Each device in a conversation needs its own Bluetooth adapter for Live Mode**: an adapter carries only one Live Mode (A2DP) link. With three adapters on your REST server(s), up to three devices can talk. If a device's Live Mode can't connect, the whole conversation fails before anything is said.
+
+What it does, in order:
+
+1. Checks every participant (its Live Mode Speaker, its voice and the movement parts) and returns `status: busy` if any of them is already performing or talking.
+2. Turns on Live Mode on every device (and leaves it on). Meanwhile the AI writes the script: a topic and a list of lines, each with its speaker and, with `mood: auto`, a mood.
+3. Renders all lines with each speaker's TTS entity and options, a few at a time, while the first lines already play.
+4. Plays the lines in order, with `pause` seconds between them. Before each line it applies the line's mood and movement to the speaker.
+5. Puts every device's eyes and lights back the way they were (unless `restore: false`).
+
+Lines with an unknown speaker or no text are dropped, and only the first `max_lines` are kept. If fewer than two lines by at least two devices remain, the action fails. If one line can't be turned into speech, it is skipped (`on_line_error: skip`, the default) or the conversation ends with an error (`abort`).
+
+#### Import the Blueprint
+
+The bundled blueprint works like the perform blueprint (triggers, *Talk now* buttons, cooldown, active hours, notifications). It has slots for Skelly 1 and 2 and optional slots 3 and 4, each with a name the Skellys use aloud (empty uses "Skelly" and the slot number), a persona for the AI and a voice (TTS options, such as an ElevenLabs `voice`); a slot can also use its own TTS entity. Give each device a different voice, or they sound the same. Besides the prompt you can add alternative prompts; each time one of them is picked at random. In the notification actions, `conversation.topic`, `conversation.lines` (each with `speaker`, `text` and `mood`) and `conversation.person_present` are available.
+
+[![Open your Home Assistant instance and show the blueprint import dialog with this blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fmartinecker%2FSkellyUltra%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fskelly_ultra%2Fconverse.yaml)
+
+#### Example
+
+```yaml
+action: skelly_ultra.converse
+data:
+  participants:
+    - device_id: 1234567890abcdef
+      name: Bones
+      persona: a grumpy old skeleton who has seen it all
+      tts_options:
+        voice: old-man-voice-id
+    - device_id: fedcba0987654321
+      name: Rattles
+      persona: an overexcited young skeleton at its first Halloween
+      tts_options:
+        voice: kid-voice-id
+  prompt: >-
+    Two skeletons guarding the front door bicker about who is scarier.
+    Keep each line short, funny and family friendly.
+  tts_entity: tts.elevenlabs
+  max_lines: 6
+response_variable: conversation
+```
+
+The response has `status` (`ok` or `busy`; with `busy` also `busy`, the names of the busy devices), `topic`, `lines` (each with `speaker`, `device_id`, `text`, `mood` and, when the action waited, `spoken`), `person_present` (`null` without a camera) and `history` (recent topics).
+
+#### Fields
+
+| Field | Description |
+| --- | --- |
+| `participants` | 2 to 6 devices, each once: `device_id` (or `entity_id`), `name` (unique; the AI uses it as the speaker), and optionally `persona`, `tts_entity`, `tts_options` and `language`. A participant without its own `tts_entity` uses the action's `tts_entity`, `tts_options` and `language` |
+| `prompt` | The scene for the AI. The action adds the cast (names and personas), the maximum number of lines and recent topics to avoid |
+| `max_lines` | The most lines (default 6) |
+| `camera_entity`, `camera_wait` | Optional camera snapshot for the AI, as for perform |
+| `ai_task_entity` | Optional; defaults to the preferred AI Task entity |
+| `tts_entity`, `tts_options`, `language` | Voice for participants that don't name their own TTS entity |
+| `mood` | `auto` (default, the AI picks per line), `none`, or a mood name for every line |
+| `movement` | `mood` (default, the line's mood), `none`, or a list of body parts, for the speaking device |
+| `restore`, `restore_movement` | As for perform, for every device, after the conversation |
+| `pause` | Seconds between lines (default 0.3) |
+| `live_mode_timeout` | Seconds to wait for Live Mode on every device (default 30) |
+| `on_line_error` | `skip` (default) or `abort` when a line can't be turned into speech |
+| `wait_until_done` | Return only after the last line (default `true`). When `false`, the action returns as soon as the first line starts, with the script in the response; the devices stay busy until the conversation ends |
+
+The topics of the last 10 conversations are kept (also across restarts) and added to the prompt with a request to pick a different one.
 
 ### 📁 Using the Internal Files Media Player
 

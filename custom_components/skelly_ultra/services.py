@@ -15,7 +15,7 @@ from homeassistant.core import (
     ServiceResponse,
     SupportsResponse,
 )
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import (
     config_validation as cv,
     device_registry as dr,
@@ -23,6 +23,7 @@ from homeassistant.helpers import (
 )
 
 from .const import DOMAIN
+from .converse import SERVICE_CONVERSE, async_converse
 from .file_order import async_set_file_order
 from .file_settings import async_edit_file
 from .perform import SERVICE_PERFORM, async_perform
@@ -639,6 +640,50 @@ async def async_perform_service(
     return result if call.return_response else None
 
 
+def _resolve_participant(
+    hass: HomeAssistant, spec: dict[str, Any]
+) -> tuple[Any, str, str]:
+    """Return the adapter, config entry id and device id of a converse participant."""
+    name = spec["name"]
+    device_id = spec.get("device_id")
+    if not device_id:
+        ent = er.async_get(hass).async_get(spec["entity_id"])
+        if ent is None or not ent.device_id:
+            raise ServiceValidationError(
+                f"{name}: entity {spec['entity_id']} not found or has no device"
+            )
+        device_id = ent.device_id
+    device = dr.async_get(hass).async_get(device_id)
+    if device is None:
+        raise ServiceValidationError(f"{name}: device {device_id} not found")
+    entries = hass.data.get(DOMAIN, {})
+    for entry_id in device.config_entries:
+        if entry_id in entries:
+            return entries[entry_id]["adapter"], entry_id, device_id
+    raise ServiceValidationError(
+        f"{name}: device {device_id} is not a loaded {DOMAIN} device"
+    )
+
+
+async def async_converse_service(
+    hass: HomeAssistant, call: ServiceCall
+) -> ServiceResponse:
+    """Let several Skellys hold a conversation (see converse.py)."""
+    data = dict(call.data)
+    participants = []
+    seen: dict[str, str] = {}
+    for spec in data["participants"]:
+        adapter, entry_id, device_id = _resolve_participant(hass, spec)
+        if entry_id in seen:
+            raise ServiceValidationError(
+                f"{seen[entry_id]} and {spec['name']} are the same Skelly"
+            )
+        seen[entry_id] = spec["name"]
+        participants.append((adapter, entry_id, {**spec, "device_id": device_id}))
+    result = await async_converse(hass, participants, data)
+    return result if call.return_response else None
+
+
 # (service name, handler, schema, supports_response) - drives both register_services and
 # unregister_services so the two can't drift out of sync with each other.
 _SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
@@ -701,6 +746,12 @@ _SERVICES: tuple[tuple[str, Any, vol.Schema, SupportsResponse], ...] = (
         async_perform_service,
         SERVICE_PERFORM,
         SupportsResponse.OPTIONAL
+    ),
+    (
+        "converse",
+        async_converse_service,
+        SERVICE_CONVERSE,
+        SupportsResponse.OPTIONAL,
     ),
 )
 

@@ -421,3 +421,160 @@ perform:
       default: true
       selector:
         boolean:
+converse:
+  name: Converse
+  description: Make two or more Skellys hold a conversation in live mode. An AI Task entity writes the whole script from a prompt (optionally looking at a camera snapshot); each line is spoken in its Skelly's own voice, one after another, with the line's mood on the Skelly speaking it. Turns live mode on for every Skelly and leaves it on; each Skelly in live mode needs its own Bluetooth adapter. Returns status, topic, lines, person_present and history; if any of the Skellys is already performing or talking, returns status busy and does nothing.
+  fields:
+    participants:
+      name: Participants
+      description: >-
+        The Skellys in the conversation, 2 to 6, each once. Each has device_id (or entity_id), name (how the AI calls it, unique), and optionally persona (who it is, for the AI), tts_entity, tts_options (such as its voice) and language. A participant without tts_entity uses the action's tts_entity, tts_options and language.
+      required: true
+      example: >-
+        [{"device_id": "1234567890abcdef", "name": "Bones", "persona": "a grumpy old skeleton", "tts_options": {"voice": "Old man"}},
+         {"device_id": "fedcba0987654321", "name": "Rattles", "persona": "an overexcited young skeleton", "tts_options": {"voice": "Kid"}}]
+      selector:
+        object:
+    prompt:
+      name: Prompt
+      description: The scene for the AI, such as what the Skellys talk about and how long the lines are. The action adds the cast (names and personas), the maximum number of lines and the topics of the last 10 conversations with a request to pick a different one.
+      required: true
+      example: "Two skeletons guarding the front door on Halloween argue about which of them is scarier. Keep each line short and funny."
+      selector:
+        text:
+          multiline: true
+    max_lines:
+      name: Maximum lines
+      description: The most lines the conversation has. Extra lines from the AI are dropped.
+      default: 6
+      selector:
+        number:
+          min: 2
+          max: 20
+          step: 1
+          mode: box
+    camera_entity:
+      name: Camera
+      description: A camera whose snapshot is attached to the AI request. The response then also says whether a person was seen (person_present); the Skellys talk either way.
+      example: "camera.front_door"
+      selector:
+        entity:
+          domain: camera
+    camera_wait:
+      name: Camera wait
+      description: With a camera, how long to wait for it to publish a new image before sending it to the AI (see the perform action). 0 sends the current image right away.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
+    ai_task_entity:
+      name: AI Task entity
+      description: The AI Task entity that writes the script. Defaults to the preferred AI Task entity set in Home Assistant.
+      example: "ai_task.openai"
+      selector:
+        entity:
+          domain: ai_task
+    tts_entity:
+      name: Text-to-speech entity
+      description: The TTS entity for participants that don't name their own. Needed unless every participant has one.
+      example: "tts.elevenlabs"
+      selector:
+        entity:
+          domain: tts
+    language:
+      name: Language
+      description: Language code for participants without their own tts_entity, exactly as the TTS entity lists it. Defaults to the entity's default language.
+      example: "en-US"
+      selector:
+        text:
+    tts_options:
+      name: TTS options
+      description: Options for participants without their own tts_entity and tts_options. Give each participant its own voice in its tts_options, or the Skellys sound the same.
+      example: '{"model": "eleven_flash_v2_5"}'
+      selector:
+        object:
+    mood:
+      name: Mood
+      description: The look for each line, applied to the Skelly speaking it. auto lets the AI pick per line, none leaves eyes, lights and movement as they are, a mood name uses it for every line.
+      default: auto
+      selector:
+        select:
+          options:
+            - auto
+            - none
+            - friendly
+            - spooky
+            - menacing
+            - playful
+            - mysterious
+    movement:
+      name: Movement
+      description: Which body parts of the speaking Skelly move with each line. mood uses the line's mood, none sends no movement, or pick the parts to move. Parts a Skelly doesn't have are an error.
+      default:
+        - mood
+      selector:
+        select:
+          multiple: true
+          options:
+            - mood
+            - none
+            - all
+            - head
+            - arm
+            - torso
+            - wrist
+            - elbow
+            - eyes
+    restore:
+      name: Restore eyes and lights
+      description: Put every Skelly's eyes and lights back the way they were after the conversation.
+      default: true
+      selector:
+        boolean:
+    restore_movement:
+      name: Restore movement
+      description: Send each Skelly's previous movement setting back after the conversation. This makes it move once more.
+      default: false
+      selector:
+        boolean:
+    pause:
+      name: Pause
+      description: Silence between two lines.
+      default: 0.3
+      selector:
+        number:
+          min: 0
+          max: 10
+          step: 0.1
+          unit_of_measurement: s
+          mode: box
+    live_mode_timeout:
+      name: Live mode timeout
+      description: How long to wait for live mode to connect on every Skelly before failing. If any Skelly can't connect, nothing is said.
+      default: 30
+      selector:
+        number:
+          min: 1
+          max: 300
+          step: 1
+          unit_of_measurement: s
+          mode: box
+    on_line_error:
+      name: On line error
+      description: What to do when one line can't be turned into speech. skip leaves it out and goes on, abort ends the conversation with an error.
+      default: skip
+      selector:
+        select:
+          options:
+            - skip
+            - abort
+    wait_until_done:
+      name: Wait until done
+      description: Return only after the last line has finished and the looks are restored. When off, the action returns as soon as the first line starts (with the script in the response), so following actions such as notifications run while the Skellys talk; the rest continues in the background and the Skellys stay busy until it ends.
+      default: true
+      selector:
+        boolean:

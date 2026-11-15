@@ -677,6 +677,23 @@ class SkellyClientAdapter:
             self._disconnects_running -= 1
 
     @property
+    def live_mode_may_still_connect(self) -> bool:
+        """Return True if live mode may yet connect without another attempt.
+
+        That is while a BLE connect is running or the BLE link is down and
+        will be reconnected (a connect restores live mode when it is wanted),
+        or while such a restore is running.
+        """
+        return (
+            bool(self._connect_tasks)
+            or (not self._client.is_connected and self._auto_reconnect)
+            or (
+                self._after_connect_task is not None
+                and not self._after_connect_task.done()
+            )
+        )
+
+    @property
     def client(self) -> SkellyClient:
         """Return the underlying SkellyClient instance."""
         return self._client

@@ -338,6 +338,80 @@
           "description": "Return only after the line has finished and the look is restored. When off, the action returns as soon as the line starts playing, so following actions run while the device speaks."
         }
       }
+    },
+    "converse": {
+      "name": "Converse",
+      "description": "Make two or more devices hold a conversation in live mode. An AI Task entity writes the script; each line is spoken in its device's own voice, with the line's mood on the device speaking it.",
+      "fields": {
+        "participants": {
+          "name": "Participants",
+          "description": "The devices in the conversation, 2 to 6: each with device_id (or entity_id), name, and optionally persona, tts_entity, tts_options and language."
+        },
+        "prompt": {
+          "name": "Prompt",
+          "description": "The scene for the AI. The cast, the maximum number of lines and recent topics to avoid are added."
+        },
+        "max_lines": {
+          "name": "Maximum lines",
+          "description": "The most lines the conversation has."
+        },
+        "camera_entity": {
+          "name": "Camera",
+          "description": "A camera whose snapshot is attached to the AI request."
+        },
+        "camera_wait": {
+          "name": "Camera wait",
+          "description": "With a camera, how long to wait for it to publish a new image before sending it to the AI. 0 sends the current image right away."
+        },
+        "ai_task_entity": {
+          "name": "AI Task entity",
+          "description": "The AI Task entity that writes the script. Defaults to the preferred AI Task entity."
+        },
+        "tts_entity": {
+          "name": "Text-to-speech entity",
+          "description": "The TTS entity for participants that don't name their own."
+        },
+        "language": {
+          "name": "Language",
+          "description": "Language code for participants without their own TTS entity, exactly as the TTS entity lists it."
+        },
+        "tts_options": {
+          "name": "TTS options",
+          "description": "Options for participants without their own TTS entity and options."
+        },
+        "mood": {
+          "name": "Mood",
+          "description": "auto lets the AI pick per line, none leaves eyes, lights and movement as they are, a mood name is used for every line."
+        },
+        "movement": {
+          "name": "Movement",
+          "description": "mood uses the line's mood, none sends no movement, or pick the body parts to move."
+        },
+        "restore": {
+          "name": "Restore eyes and lights",
+          "description": "Put every device's eyes and lights back the way they were after the conversation."
+        },
+        "restore_movement": {
+          "name": "Restore movement",
+          "description": "Send each device's previous movement setting back afterwards. This makes it move once more."
+        },
+        "pause": {
+          "name": "Pause",
+          "description": "Silence between two lines."
+        },
+        "live_mode_timeout": {
+          "name": "Live mode timeout",
+          "description": "How long to wait for live mode to connect on every device before failing."
+        },
+        "on_line_error": {
+          "name": "On line error",
+          "description": "skip leaves out a line that can't be turned into speech, abort ends the conversation with an error."
+        },
+        "wait_until_done": {
+          "name": "Wait until done",
+          "description": "Return only after the last line has finished and the looks are restored. When off, return as soon as the first line starts."
+        }
+      }
     }
   }
 }

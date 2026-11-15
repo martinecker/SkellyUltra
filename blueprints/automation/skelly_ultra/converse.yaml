@@ -1,0 +1,515 @@
+blueprint:
+  name: Skellys talk to each other when triggered
+  description: >-
+    When a motion sensor, doorbell or other trigger fires, two to four Skellys hold
+    a short conversation written by AI, each in its own voice, with eyes, lights and
+    movement matching each line. Optionally the AI looks at a camera snapshot first.
+    Uses the skelly_ultra.converse action, which turns live mode on for every Skelly.
+    Each Skelly in live mode needs its own Bluetooth adapter on its REST server.
+  domain: automation
+  source_url: https://github.com/martinecker/SkellyUltra/blob/main/blueprints/automation/skelly_ultra/converse.yaml
+  input:
+    trigger_entity:
+      name: Triggers
+      description: >-
+        One or more motion sensors, doorbells or event entities; each triggers
+        on its own. A binary sensor fires when it turns on, an event entity on
+        each event (such as a doorbell press).
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - binary_sensor
+            - event
+    force_entity:
+      name: Talk now button (optional)
+      description: >-
+        Buttons that start a conversation right away, ignoring the trigger,
+        active hours and cooldown. Pressing one while a conversation is still
+        running does nothing.
+      default: []
+      selector:
+        entity:
+          multiple: true
+          domain:
+            - input_button
+            - button
+    prompt:
+      name: Prompt
+      description: >-
+        The scene for the AI: what the Skellys talk about and how long the lines
+        are. The names and personas below are added for you. With a camera, you
+        can ask them to talk about what they see.
+      default: >-
+        Two skeletons guard a house on Halloween night. When trick-or-treaters
+        come to the door, they bicker about which of them is scarier. Keep each
+        line short and funny, and family friendly.
+      selector:
+        text:
+          multiline: true
+    alternative_prompts:
+      name: Alternative prompts (optional)
+      description: >-
+        More scenes. Each time, one of the prompt and these is picked at random,
+        for more variety.
+      default: []
+      selector:
+        text:
+          multiline: true
+          multiple: true
+    camera:
+      name: Camera (optional)
+      description: A camera whose snapshot the AI looks at before writing the conversation.
+      default: ""
+      selector:
+        entity:
+          domain: camera
+    ai_task_entity:
+      name: AI Task entity (optional)
+      description: Leave empty to use the preferred AI Task entity.
+      default: ""
+      selector:
+        entity:
+          domain: ai_task
+    tts_entity:
+      name: Text-to-speech entity
+      description: The TTS entity that gives the Skellys their voices.
+      selector:
+        entity:
+          domain: tts
+    skelly_1_section:
+      name: Skelly 1
+      collapsed: false
+      input:
+        skelly_1:
+          name: Skelly 1
+          description: A Skelly in the conversation. Each Skelly needs its own Bluetooth adapter for live mode.
+          selector:
+            device:
+              integration: skelly_ultra
+        name_1:
+          name: Name
+          description: >-
+            What the Skellys call this one, spoken aloud; must differ from the
+            others. Empty uses "Skelly" and the slot number.
+          default: ""
+          selector:
+            text:
+        persona_1:
+          name: Persona (optional)
+          description: Who this Skelly is, for the AI. For example, a grumpy old skeleton.
+          default: ""
+          selector:
+            text:
+              multiline: true
+        voice_1:
+          name: Voice (TTS options)
+          description: >-
+            TTS options that give this Skelly its own voice, such as voice (a voice
+            ID for ElevenLabs). Give each Skelly a different voice.
+          default: {}
+          selector:
+            object:
+        tts_entity_1:
+          name: Own text-to-speech entity (optional)
+          description: A different TTS entity for this Skelly. Empty uses the shared one.
+          default: ""
+          selector:
+            entity:
+              domain: tts
+    skelly_2_section:
+      name: Skelly 2
+      collapsed: false
+      input:
+        skelly_2:
+          name: Skelly 2
+          description: A Skelly in the conversation. Each Skelly needs its own Bluetooth adapter for live mode.
+          selector:
+            device:
+              integration: skelly_ultra
+        name_2:
+          name: Name
+          description: >-
+            What the Skellys call this one, spoken aloud; must differ from the
+            others. Empty uses "Skelly" and the slot number.
+          default: ""
+          selector:
+            text:
+        persona_2:
+          name: Persona (optional)
+          description: Who this Skelly is, for the AI. For example, a grumpy old skeleton.
+          default: ""
+          selector:
+            text:
+              multiline: true
+        voice_2:
+          name: Voice (TTS options)
+          description: >-
+            TTS options that give this Skelly its own voice, such as voice (a voice
+            ID for ElevenLabs). Give each Skelly a different voice.
+          default: {}
+          selector:
+            object:
+        tts_entity_2:
+          name: Own text-to-speech entity (optional)
+          description: A different TTS entity for this Skelly. Empty uses the shared one.
+          default: ""
+          selector:
+            entity:
+              domain: tts
+    skelly_3_section:
+      name: Skelly 3 (optional)
+      collapsed: true
+      input:
+        skelly_3:
+          name: Skelly 3
+          description: Leave empty for a conversation without this slot. Each Skelly needs its own Bluetooth adapter for live mode.
+          default: ""
+          selector:
+            device:
+              integration: skelly_ultra
+        name_3:
+          name: Name
+          description: >-
+            What the Skellys call this one, spoken aloud; must differ from the
+            others. Empty uses "Skelly" and the slot number.
+          default: ""
+          selector:
+            text:
+        persona_3:
+          name: Persona (optional)
+          description: Who this Skelly is, for the AI. For example, a grumpy old skeleton.
+          default: ""
+          selector:
+            text:
+              multiline: true
+        voice_3:
+          name: Voice (TTS options)
+          description: >-
+            TTS options that give this Skelly its own voice, such as voice (a voice
+            ID for ElevenLabs). Give each Skelly a different voice.
+          default: {}
+          selector:
+            object:
+        tts_entity_3:
+          name: Own text-to-speech entity (optional)
+          description: A different TTS entity for this Skelly. Empty uses the shared one.
+          default: ""
+          selector:
+            entity:
+              domain: tts
+    skelly_4_section:
+      name: Skelly 4 (optional)
+      collapsed: true
+      input:
+        skelly_4:
+          name: Skelly 4
+          description: Leave empty for a conversation without this slot. Each Skelly needs its own Bluetooth adapter for live mode.
+          default: ""
+          selector:
+            device:
+              integration: skelly_ultra
+        name_4:
+          name: Name
+          description: >-
+            What the Skellys call this one, spoken aloud; must differ from the
+            others. Empty uses "Skelly" and the slot number.
+          default: ""
+          selector:
+            text:
+        persona_4:
+          name: Persona (optional)
+          description: Who this Skelly is, for the AI. For example, a grumpy old skeleton.
+          default: ""
+          selector:
+            text:
+              multiline: true
+        voice_4:
+          name: Voice (TTS options)
+          description: >-
+            TTS options that give this Skelly its own voice, such as voice (a voice
+            ID for ElevenLabs). Give each Skelly a different voice.
+          default: {}
+          selector:
+            object:
+        tts_entity_4:
+          name: Own text-to-speech entity (optional)
+          description: A different TTS entity for this Skelly. Empty uses the shared one.
+          default: ""
+          selector:
+            entity:
+              domain: tts
+    conversation_section:
+      name: Conversation
+      collapsed: true
+      input:
+        max_lines:
+          name: Maximum lines
+          description: The most lines the conversation has.
+          default: 6
+          selector:
+            number:
+              min: 2
+              max: 20
+              step: 1
+              mode: box
+        mood:
+          name: Mood
+          description: >-
+            auto lets the AI pick a mood for each line, shown by the Skelly
+            speaking it. none leaves the looks alone; a mood name is used for
+            every line.
+          default: auto
+          selector:
+            select:
+              options:
+                - auto
+                - none
+                - friendly
+                - spooky
+                - menacing
+                - playful
+                - mysterious
+        pause:
+          name: Pause between lines
+          default: 0.3
+          selector:
+            number:
+              min: 0
+              max: 10
+              step: 0.1
+              unit_of_measurement: s
+              mode: box
+        on_line_error:
+          name: On line error
+          description: >-
+            What happens when one line can't be turned into speech. skip leaves it
+            out, abort ends the conversation.
+          default: skip
+          selector:
+            select:
+              options:
+                - skip
+                - abort
+    look_and_movement:
+      name: Movement and restore (optional)
+      description: Which parts move, and what happens after the conversation.
+      collapsed: true
+      input:
+        movement:
+          name: Movement
+          description: >-
+            Which body parts of the speaking Skelly move. mood uses the line's
+            mood, none sends no movement, or pick the parts to move (not together
+            with mood or none). Parts a Skelly doesn't have are an error.
+          default:
+            - mood
+          selector:
+            select:
+              multiple: true
+              options:
+                - mood
+                - none
+                - all
+                - head
+                - arm
+                - torso
+                - wrist
+                - elbow
+                - eyes
+        restore:
+          name: Restore eyes and lights
+          description: Put every Skelly's eyes and lights back the way they were afterwards.
+          default: true
+          selector:
+            boolean:
+        restore_movement:
+          name: Restore movement
+          description: >-
+            Send each Skelly's previous movement setting back afterwards. This makes
+            it move once more.
+          default: false
+          selector:
+            boolean:
+        live_mode_timeout:
+          name: Live mode timeout
+          description: >-
+            How long to wait for live mode to connect on every Skelly. If any of them
+            can't connect, nothing is said.
+          default: 30
+          selector:
+            number:
+              min: 1
+              max: 300
+              step: 1
+              unit_of_measurement: s
+              mode: box
+    cooldown:
+      name: Cooldown
+      description: Minimum time between two conversations.
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 3600
+          step: 5
+          unit_of_measurement: s
+          mode: box
+    active_hours:
+      name: Active hours (optional)
+      description: >-
+        Turn on to limit conversations to a time window. Off means the trigger
+        works at any time of day.
+      collapsed: true
+      input:
+        limit_active_hours:
+          name: Only talk during active hours
+          default: false
+          selector:
+            boolean:
+        active_from:
+          name: Active from
+          description: Only talk after this time of day.
+          default: "17:00:00"
+          selector:
+            time:
+        active_until:
+          name: Active until
+          description: Only talk before this time of day. Can be past midnight.
+          default: "23:00:00"
+          selector:
+            time:
+    notifications:
+      name: Notifications (optional)
+      description: >-
+        Actions to run as the first line starts, such as sending the script to
+        phones.
+      collapsed: true
+      input:
+        after_start:
+          name: Actions when the conversation starts
+          description: >-
+            Any number of actions, run as the first line starts. In templates,
+            {{ conversation.topic }} is the topic, {{ conversation.lines }} the
+            lines (each with speaker, text and mood) and
+            {{ conversation.person_present }} whether the AI saw a person on the
+            camera. For example, the action notify.adult_phones with title Skellys
+            talk about {{ conversation.topic }} and message
+            {{ conversation.lines | map(attribute='text') | join(' / ') }}.
+          default: []
+          selector:
+            action:
+
+mode: single
+max_exceeded: silent
+
+variables:
+  cooldown: !input cooldown
+  limit_active_hours: !input limit_active_hours
+  prompt: !input prompt
+  alternative_prompts: !input alternative_prompts
+  slots:
+    - device_id: !input skelly_1
+      name: !input name_1
+      persona: !input persona_1
+      tts_options: !input voice_1
+      tts_entity: !input tts_entity_1
+    - device_id: !input skelly_2
+      name: !input name_2
+      persona: !input persona_2
+      tts_options: !input voice_2
+      tts_entity: !input tts_entity_2
+    - device_id: !input skelly_3
+      name: !input name_3
+      persona: !input persona_3
+      tts_options: !input voice_3
+      tts_entity: !input tts_entity_3
+    - device_id: !input skelly_4
+      name: !input name_4
+      persona: !input persona_4
+      tts_options: !input voice_4
+      tts_entity: !input tts_entity_4
+  # The filled slots; an empty name becomes "Skelly <slot number>"
+  participants: >-
+    {% set ns = namespace(out=[]) %}
+    {% for slot in slots if slot.device_id %}
+      {% set name = slot.name | trim %}
+      {% set ns.out = ns.out + [dict(slot, name=name or 'Skelly ' ~ (slots.index(slot) + 1))] %}
+    {% endfor %}
+    {{ ns.out }}
+  # The prompt or one of the alternatives; empty ones are left out
+  scene: >-
+    {% set scenes = ([prompt] + (alternative_prompts or []))
+       | map('trim') | reject('eq', '') | list %}
+    {{ scenes | random if scenes else '' }}
+
+triggers:
+  - trigger: state
+    id: sensor
+    entity_id: !input trigger_entity
+  - trigger: state
+    id: force
+    entity_id: !input force_entity
+
+conditions:
+  - condition: or
+    conditions:
+      # A button press (its state becomes the press time) skips all other checks.
+      - condition: template
+        value_template: >-
+          {% set new = trigger.to_state %}
+          {% set old = trigger.from_state %}
+          {{ trigger.id == 'force' and new is not none and old is not none
+             and new.state not in ['unavailable', 'unknown']
+             and old.state != 'unavailable' and new.state != old.state }}
+      - condition: and
+        conditions:
+          # A binary sensor fires when it turns on, an event entity on each new event.
+          - condition: template
+            value_template: >-
+              {% set new = trigger.to_state %}
+              {% set old = trigger.from_state %}
+              {% if trigger.id != 'sensor' or new is none or old is none %}
+                false
+              {% elif new.domain == 'binary_sensor' %}
+                {{ new.state == 'on' and old.state == 'off' }}
+              {% else %}
+                {{ new.state not in ['unavailable', 'unknown'] and old.state != 'unavailable'
+                   and new.state != old.state }}
+              {% endif %}
+          - condition: or
+            conditions:
+              - condition: template
+                value_template: "{{ not limit_active_hours }}"
+              - condition: time
+                after: !input active_from
+                before: !input active_until
+          - condition: template
+            value_template: >-
+              {{ this.attributes.last_triggered is none
+                 or (now() - this.attributes.last_triggered).total_seconds() >= cooldown }}
+
+actions:
+  - action: skelly_ultra.converse
+    data:
+      participants: "{{ participants }}"
+      prompt: "{{ scene }}"
+      camera_entity: !input camera
+      ai_task_entity: !input ai_task_entity
+      tts_entity: !input tts_entity
+      max_lines: !input max_lines
+      mood: !input mood
+      pause: !input pause
+      on_line_error: !input on_line_error
+      movement: !input movement
+      restore: !input restore
+      restore_movement: !input restore_movement
+      live_mode_timeout: !input live_mode_timeout
+      # Return once the first line starts, so the actions below run while they talk.
+      wait_until_done: false
+    response_variable: conversation
+  # Busy means a Skelly was already performing or talking and nothing was said.
+  - if:
+      - condition: template
+        value_template: "{{ conversation.status == 'ok' }}"
+    then: !input after_start
