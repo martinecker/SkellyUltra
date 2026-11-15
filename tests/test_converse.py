@@ -15,7 +15,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr, llm
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.skelly_ultra import perform as perform_module
+from custom_components.skelly_ultra import stage as stage_module
 from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     CONF_SERVER_URL,
@@ -35,8 +35,8 @@ URL_2 = "http://rattles.local:8765"  # the mock matches hosts, not ports
 
 @pytest.fixture(autouse=True)
 def fast_perform(monkeypatch):
-    monkeypatch.setattr(perform_module, "COMMAND_DELAY", 0)
-    monkeypatch.setattr(perform_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(stage_module, "COMMAND_DELAY", 0)
+    monkeypatch.setattr(stage_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
 
 
 class LoggingRestServer(FakeRestServer):

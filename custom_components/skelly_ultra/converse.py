@@ -3,8 +3,8 @@
 An AI Task entity writes the whole script in one request, each line is
 rendered with the speaking Skelly's own voice, and the lines play one after
 another through each Skelly's live-mode speaker, with the line's mood on the
-Skelly that speaks it. Builds on the perform action's per-Skelly pieces
-(SkellyStage in perform.py).
+Skelly that speaks it. Builds on SkellyStage (stage.py), which the perform
+action uses too.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.util.hass_dict import HassKey
 
 from .const import DOMAIN, MOODS
-from .perform import (
+from .stage import (
     DEFAULT_CAMERA_WAIT,
     DEFAULT_LIVE_MODE_TIMEOUT,
     MOOD_AUTO,
@@ -31,6 +31,7 @@ from .perform import (
     MOVEMENT_MOOD,
     MOVEMENT_NONE,
     SkellyStage,
+    StageState,
     async_generate_ai_data,
     async_remove_file,
     async_render_tts,
@@ -261,8 +262,8 @@ class _Converse:
         self.background_task: asyncio.Task | None = None
 
     @property
-    def managers(self) -> list[Any]:
-        return [p.stage.manager for p in self.participants]
+    def states(self) -> list[StageState]:
+        return [p.stage.state for p in self.participants]
 
     def _check(self) -> None:
         """Check everything that can be checked before any device or AI call."""
@@ -628,7 +629,7 @@ async def async_converse(
     order given, each Skelly once; the data's device_id is resolved.
     """
     converse = _Converse(hass, participants, data)
-    busy = [p.name for p in converse.participants if p.stage.manager.running]
+    busy = [p.name for p in converse.participants if p.stage.state.running]
     if busy:
         _LOGGER.info(
             "Converse: %s already performing or talking, dropping this call",
@@ -636,13 +637,13 @@ async def async_converse(
         )
         return {"status": "busy", "busy": busy}
 
-    managers = converse.managers
-    for manager in managers:
-        manager.running = True
+    states = converse.states
+    for state in states:
+        state.running = True
 
     def release(_task: asyncio.Task | None = None) -> None:
-        for manager in managers:
-            manager.running = False
+        for state in states:
+            state.running = False
 
     try:
         return await converse.async_run()

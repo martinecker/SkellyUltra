@@ -7,7 +7,7 @@ import pytest
 from homeassistant.const import ATTR_ENTITY_ID, STATE_OFF, STATE_ON
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 
-from custom_components.skelly_ultra import perform as perform_module
+from custom_components.skelly_ultra import stage as stage_module
 from custom_components.skelly_ultra import uploads
 from custom_components.skelly_ultra.const import DOMAIN
 
@@ -18,8 +18,8 @@ from .rest_sim import LIVE_MAC
 
 @pytest.fixture(autouse=True)
 def fast_perform(monkeypatch):
-    monkeypatch.setattr(perform_module, "COMMAND_DELAY", 0)
-    monkeypatch.setattr(perform_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
+    monkeypatch.setattr(stage_module, "COMMAND_DELAY", 0)
+    monkeypatch.setattr(stage_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
 
 
 async def test_live_mode_switch_pairs_and_connects(
