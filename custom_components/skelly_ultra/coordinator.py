@@ -20,7 +20,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .client_adapter import SkellyClientAdapter
-from .const import DOMAIN
+from .const import DOMAIN, has_capability
 from .helpers import DeviceLoggerAdapter, files_updated_signal, get_device_profile
 from .playback_guard import PlaybackGuard
 from .settings_sync import SettingsSync
@@ -94,6 +94,14 @@ class SkellyCoordinator(DataUpdateCoordinator):
         adapter.register_reconnected_callback(self._on_device_reconnected)
         adapter.register_connected_hook(self._async_on_connected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    def has_capability(self, capability: str) -> bool:
+        """Return whether the device's type and firmware have capability.
+
+        One of the CAPABILITY_* constants. False while the firmware version
+        isn't known yet.
+        """
+        return has_capability(self.profile, capability, self.firmware_version)
 
     async def _async_on_connected(self) -> None:
         """Read the firmware version, then let settings sync push its settings.

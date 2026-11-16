@@ -26,6 +26,15 @@ DEVICE_TYPE_SKELLY_12FT = "skelly_12ft"
 DEVICE_TYPE_LILY = "lethal_lily"
 
 
+# Capabilities that depend on the firmware, keys of a profile's capabilities.
+# Light scenes: the Halloween and Christmas presets (F1 scene byte, BBD0/BBE1 scene byte)
+CAPABILITY_LIGHT_SCENES = "light_scenes"
+# F1: set all light channels (and the scene) with one command
+CAPABILITY_SET_ALL_LIGHTS = "set_all_lights"
+# CD: per-file jaw movement data, sent after an upload
+CAPABILITY_JAW_DATA = "jaw_data"
+
+
 class MovementDef(TypedDict):
     part: str
     bit: int
@@ -69,6 +78,10 @@ class DeviceProfile(TypedDict):
     mood_light_styles: dict[str, str]
     # Mood movement level ("subtle", "full") -> movement parts
     mood_movements: dict[str, list[str]]
+    # Capability -> lowest firmware version that has it (0: any version).
+    # Missing capabilities are off. Firmware below the lowest tested version
+    # counts as not capable; newer, untested versions count as capable.
+    capabilities: dict[str, int]
 
 
 # Device profiles. Each profile drives entity creation at setup time.
@@ -113,6 +126,12 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
         "light_modes": ["Static", "Strobe", "Pulse"],
         "mood_light_styles": {"steady": "Static", "pulse": "Pulse", "flash": "Strobe"},
         "mood_movements": {"subtle": ["head"], "full": ["all"]},
+        # v66 (advertises "Animated Skelly") has none of these, v68 ("Ultra Skelly v2") them
+        "capabilities": {
+            CAPABILITY_LIGHT_SCENES: 68,
+            CAPABILITY_SET_ALL_LIGHTS: 68,
+            CAPABILITY_JAW_DATA: 68,
+        },
     },
     DEVICE_TYPE_SKELLY_12FT: {
         "display_name": "12ft Skelly",
@@ -151,6 +170,11 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
         "light_modes": ["Static", "Strobe", "Pulse"],
         "mood_light_styles": {"steady": "Static", "pulse": "Pulse", "flash": "Strobe"},
         "mood_movements": {"subtle": ["head"], "full": ["head"]},
+        "capabilities": {
+            CAPABILITY_LIGHT_SCENES: 14,
+            CAPABILITY_SET_ALL_LIGHTS: 14,
+            CAPABILITY_JAW_DATA: 14,
+        },
     },
     DEVICE_TYPE_LILY: {
         "display_name": "Lethal Lily",
@@ -176,8 +200,29 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             "flash": "Chasing",
         },
         "mood_movements": {"subtle": ["head", "eyes"], "full": ["all"]},
+        "capabilities": {
+            CAPABILITY_LIGHT_SCENES: 24,
+            CAPABILITY_SET_ALL_LIGHTS: 24,
+            CAPABILITY_JAW_DATA: 24,
+        },
     },
 }
+
+
+def has_capability(
+    profile: DeviceProfile, capability: str, firmware_version: int | None
+) -> bool:
+    """Return whether a device with this profile and firmware has capability.
+
+    An unknown firmware version (not read yet, or no reply) has none.
+    """
+    min_version = profile["capabilities"].get(capability)
+    return (
+        min_version is not None
+        and firmware_version is not None
+        and firmware_version >= min_version
+    )
+
 
 # Moods for the skelly_ultra.perform action. The list is fixed and owned by
 # the integration; DEVICE_PROFILES translate each one to what a device can do.
