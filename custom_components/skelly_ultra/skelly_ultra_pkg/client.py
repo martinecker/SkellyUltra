@@ -57,7 +57,14 @@ class SkellyClient:
         name_filter: str = "Animated Skelly",
         server_url: str = "http://localhost:8765",
         use_ble_proxy: bool = False,
+        session: aiohttp.ClientSession | None = None,
     ) -> None:
+        """Set up the client; nothing connects yet.
+
+        session is the HTTP session for the REST server (in Home Assistant,
+        its shared one). It is used as is and never closed here. Without
+        one, the client makes its own and closes it in disconnect().
+        """
         self.address = address
         self.name_filter = name_filter
         self.server_url = server_url
@@ -75,7 +82,8 @@ class SkellyClient:
         # connection is up, so waiters can tell a drop of their connection from
         # a later one.
         self._connection_lost = asyncio.Event()
-        self._rest_session: aiohttp.ClientSession | None = None
+        self._rest_session: aiohttp.ClientSession | None = session
+        self._owns_rest_session = session is None
         # BLE proxy mode tracking
         self._ble_session_id: str | None = None
         self._polling_task: asyncio.Task | None = None
@@ -383,19 +391,20 @@ class SkellyClient:
             with contextlib.suppress(Exception):
                 await client.disconnect()
 
-        # Close REST session if it exists
-        if self._rest_session:
+        # Close the REST session if it is our own
+        if self._owns_rest_session and self._rest_session:
             with contextlib.suppress(Exception):
                 await self._rest_session.close()
             self._rest_session = None
 
     def _get_rest_session(self) -> aiohttp.ClientSession:
-        """Get or create the reusable REST session.
+        """Return the REST session: the one passed in, or our own.
 
-        Returns a persistent aiohttp ClientSession to avoid creating
-        new sessions for each REST request, which prevents premature
+        One persistent session, not one per request, which prevents premature
         disconnection warnings from the server.
         """
+        if not self._owns_rest_session:
+            return self._rest_session
         if self._rest_session is None or self._rest_session.closed:
             self._rest_session = aiohttp.ClientSession()
         return self._rest_session

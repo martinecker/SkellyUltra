@@ -239,8 +239,14 @@ def config_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 
 @pytest.fixture
-async def setup_integration(hass: HomeAssistant, config_entry, mock_ble):
-    """Set up the integration, connected to the simulated device and polled once."""
+async def setup_integration(
+    hass: HomeAssistant, config_entry, mock_ble, aioclient_mock
+):
+    """Set up the integration, connected to the simulated device and polled once.
+
+    HTTP goes through aioclient_mock (HA's shared session, which the client
+    takes at setup), so rest_server can fake the REST server at any time.
+    """
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     return config_entry
@@ -276,18 +282,13 @@ async def rest_server(hass: HomeAssistant, aioclient_mock, device):
     """The Skelly REST server (live mode), simulated at the HTTP level."""
     from .rest_sim import FakeRestServer
 
+    # aioclient_mock fakes HA's shared HTTP session, which the client uses
     server = FakeRestServer(aioclient_mock, device, "http://localhost:8765")
-    session = aioclient_mock.create_session(hass.loop)
-    with patch(
-        "custom_components.skelly_ultra.skelly_ultra_pkg.client.SkellyClient._get_rest_session",
-        lambda self: session,
-    ):
-        yield server
-        # Unload while the server is still faked: unloading disconnects live mode.
-        for entry in hass.config_entries.async_entries(DOMAIN):
-            await hass.config_entries.async_unload(entry.entry_id)
-        await hass.async_block_till_done()
-    await session.close()
+    yield server
+    # Unload while the server is still faked: unloading disconnects live mode.
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        await hass.config_entries.async_unload(entry.entry_id)
+    await hass.async_block_till_done()
 
 
 @pytest.fixture

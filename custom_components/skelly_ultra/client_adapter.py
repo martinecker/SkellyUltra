@@ -17,6 +17,7 @@ from bleak_retry_connector import (
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .skelly_ultra_pkg.client import SkellyClient
 
@@ -61,7 +62,10 @@ class SkellyClientAdapter:
         self.hass = hass
         self.address = address
         self._client = SkellyClient(
-            address=address, server_url=server_url, use_ble_proxy=use_ble_proxy
+            address=address,
+            server_url=server_url,
+            use_ble_proxy=use_ble_proxy,
+            session=async_get_clientsession(hass),
         )
         self._logger = logger or _LOGGER
         self._live_mode_callbacks: list = []

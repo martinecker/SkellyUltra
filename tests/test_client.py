@@ -6,6 +6,7 @@ directly, for behavior that is hard to reach through entities.
 
 import asyncio
 
+import aiohttp
 import pytest
 
 from custom_components.skelly_ultra.skelly_ultra_pkg import commands
@@ -179,3 +180,19 @@ async def test_commands_are_valid_frames(client, device):
     await client.set_eye_icon(5, device.file("Grüße 🎃.mp3").cluster, "Grüße 🎃.mp3")
     assert device.bad_frames == []
     assert device.file("Grüße 🎃.mp3").eye_icon == 5
+
+
+async def test_rest_session_passed_in_is_used_and_left_open():
+    """HA's shared session is the caller's: disconnect doesn't close it."""
+    async with aiohttp.ClientSession() as shared:
+        c = SkellyClient(address="AA:BB:CC:DD:EE:FF", session=shared)
+        assert c._get_rest_session() is shared
+        await c.disconnect()
+        assert not shared.closed
+        assert c._get_rest_session() is shared
+
+    own = SkellyClient(address="AA:BB:CC:DD:EE:FF")
+    session = own._get_rest_session()
+    assert session is own._get_rest_session()
+    await own.disconnect()
+    assert session.closed, "a session the client made itself is closed"

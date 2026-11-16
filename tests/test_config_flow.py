@@ -2,13 +2,17 @@
 
 from unittest.mock import patch
 
+import aiohttp
 import pytest
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant_custom_component.test_util.aiohttp import (
+    AiohttpClientMocker,
+    AiohttpClientMockResponse,
+)
 
-from custom_components.skelly_ultra.config_flow import SkellyFlowHandler
 from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     CONF_SERVER_URL,
@@ -22,39 +26,41 @@ SERVER = "http://pi.local:8765"
 
 
 class FakeRestServer:
-    """Stands in for the Skelly REST server the flow talks to."""
+    """Stands in for the Skelly REST server the flow talks to (over HTTP)."""
 
-    def __init__(self):
+    def __init__(self, mocker: AiohttpClientMocker):
         self.up = True
+        self.health_status = 200
         self.devices = [
             {"name": "Animated Skelly", "address": "11:11:11:11:11:11"},
             {"name": "12ft Skelly", "address": "22:22:22:22:22:22"},
             {"name": "Kitchen Speaker", "address": "33:33:33:33:33:33"},
         ]
+        mocker.get(f"{SERVER}/health", side_effect=self._health)
+        mocker.get(f"{SERVER}/ble/scan_devices", side_effect=self._scan)
 
-    @property
-    def validate(self):
-        async def _validate_rest_server(flow, server_url):
-            return None if self.up else {"base": "rest_server_unreachable"}
+    def _check_up(self):
+        if not self.up:
+            raise aiohttp.ClientConnectionError("connection refused")
 
-        return _validate_rest_server
+    async def _health(self, method, url, data):
+        self._check_up()
+        return AiohttpClientMockResponse(
+            method, url, status=self.health_status, json={"status": "ok"}
+        )
 
-    @property
-    def scan(self):
-        async def _scan_via_rest_server(flow, name_filter=None):
-            return self.devices if self.up else []
-
-        return _scan_via_rest_server
+    async def _scan(self, method, url, data):
+        self._check_up()
+        return AiohttpClientMockResponse(
+            method, url, json={"success": True, "devices": self.devices}
+        )
 
 
 @pytest.fixture
-def rest_server():
-    server = FakeRestServer()
-    with (
-        patch.object(SkellyFlowHandler, "_validate_rest_server", server.validate),
-        patch.object(SkellyFlowHandler, "_scan_via_rest_server", server.scan),
-        patch("custom_components.skelly_ultra.async_setup_entry", return_value=True),
-    ):
+def rest_server(aioclient_mock):
+    """The REST server, faked on HA's shared HTTP session."""
+    server = FakeRestServer(aioclient_mock)
+    with patch("custom_components.skelly_ultra.async_setup_entry", return_value=True):
         yield server
 
 
@@ -132,6 +138,16 @@ async def test_proxy_mode_needs_the_server(hass, rest_server):
     )
     assert result["type"] is FlowResultType.FORM
     assert result["errors"] == {"base": "rest_server_unreachable"}
+
+
+async def test_proxy_mode_reports_a_failing_server(hass, rest_server):
+    rest_server.health_status = 500
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], form(**{CONF_USE_BLE_PROXY: True})
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "rest_server_error"}
 
 
 async def test_proxy_mode_title_names_the_server(hass, rest_server):

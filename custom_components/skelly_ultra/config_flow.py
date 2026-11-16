@@ -13,6 +13,7 @@ from homeassistant import config_entries
 from homeassistant.components import bluetooth
 from homeassistant.const import CONF_ADDRESS, CONF_NAME
 from homeassistant.core import callback
+from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
     ALL_BLE_NAME_FILTERS,
@@ -63,16 +64,15 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         Returns None if valid, or a dict with error key if invalid.
         """
         try:
-            timeout = aiohttp.ClientTimeout(total=5.0)
-            async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
-                session.get(f"{server_url}/health") as resp,
-            ):
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"{server_url}/health", timeout=aiohttp.ClientTimeout(total=5.0)
+            ) as resp:
                 if resp.status == 200:
                     return None
                 _LOGGER.warning("REST server returned status %d", resp.status)
                 return {"base": "rest_server_error"}
-        except aiohttp.ClientConnectorError:
+        except (aiohttp.ClientConnectionError, TimeoutError):
             _LOGGER.warning("Cannot connect to REST server at %s", server_url)
             return {"base": "rest_server_unreachable"}
         except Exception:
@@ -227,17 +227,16 @@ class SkellyFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
         Returns list of devices with 'name' and 'address' keys.
         """
         try:
-            timeout = aiohttp.ClientTimeout(total=15.0)
             params = {"timeout": "10.0"}
             if name_filter:
                 params["name_filter"] = name_filter
 
-            async with (
-                aiohttp.ClientSession(timeout=timeout) as session,
-                session.get(
-                    f"{self._server_url}/ble/scan_devices", params=params
-                ) as resp,
-            ):
+            session = async_get_clientsession(self.hass)
+            async with session.get(
+                f"{self._server_url}/ble/scan_devices",
+                params=params,
+                timeout=aiohttp.ClientTimeout(total=15.0),
+            ) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("success"):
