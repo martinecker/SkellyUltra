@@ -274,7 +274,7 @@ async def test_speaker_stop_stops_only_its_own_skelly(
     assert not rest_server.playing
     assert rest_server.other_playing, "the other Skelly kept playing"
     # The perform ends once its playback monitor notices
-    manager = hass.data[DOMAIN][setup_integration.entry_id]["perform"]
+    manager = setup_integration.runtime_data.perform
     await wait_for(hass, lambda: not manager.running, timeout=5)
 
 
@@ -283,7 +283,7 @@ async def test_live_mode_survives_rest_server_hiccup(
 ):
     entry = setup_integration
     switch = await turn_on_live_mode(hass, entry, rest_server)
-    client = hass.data[DOMAIN][entry.entry_id]["adapter"].client
+    client = entry.runtime_data.adapter.client
 
     rest_server.up = False  # status answers 503 for two polls
     await advance(hass, 31)
@@ -305,7 +305,7 @@ async def test_live_mode_dropped_by_server_is_restored_in_background(
     entry = setup_integration
     switch = await turn_on_live_mode(hass, entry, rest_server)
     coord = coordinator(hass, entry)
-    client = hass.data[DOMAIN][entry.entry_id]["adapter"].client
+    client = entry.runtime_data.adapter.client
 
     # The REST server lost the link (e.g. it restarted); pairing again is slow
     rest_server.connected = False
@@ -441,7 +441,7 @@ async def test_speaker_playing_again_replaces_the_old_monitor(
     entry = setup_integration
     await turn_on_live_mode(hass, entry, rest_server)
     speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
-    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    player = entry.runtime_data.live_media_player
     rest_server.clip_polls = 1000
 
     await play_clip(hass, speaker, clip)
@@ -472,7 +472,7 @@ async def test_speaker_stop_ends_the_monitor_at_once(
     entry = setup_integration
     await turn_on_live_mode(hass, entry, rest_server)
     speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
-    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    player = entry.runtime_data.live_media_player
     rest_server.clip_polls = 1000
 
     await play_clip(hass, speaker, clip)
@@ -493,7 +493,7 @@ async def test_speaker_monitor_can_be_cancelled(
     entry = setup_integration
     await turn_on_live_mode(hass, entry, rest_server)
     speaker = entity_id(hass, entry, "media_player", "live_mode_speaker")
-    player = hass.data[DOMAIN][entry.entry_id]["live_media_player"]
+    player = entry.runtime_data.live_media_player
     rest_server.clip_polls = 1000
 
     await play_clip(hass, speaker, clip)
@@ -528,7 +528,7 @@ async def test_perform_stopped_midway_silences_and_restores(
     assert device.eye_icon == 1, "look restored"
     speaker = entity_id(hass, setup_integration, "media_player", "live_mode_speaker")
     assert hass.states.get(speaker).state == "idle"
-    manager = hass.data[DOMAIN][setup_integration.entry_id]["perform"]
+    manager = setup_integration.runtime_data.perform
     assert not manager.running
 
 

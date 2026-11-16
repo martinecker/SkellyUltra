@@ -6,22 +6,21 @@ import contextlib
 from functools import partial
 
 from homeassistant.components.light import ColorMode, LightEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .data import SkellyConfigEntry
 from .entity import SkellyCoordinatorEntity, async_run_command
 from .helpers import get_device_info, get_device_profile
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ):
     """Set up lights for the configured device type."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
     profile = get_device_profile(entry)
 

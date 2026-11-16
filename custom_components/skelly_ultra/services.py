@@ -27,7 +27,8 @@ from .file_settings import (
     check_file_selector,
     find_file,
 )
-from .helpers import SkellyNotFoundError, resolve_skelly
+from .data import SkellyNotFoundError, get_skelly_data, skelly_data
+from .helpers import resolve_skelly
 from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg.client import ConnectionLostError
 from .uploads import (
@@ -66,7 +67,7 @@ def get_adapter_from_service_call(
             raise
         _LOGGER.error("%s", err)
         return None
-    return hass.data[DOMAIN][entry_id]["adapter"], entry_id
+    return skelly_data(hass, entry_id).adapter, entry_id
 
 
 # Service schemas
@@ -197,7 +198,7 @@ async def async_play_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
     file_index = call.data["file_index"]
 
-    coordinator = hass.data[DOMAIN][entry_id]["coordinator"]
+    coordinator = skelly_data(hass, entry_id).coordinator
     try:
         await coordinator.async_play_file(file_index)
     except ConnectionLostError:
@@ -235,9 +236,8 @@ async def async_stop_file_service(hass: HomeAssistant, call: ServiceCall) -> Non
     _LOGGER.info("Requested stop file %s for entry %s", file_index, entry_id)
     # As the media player's Stop does: don't wait for the device's "stopped"
     # event before files can be changed again (edit_file right after a stop)
-    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-    if coordinator is not None:
-        coordinator.mark_playback_inactive()
+    if (data := get_skelly_data(hass, entry_id)) is not None:
+        data.coordinator.mark_playback_inactive()
 
 
 async def async_cancel_file_transfer_service(
@@ -275,7 +275,7 @@ def _uploaded_file_response(
     The file list was refreshed after the upload, so the new file's index
     is known unless the refresh failed, in which case it is None.
     """
-    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
+    coordinator = skelly_data(hass, entry_id).coordinator
     file_index = next(
         (f.file_index for f in coordinator.file_list if f.name == filename),
         None,
@@ -441,9 +441,7 @@ async def async_delete_file_service(hass: HomeAssistant, call: ServiceCall) -> N
     """
     adapter, entry_id = get_adapter_from_service_call(hass, call, raise_on_error=True)
 
-    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-    if not coordinator:
-        raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+    coordinator = skelly_data(hass, entry_id).coordinator
 
     filename = call.data.get("filename")
     file_index = call.data.get("file_index")
@@ -517,7 +515,7 @@ def _resolve_participant(
         raise ServiceValidationError(f"{spec['name']}: {err}") from err
     if device_id is None:  # the schema requires a device_id or entity_id
         raise ServiceValidationError(f"{spec['name']}: give a device_id or entity_id")
-    return hass.data[DOMAIN][entry_id]["adapter"], entry_id, device_id
+    return skelly_data(hass, entry_id).adapter, entry_id, device_id
 
 
 async def async_converse_service(

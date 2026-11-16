@@ -138,7 +138,7 @@ async def test_new_file_goes_first_and_keeps_the_play_order(
     assert device.file_names_in_order() == ["new.mp3", "scream.mp3", "hello.mp3"]
     assert device.file("laugh.mp3").index not in device.order
     entry = setup_integration
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator = entry.runtime_data.coordinator
     assert coordinator.data["file_order"] == device.order
 
 
@@ -158,7 +158,7 @@ async def test_overwrite_unknown_to_ha_leaves_the_play_order(
     """An overwrite HA took for a new file (its file list was empty)."""
     await action(hass, "set_file_order", filenames=["scream.mp3", "hello.mp3"])
     entry = setup_integration
-    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator = entry.runtime_data.coordinator
     coordinator._file_list = []
     await action(hass, "send_file", file_path=str(tone), target_filename="laugh.mp3")
     assert device.file_names_in_order() == ["scream.mp3", "hello.mp3"]

@@ -5,14 +5,13 @@ from __future__ import annotations
 import logging
 
 from homeassistant.components.button import ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .data import SkellyConfigEntry
 from .entity import SkellyCoordinatorEntity, SkellyEntity, async_run_command
 from .helpers import get_device_info
 from .perform import PerformManager
@@ -21,11 +20,11 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ):
     """Set up the Skelly buttons for the config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
 
     async_add_entities(
@@ -33,7 +32,7 @@ async def async_setup_entry(
             SkellyTriggerMovementButton(coordinator, entry.entry_id, device_info),
             SkellyPushSettingsButton(coordinator, entry.entry_id, device_info),
             SkellyClearPerformHistoryButton(
-                data["perform"], entry.entry_id, device_info
+                data.perform, entry.entry_id, device_info
             ),
         ]
     )

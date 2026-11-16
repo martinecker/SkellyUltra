@@ -543,19 +543,25 @@ async def test_target_needed_with_two_skellys(hass, setup_integration, hass_ws_c
     assert len(result["files"]) == 3
 
 
-async def test_entry_left_in_hass_data_does_not_count(
+async def test_entry_that_failed_to_unload_does_not_count(
     hass, setup_integration, hass_ws_client
 ):
-    # An entry whose unload failed stays in hass.data without being loaded
+    # An entry whose platforms failed to unload keeps its runtime data
+    # without being loaded
+    from homeassistant.config_entries import ConfigEntryState
+
+    from custom_components.skelly_ultra.data import SkellyData
+
     stuck = MockConfigEntry(domain=DOMAIN, data={"address": "11:22:33:44:55:66"})
     stuck.add_to_hass(hass)
-    hass.data[DOMAIN][stuck.entry_id] = {}
+    stuck.mock_state(hass, ConfigEntryState.FAILED_UNLOAD)
+    stuck.runtime_data = SkellyData(adapter=None, coordinator=None, perform=None)
     try:
         client = await hass_ws_client(hass)
         result = await ws_list(client)
         assert len(result["files"]) == 3
     finally:
-        del hass.data[DOMAIN][stuck.entry_id]
+        del stuck.runtime_data
 
 
 def test_old_shared_device_id_uses_all_its_entries():

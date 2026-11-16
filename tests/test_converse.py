@@ -429,12 +429,12 @@ async def test_converse_is_busy_while_a_skelly_performs(
     hass, skellys, fake_ai, tts_entity
 ):
     fake_ai.answer = SCRIPT
-    manager = hass.data[DOMAIN][skellys.entries[1].entry_id]["perform"]
+    manager = skellys.entries[1].runtime_data.perform
     manager.running = True
     result = await converse(hass, skellys)
     assert result == {"status": "busy", "busy": ["Rattles"]}
     assert fake_ai.requests == []
-    assert not hass.data[DOMAIN][skellys.entries[0].entry_id]["perform"].running
+    assert not skellys.entries[0].runtime_data.perform.running
 
 
 async def test_converse_without_waiting_returns_at_the_first_line(
@@ -446,7 +446,7 @@ async def test_converse_without_waiting_returns_at_the_first_line(
     assert "spoken" not in result["lines"][0]
     assert len(skellys.log) == 1
     managers = [
-        hass.data[DOMAIN][entry.entry_id]["perform"] for entry in skellys.entries
+        entry.runtime_data.perform for entry in skellys.entries
     ]
     assert all(m.running for m in managers), "busy until the conversation ends"
     busy = await hass.services.async_call(
@@ -609,7 +609,7 @@ async def test_converse_blueprint(hass, skellys, fake_ai, tts_entity):
     assert events[0].data == {"topic": "pumpkins", "count": 2}
     # Let the conversation finish before the test ends
     managers = [
-        hass.data[DOMAIN][entry.entry_id]["perform"] for entry in skellys.entries
+        entry.runtime_data.perform for entry in skellys.entries
     ]
     for _ in range(200):
         if not any(m.running for m in managers):
@@ -641,7 +641,7 @@ async def test_converse_stopped_midway_silences_restores_and_cleans_up(
     assert len(skellys.log) == 1
     assert skellys.devices[0].eye_icon == 1, "look restored"
     managers = [
-        hass.data[DOMAIN][entry.entry_id]["perform"] for entry in skellys.entries
+        entry.runtime_data.perform for entry in skellys.entries
     ]
     assert not any(m.running for m in managers)
     for _ in range(50):
@@ -650,7 +650,7 @@ async def test_converse_stopped_midway_silences_restores_and_cleans_up(
         await asyncio.sleep(0.05)
     assert list(temp_dir.iterdir()) == [], "rendered lines deleted"
     # The speaker notices the stop at its next status poll
-    player = hass.data[DOMAIN][skellys.entries[0].entry_id]["live_media_player"]
+    player = skellys.entries[0].runtime_data.live_media_player
     for _ in range(60):
         if player._monitor_task is None or player._monitor_task.done():
             break

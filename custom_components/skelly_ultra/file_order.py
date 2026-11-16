@@ -9,7 +9,7 @@ from typing import Any
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
-from .const import DOMAIN
+from .data import skelly_data
 from .file_settings import async_load_file_list_for_change
 from .skelly_ultra_pkg import parser
 
@@ -79,9 +79,7 @@ async def async_set_file_order(
             f"Files listed more than once: {', '.join(duplicates)}"
         )
 
-    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-    if not coordinator:
-        raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+    coordinator = skelly_data(hass, entry_id).coordinator
 
     # Holding the lock keeps coordinator polling and other writes out while
     # the files are looked up and the order is written and read back.

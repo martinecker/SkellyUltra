@@ -36,6 +36,7 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import raise_if_invalid_path, slugify
 
 from .const import DOMAIN
+from .data import get_skelly_data, skelly_data
 from .file_order import MAX_ENABLED_FILES, async_write_file_order
 from .file_settings import (
     async_load_file_list_for_change,
@@ -53,9 +54,7 @@ from .skelly_ultra_pkg.file_transfer import (
 _LOGGER = logging.getLogger(__name__)
 
 # hass.data key for the active FileTransferManager of each entry, so that
-# cancel_file_transfer can find it. Kept out of hass.data[DOMAIN], which must
-# only hold per-entry dicts (the single-device fallback in
-# helpers.resolve_skelly counts its keys).
+# cancel_file_transfer can find it.
 FILE_TRANSFERS_KEY = f"{DOMAIN}_file_transfers"
 
 # Filename stem used when a TTS message has nothing to build a name from
@@ -89,9 +88,8 @@ def normalize_target_filename(target_filename: str) -> str:
 
 def _get_transfer_sensor(hass: HomeAssistant, entry_id: str) -> Any | None:
     """Return the transfer progress sensor for an entry, if it exists."""
-    if entry_id in hass.data[DOMAIN]:
-        return hass.data[DOMAIN][entry_id].get("transfer_sensor")
-    return None
+    data = get_skelly_data(hass, entry_id)
+    return data.transfer_sensor if data is not None else None
 
 
 def transfer_failed(
@@ -385,9 +383,7 @@ async def async_upload_audio(
 
     try:
         # Get coordinator early to check for bitrate override
-        coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-        if not coordinator:
-            raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+        coordinator = skelly_data(hass, entry_id).coordinator
 
         # If this upload overwrites an existing file, the device resets that
         # file's movement/eye/light settings to default. Capture them now so

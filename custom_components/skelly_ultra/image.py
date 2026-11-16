@@ -13,12 +13,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from homeassistant.components.image import ImageEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .data import SkellyConfigEntry
 from .entity import SkellyCoordinatorEntity
 from .helpers import get_device_info, get_device_profile, get_eye_icon_path
 
@@ -26,11 +25,11 @@ _LOGGER = logging.getLogger(__name__)
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ) -> None:
     """Set up the Skelly eye icon image entity for a config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
     profile = get_device_profile(entry)
 

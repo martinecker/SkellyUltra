@@ -132,7 +132,7 @@ async def test_play_and_stop_report_failures(
     hass, setup_integration, device, monkeypatch, service
 ):
     # The panel shows these errors; they used to be logged and swallowed
-    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+    client = setup_integration.runtime_data.adapter.client
 
     async def reject(file_index):
         raise RuntimeError("device said no")
@@ -183,7 +183,7 @@ async def test_play_waits_for_a_poll_and_holds_off_the_next(
 
 async def test_failed_play_lets_polls_run(hass, setup_integration, device, monkeypatch):
     coord = coordinator(hass, setup_integration)
-    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+    client = setup_integration.runtime_data.adapter.client
 
     async def reject(file_index):
         raise RuntimeError("device said no")
@@ -203,7 +203,7 @@ async def test_failed_or_unreported_play_holds_off_polling_briefly(
     hass, setup_integration, device, monkeypatch
 ):
     """A Play the device ignores doesn't keep edits and polls waiting long."""
-    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
+    client = setup_integration.runtime_data.adapter.client
 
     async def ignore(file_index):
         return None  # sent, but the device never plays it

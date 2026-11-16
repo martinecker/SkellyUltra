@@ -23,7 +23,8 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
 from homeassistant.helpers.storage import Store
 
-from .const import DOMAIN, MOOD_LIGHT_SPEEDS, MOODS
+from .const import MOOD_LIGHT_SPEEDS, MOODS
+from .data import get_skelly_data, skelly_data
 from .file_settings import (
     FileSettings,
     LightSettings,
@@ -146,7 +147,7 @@ class RecentHistory:
 class StageState:
     """Per-Skelly state shared by perform and converse.
 
-    Kept in hass.data[DOMAIN][entry_id]["perform"] (a PerformManager, which
+    Kept in the entry's runtime data as perform (a PerformManager, which
     adds perform's line history).
     """
 
@@ -293,10 +294,10 @@ class SkellyStage:
         self.adapter = adapter
         self.client = adapter.client
         self.entry_id = entry_id
-        entry_data = hass.data[DOMAIN][entry_id]
-        self.coordinator = entry_data["coordinator"]
+        self.data = skelly_data(hass, entry_id)
+        self.coordinator = self.data.coordinator
         # Running flag and live-mode connect, shared by perform and converse
-        self.state: StageState = entry_data["perform"]
+        self.state: StageState = self.data.perform
         config_entry = hass.config_entries.async_get_entry(entry_id)
         if config_entry is None:
             raise HomeAssistantError(f"Config entry {entry_id} not found")
@@ -313,7 +314,8 @@ class SkellyStage:
 
         A disabled Live Mode Speaker is never registered.
         """
-        player = self.hass.data[DOMAIN][self.entry_id].get("live_media_player")
+        data = get_skelly_data(self.hass, self.entry_id)
+        player = data.live_media_player if data is not None else None
         if player is None:
             raise HomeAssistantError("Live Mode Speaker entity not found")
         return player
@@ -400,7 +402,8 @@ class SkellyStage:
         # preference ("leave it on") are updated the same as from the UI.
         # Called on the entity directly, since a service call skips it while
         # it is unavailable (e.g. before the first successful poll).
-        switch = self.hass.data[DOMAIN][self.entry_id].get("live_mode_switch")
+        data = get_skelly_data(self.hass, self.entry_id)
+        switch = data.live_mode_switch if data is not None else None
         try:
             if switch is not None:
                 await switch.async_turn_on()

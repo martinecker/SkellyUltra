@@ -15,7 +15,6 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import (
     PERCENTAGE,
     SIGNAL_STRENGTH_DECIBELS,
@@ -27,7 +26,7 @@ from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.event import async_call_later
 
-from .const import DOMAIN
+from .data import SkellyConfigEntry
 from .coordinator import SkellyCoordinator
 from .entity import SkellyCoordinatorEntity, SkellyEntity
 from .helpers import files_updated_signal, get_device_info
@@ -88,11 +87,11 @@ SENSORS: tuple[SkellySensorEntityDescription, ...] = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ) -> None:
     """Set up Skelly sensors for a config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
 
     # Create and store the file transfer progress sensor for service callbacks
@@ -100,8 +99,8 @@ async def async_setup_entry(
         hass, entry.entry_id, device_info
     )
 
-    # Store sensor reference in hass.data for service access
-    hass.data[DOMAIN][entry.entry_id]["transfer_sensor"] = transfer_sensor
+    # Uploads report their progress through it
+    data.transfer_sensor = transfer_sensor
 
     async_add_entities(
         [

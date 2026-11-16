@@ -14,6 +14,7 @@ from homeassistant.core import HomeAssistant, callback
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
 from .coordinator import SkellyCoordinator, async_remove_settings
+from .data import SkellyConfigEntry, SkellyData, get_skelly_data, skelly_entries
 from .frontend import async_setup_frontend, async_update_panel
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .perform import PerformManager, async_remove_perform_history
@@ -67,7 +68,7 @@ def _async_set_missing_unique_id(
     hass.config_entries.async_update_entry(entry, unique_id=unique_id)
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: SkellyConfigEntry) -> bool:
     """Set up a Skelly Ultra config entry.
 
     Create the client adapter and coordinator, start notifications and
@@ -167,16 +168,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Start initialization in background - don't block setup
     hass.async_create_task(_initialize_device())
 
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
-        "adapter": adapter,
-        "coordinator": coordinator,
-        "perform": perform_manager,
-    }
+    entry.runtime_data = SkellyData(
+        adapter=adapter, coordinator=coordinator, perform=perform_manager
+    )
 
     _LOGGER.info("Skelly Ultra integration setup complete for entry %s", entry.entry_id)
 
     # Register services (only once for the first entry)
-    if len(hass.data[DOMAIN]) == 1:
+    if len(skelly_entries(hass)) == 1:
         register_services(hass)
 
     # Websocket commands for a file manager UI (registered once per run)
@@ -193,28 +192,29 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: SkellyConfigEntry) -> bool:
     """Unload a config entry and disconnect the adapter."""
-    if entry.entry_id not in hass.data.get(DOMAIN, {}):
+    data = get_skelly_data(hass, entry.entry_id)
+    if data is None:
         return True
-
-    data = hass.data[DOMAIN][entry.entry_id]
 
     # Before anything is torn down, so no update reaches a subscriber mid-unload
     async_end_file_subscriptions(hass, entry.entry_id)
     # Ending playback tracking would send settings held back while a file plays
-    data["coordinator"].async_stop_settings_push()
+    data.coordinator.async_stop_settings_push()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if not unload_ok:
-        data["coordinator"].async_resume_settings_push()
+        data.coordinator.async_resume_settings_push()
         return False
 
-    hass.data[DOMAIN].pop(entry.entry_id)
-    data["adapter"].stop_auto_reconnect()
+    # From here on the entry no longer counts as set up; HA removes
+    # runtime_data once this returns
+    data.unloading = True
+    data.adapter.stop_auto_reconnect()
     # Ensure any live-mode classic BT client is disconnected first
     try:
-        await data["adapter"].disconnect_live_mode()
+        await data.adapter.disconnect_live_mode()
     except Exception:
         _LOGGER.debug(
             "Failed to disconnect live-mode BT classic client during unload",
@@ -222,17 +222,17 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
 
     try:
-        await data["adapter"].disconnect()
+        await data.adapter.disconnect()
     except Exception:
         _LOGGER.debug("Failed to disconnect BLE client during unload", exc_info=True)
     # After the disconnect, so no play report can start it again
-    data["coordinator"].async_stop_playback_timer()
+    data.coordinator.async_stop_playback_timer()
 
     # Before a removal deletes the file, so a delayed save can't recreate it
-    await data["coordinator"].async_flush_settings()
+    await data.coordinator.async_flush_settings()
 
     # If there are no more entries for this domain, remove the services
-    if not hass.data[DOMAIN]:
+    if not skelly_entries(hass):
         unregister_services(hass)
 
     # Remove the panel if no loaded entry shows it any more

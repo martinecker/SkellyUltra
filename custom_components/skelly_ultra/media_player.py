@@ -21,12 +21,12 @@ from homeassistant.components.media_player import (
 from homeassistant.components.media_source.const import (
     URI_SCHEME as MEDIA_SOURCE_URI_SCHEME,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 
+from .data import SkellyConfigEntry, skelly_data
 from .const import DOMAIN
 from .coordinator import SkellyCoordinator
 from .entity import SkellyCoordinatorEntity, async_run_command
@@ -94,21 +94,21 @@ def _is_playing_on(status: dict[str, Any], mac: str | None) -> bool:
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ) -> None:
     """Set up Skelly media player for live mode audio playback."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
 
     async_add_entities(
         [
             SkellyLiveMediaPlayer(
-                coordinator, data.get("adapter"), entry.entry_id, device_info
+                coordinator, data.adapter, entry.entry_id, device_info
             ),
             SkellyInternalFilesPlayer(
                 coordinator,
-                data.get("adapter"),
+                data.adapter,
                 entry.entry_id,
                 device_info,
                 get_device_profile(entry),
@@ -491,9 +491,10 @@ class SkellyLiveMediaPlayer(
         await self._async_stop(raise_errors=False)
         # Unregister live mode callback
         self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
-        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry_id, {})
-        if entry_data.get("live_media_player") is self:
-            entry_data.pop("live_media_player")
+        entry = self.hass.config_entries.async_get_entry(self._entry_id)
+        data = getattr(entry, "runtime_data", None)
+        if data is not None and data.live_media_player is self:
+            data.live_media_player = None
         await super().async_will_remove_from_hass()
 
     async def async_added_to_hass(self) -> None:
@@ -503,7 +504,7 @@ class SkellyLiveMediaPlayer(
         self.adapter.register_live_mode_callback(self._handle_live_mode_change)
         # skelly_ultra.perform plays through this entity. Registered here, not
         # at setup, so a disabled entity (never added) isn't used.
-        self.hass.data[DOMAIN][self._entry_id]["live_media_player"] = self
+        skelly_data(self.hass, self._entry_id).live_media_player = self
 
     def _handle_live_mode_change(self) -> None:
         """Handle live mode connection state change."""

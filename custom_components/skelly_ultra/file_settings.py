@@ -20,7 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
-from .const import DOMAIN
+from .data import skelly_data
 from .helpers import (
     MAX_UI_EFFECT_SPEED,
     device_speed_to_ui,
@@ -497,9 +497,7 @@ async def async_edit_file(
     cluster = data.get("cluster")
     check_file_selector(filename, file_index, cluster)
 
-    coordinator = hass.data[DOMAIN][entry_id].get("coordinator")
-    if not coordinator:
-        raise HomeAssistantError(f"No coordinator found for entry {entry_id}")
+    coordinator = skelly_data(hass, entry_id).coordinator
     config_entry = hass.config_entries.async_get_entry(entry_id)
     if config_entry is None:
         raise HomeAssistantError(f"No config entry found for entry {entry_id}")

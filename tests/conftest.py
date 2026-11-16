@@ -263,7 +263,7 @@ def entity_id(
 
 
 def coordinator(hass: HomeAssistant, entry: MockConfigEntry):
-    return hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    return entry.runtime_data.coordinator
 
 
 async def wait_for(hass: HomeAssistant, condition, timeout: float = 2.0) -> None:

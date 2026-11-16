@@ -12,8 +12,8 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .data import SkellyConfigEntry
 from .entity import SkellyCoordinatorEntity, SkellyEntity, async_run_command
 from .helpers import get_device_info, get_device_profile
 
@@ -28,11 +28,11 @@ def _persist_entry_option(
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ):
     """Set up the Skelly switches for the config entry."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
     profile = get_device_profile(entry)
 
@@ -61,12 +61,12 @@ async def async_setup_entry(
     async_add_entities(
         [
             SkellyConnectedSwitch(
-                hass, coordinator, data.get("adapter"), entry, device_info
+                hass, coordinator, data.adapter, entry, device_info
             ),
             SkellyLiveModeSwitch(
                 hass,
                 coordinator,
-                data.get("adapter"),
+                data.adapter,
                 entry,
                 device_info,
             ),
@@ -190,7 +190,7 @@ class SkellyLiveModeSwitch(SkellyCoordinatorEntity, SwitchEntity):
         hass: HomeAssistant,
         coordinator: SkellyCoordinator,
         adapter,
-        entry: ConfigEntry,
+        entry: SkellyConfigEntry,
         device_info: DeviceInfo | None,
     ) -> None:
         """Initialize the live-mode switch for this config entry."""
@@ -218,15 +218,15 @@ class SkellyLiveModeSwitch(SkellyCoordinatorEntity, SwitchEntity):
         self.adapter.register_live_mode_callback(self._handle_live_mode_change)
         self.adapter.set_live_mode_preference(self._desired_live_mode_on)
         # skelly_ultra.perform turns live mode on through this switch
-        self.hass.data[DOMAIN][self._entry.entry_id]["live_mode_switch"] = self
+        self._entry.runtime_data.live_mode_switch = self
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister adapter callbacks when entity is removed."""
         self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
-        entry_data = self.hass.data.get(DOMAIN, {}).get(self._entry.entry_id, {})
-        if entry_data.get("live_mode_switch") is self:
-            entry_data.pop("live_mode_switch")
+        data = getattr(self._entry, "runtime_data", None)
+        if data is not None and data.live_mode_switch is self:
+            data.live_mode_switch = None
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs) -> None:

@@ -29,9 +29,9 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY, DOMAIN
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
+from .data import SkellyNotFoundError, get_skelly_data, skelly_data, skelly_entries
 from .helpers import (
     MAX_UI_EFFECT_SPEED,
-    SkellyNotFoundError,
     device_speed_to_ui,
     files_updated_signal,
     get_device_profile,
@@ -124,13 +124,12 @@ def _resolve_entry(hass: HomeAssistant, msg: dict[str, Any]) -> ConfigEntry | No
     """
     if any(key in msg and not msg[key] for key in ("entry_id", "device_id")):
         return None  # given, but blank
-    # Only entries that finished setting up count; one can stay in
-    # hass.data after a failed unload or setup
+    # Only entries that finished setting up count; one keeps its runtime
+    # data after a failed unload or setup
     loaded = [
-        entry_id
-        for entry_id in hass.data.get(DOMAIN, {})
-        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
-        and entry.state is ConfigEntryState.LOADED
+        entry.entry_id
+        for entry in skelly_entries(hass)
+        if entry.state is ConfigEntryState.LOADED
     ]
     try:
         entry_id, _device_id = resolve_skelly(
@@ -358,13 +357,13 @@ def _stamped(payload: dict[str, Any]) -> dict[str, Any]:
 
 def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, Any]:
     """Return the files payload of a loaded entry."""
-    entry_data = hass.data[DOMAIN][entry.entry_id]
-    coordinator = entry_data["coordinator"]
+    skelly = skelly_data(hass, entry.entry_id)
+    coordinator = skelly.coordinator
     profile = get_device_profile(entry)
     data = coordinator.data or {}
     file_order = list(data.get("file_order") or [])
     enabled = set(file_order)
-    transfer_sensor = entry_data.get("transfer_sensor")
+    transfer_sensor = skelly.transfer_sensor
     device = _entry_device(hass, entry)
     return {
         "entry_id": entry.entry_id,
@@ -430,10 +429,10 @@ async def ws_list_files(
         _send_not_found(hass, connection, msg)
         return
     if msg["refresh"]:
-        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        coordinator = skelly_data(hass, entry.entry_id).coordinator
         await coordinator.async_refresh_file_list()
         # The entry may have been unloaded while the list was read
-        if entry.entry_id not in hass.data.get(DOMAIN, {}):
+        if get_skelly_data(hass, entry.entry_id) is None:
             connection.send_error(
                 msg["id"], websocket_api.ERR_NOT_FOUND, "No loaded Skelly found"
             )
@@ -464,7 +463,7 @@ def ws_subscribe_files(
         _send_not_found(hass, connection, msg)
         return
     entry_id = entry.entry_id
-    coordinator = hass.data[DOMAIN][entry_id]["coordinator"]
+    coordinator = skelly_data(hass, entry_id).coordinator
     last_sent: dict[str, Any] | None = None
     unsubscribed = False
 
@@ -472,7 +471,7 @@ def ws_subscribe_files(
     def send_if_changed() -> None:
         nonlocal last_sent
         # Also skip once the entry has started unloading
-        if unsubscribed or entry_id not in hass.data.get(DOMAIN, {}):
+        if unsubscribed or get_skelly_data(hass, entry_id) is None:
             return
         payload = build_files_payload(hass, entry)
         if payload == last_sent:
@@ -543,12 +542,10 @@ def ws_list_devices(
     upload_target = hass.data.get(_UPLOAD_TARGET_KEY)
     devices = []
     for entry in hass.config_entries.async_entries(DOMAIN):
-        if (
-            entry.state is not ConfigEntryState.LOADED
-            or entry.entry_id not in hass.data.get(DOMAIN, {})
-        ):
+        data = get_skelly_data(hass, entry.entry_id)
+        if entry.state is not ConfigEntryState.LOADED or data is None:
             continue
-        coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+        coordinator = data.coordinator
         device = _entry_device(hass, entry)
         devices.append(
             {

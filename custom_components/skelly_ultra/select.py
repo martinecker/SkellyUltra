@@ -5,13 +5,12 @@ from __future__ import annotations
 from functools import partial
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
 
-from .const import DOMAIN
 from .coordinator import SkellyCoordinator
+from .data import SkellyConfigEntry
 from .entity import SkellyCoordinatorEntity
 from .helpers import get_device_info, get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
@@ -21,11 +20,11 @@ BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities
+    hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ):
     """Set up the Skelly select entities."""
-    data = hass.data[DOMAIN][entry.entry_id]
-    coordinator: SkellyCoordinator = data["coordinator"]
+    data = entry.runtime_data
+    coordinator: SkellyCoordinator = data.coordinator
     device_info = get_device_info(hass, entry)
     profile = get_device_profile(entry)
 

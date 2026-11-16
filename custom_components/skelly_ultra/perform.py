@@ -123,7 +123,7 @@ class _Perform:
         self.hass = hass
         self.data = data
         self.stage = SkellyStage(hass, adapter, entry_id)
-        self.manager: PerformManager = hass.data[DOMAIN][entry_id]["perform"]
+        self.manager: PerformManager = self.stage.data.perform
         # With wait_until_done off: the rest of the perform (waiting for
         # playback, restoring the look), still running after async_run returns
         self.background_task: asyncio.Task | None = None

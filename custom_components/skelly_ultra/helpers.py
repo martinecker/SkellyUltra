@@ -22,10 +22,7 @@ from .const import (
     DEVICE_TYPE_SKELLY,
     DOMAIN,
 )
-
-
-class SkellyNotFoundError(HomeAssistantError):
-    """The Skelly an action or message targets couldn't be found."""
+from .data import SkellyNotFoundError, get_skelly_data, skelly_entries
 
 
 def device_config_entry_ids(device: dr.DeviceEntry) -> set[str]:
@@ -57,12 +54,12 @@ def resolve_skelly(
     The target is a device_id, an entity_id (of an entity on the Skelly's
     device) or a config entry_id, tried in that order. Without any, the only
     loaded Skelly is used. Only loaded Skellys count: by default the
-    entries in hass.data[DOMAIN], or the IDs in loaded. The device ID is None
-    when the target was an entry_id or the only Skelly. Raises
+    entries that are set up (skelly_entries), or the IDs in loaded. The
+    device ID is None when the target was an entry_id or the only Skelly. Raises
     SkellyNotFoundError saying why the target couldn't be found.
     """
     if loaded is None:
-        loaded = list(hass.data.get(DOMAIN, {}))
+        loaded = [entry.entry_id for entry in skelly_entries(hass)]
     if not device_id and entity_id:
         entity = er.async_get(hass).async_get(entity_id)
         if entity is None:
@@ -226,12 +223,10 @@ def get_device_info(hass: HomeAssistant, entry: ConfigEntry) -> DeviceInfo | Non
         to differentiate between the same device accessed via different proxies.
         For direct BLE connections, only the MAC address is used as the identifier.
     """
-    # Get address from entry data or adapter in hass.data
+    # Get address from entry data or the entry's adapter
     address = entry.data.get(CONF_ADDRESS)
-    if not address and DOMAIN in hass.data and entry.entry_id in hass.data[DOMAIN]:
-        adapter = hass.data[DOMAIN][entry.entry_id].get("adapter")
-        if adapter:
-            address = adapter.address
+    if not address and (data := get_skelly_data(hass, entry.entry_id)) is not None:
+        address = data.adapter.address
 
     if not address:
         return None

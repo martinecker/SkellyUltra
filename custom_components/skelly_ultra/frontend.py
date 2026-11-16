@@ -20,6 +20,7 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.core import HomeAssistant
 
 from .const import CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL, DOMAIN
+from .data import skelly_entries
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,8 +87,7 @@ async def async_update_panel(hass: HomeAssistant) -> None:
 
     show = any(
         entry.options.get(CONF_SHOW_PANEL, DEFAULT_SHOW_PANEL)
-        for entry_id in hass.data.get(DOMAIN, {})
-        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        for entry in skelly_entries(hass)
     )
     if show == data["panel"]:
         return
