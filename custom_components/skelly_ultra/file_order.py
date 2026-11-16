@@ -88,40 +88,55 @@ async def async_set_file_order(
     async with coordinator.action_lock:
         file_list = await async_load_file_list_for_change(adapter, coordinator)
         files = _resolve_files(file_list, filenames, file_indices)
-        # The device addresses files by name too (the web controller refuses
-        # nameless files as well)
-        nameless = [str(f.file_index) for f in files if not f.name.strip()]
-        if nameless:
-            raise HomeAssistantError(
-                "Files without a name can't be ordered (file indices: "
-                f"{', '.join(nameless)})"
+        file_order = await async_write_file_order(adapter, coordinator, files)
+
+    names = {f.file_index: f.name for f in file_list}
+    return [{"file_index": i, "filename": names.get(i)} for i in file_order]
+
+
+async def async_write_file_order(
+    adapter: Any, coordinator: Any, files: list[parser.FileInfoEvent]
+) -> list[int]:
+    """Write `files` as the play order and return the order read back.
+
+    The caller must hold coordinator.action_lock. Files left out are
+    disabled. Raises HomeAssistantError if a file has no name or the order
+    can't be read back; errors from the writes are passed on.
+    """
+    # The device addresses files by name too (the web controller refuses
+    # nameless files as well)
+    nameless = [str(f.file_index) for f in files if not f.name.strip()]
+    if nameless:
+        raise HomeAssistantError(
+            "Files without a name can't be ordered (file indices: "
+            f"{', '.join(nameless)})"
+        )
+
+    total = len(files)
+    try:
+        for position, file_info in enumerate(files, start=1):
+            await adapter.client.set_file_order(
+                total, position, file_info.file_index, file_info.name
+            )
+            await asyncio.sleep(FILE_ORDER_WRITE_DELAY)
+    finally:
+        # Read the order back even after a failed write, since some
+        # writes may have landed. Don't let a failed read hide the
+        # write error.
+        read_error: Exception | None = None
+        try:
+            file_order = await coordinator.async_refresh_file_order()
+        except Exception as err:  # noqa: BLE001
+            read_error = err
+            _LOGGER.warning(
+                "Failed to read back the file order: %r", err, exc_info=True
             )
 
-        total = len(files)
-        try:
-            for position, file_info in enumerate(files, start=1):
-                await adapter.client.set_file_order(
-                    total, position, file_info.file_index, file_info.name
-                )
-                await asyncio.sleep(FILE_ORDER_WRITE_DELAY)
-        finally:
-            # Read the order back even after a failed write, since some
-            # writes may have landed. Don't let a failed read hide the
-            # write error.
-            read_error: Exception | None = None
-            try:
-                file_order = await coordinator.async_refresh_file_order()
-            except Exception as err:  # noqa: BLE001
-                read_error = err
-                _LOGGER.warning(
-                    "Failed to read back the file order: %r", err, exc_info=True
-                )
-
-        if read_error is not None:
-            raise HomeAssistantError(
-                "The file order was sent, but reading it back from the device "
-                f"failed: {read_error!r}"
-            ) from read_error
+    if read_error is not None:
+        raise HomeAssistantError(
+            "The file order was sent, but reading it back from the device "
+            f"failed: {read_error!r}"
+        ) from read_error
 
     requested = [f.file_index for f in files]
     if file_order != requested:
@@ -130,6 +145,4 @@ async def async_set_file_order(
         )
     else:
         _LOGGER.info("Set file order to %s", requested)
-
-    names = {f.file_index: f.name for f in file_list}
-    return [{"file_index": i, "filename": names.get(i)} for i in file_order]
+    return file_order

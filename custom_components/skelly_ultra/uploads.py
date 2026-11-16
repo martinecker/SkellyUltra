@@ -35,7 +35,11 @@ from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import raise_if_invalid_path, slugify
 
 from .const import DOMAIN
-from .file_settings import async_restore_file_settings
+from .file_order import MAX_ENABLED_FILES, async_write_file_order
+from .file_settings import (
+    async_load_file_list_for_change,
+    async_restore_file_settings,
+)
 from .helpers import get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
@@ -348,6 +352,7 @@ async def async_upload_audio(
     )
 
     temp_files: list[Path] = []
+    file_list_refreshed = False
 
     # Define progress callback for sensor updates
     def progress_callback(sent_chunks: int, total_chunks: int) -> None:
@@ -417,6 +422,28 @@ async def async_upload_audio(
                         "Using chunk size override: %d bytes", override_chunk_size
                     )
 
+            # A new file makes the device rewrite its play order, and it
+            # gets that wrong (it drops one entry and lists another twice).
+            # Read the order now so it can be put right afterwards.
+            previous_order: list[int] | None = None
+            if existing_file is None and coordinator.playback_active:
+                # Querying the device mid-playback can stop the file
+                _LOGGER.warning(
+                    "A file is playing, so the play order won't be checked "
+                    "after uploading %s",
+                    target_filename,
+                )
+            elif existing_file is None:
+                try:
+                    previous_order = await coordinator.async_refresh_file_order()
+                except Exception as err:  # noqa: BLE001
+                    _LOGGER.warning(
+                        "Couldn't read the play order before uploading %s, so "
+                        "it can't be put right afterwards: %r",
+                        target_filename,
+                        err,
+                    )
+
             await transfer_manager.send_file(
                 adapter.client,
                 file_data,
@@ -462,6 +489,12 @@ async def async_upload_audio(
             if transfer_sensor:
                 transfer_sensor.set_complete()
 
+            if previous_order is not None:
+                # Reads the file list, so the refresh below isn't needed
+                file_list_refreshed = await _async_put_new_file_first(
+                    adapter, coordinator, target_filename, previous_order
+                )
+
     except FileTransferCancelled:
         _LOGGER.warning("File transfer was cancelled: %s", target_filename)
         if transfer_sensor:
@@ -481,11 +514,78 @@ async def async_upload_audio(
         if transfers.get(entry_id) is transfer_manager:
             del transfers[entry_id]
 
-    # Refresh the file list via coordinator
-    _LOGGER.debug("Refreshing file list after successful upload")
-    await coordinator.async_refresh_file_list()
+    if not file_list_refreshed:
+        _LOGGER.debug("Refreshing file list after successful upload")
+        await coordinator.async_refresh_file_list()
 
     return target_filename
+
+
+async def _async_put_new_file_first(
+    adapter: Any,
+    coordinator: Any,
+    filename: str,
+    previous_order: list[int],
+) -> bool:
+    """Make a newly uploaded file first in the play order.
+
+    The other files keep the order and enabled state they had before the
+    upload (`previous_order`). The caller must hold coordinator.action_lock.
+    Errors are logged, not raised, since the upload itself succeeded.
+    Returns True if the file list was read from the device.
+    """
+    try:
+        file_list = await async_load_file_list_for_change(adapter, coordinator)
+    except Exception as err:  # noqa: BLE001
+        _LOGGER.warning(
+            "Couldn't read the file list after uploading %s, so the play order "
+            "was left as the device set it: %r",
+            filename,
+            err,
+        )
+        return False
+
+    try:
+        new_file = next((f for f in file_list if f.name == filename), None)
+        if new_file is None:
+            _LOGGER.warning(
+                "Uploaded file %s isn't in the device's file list, so the play "
+                "order was left as the device set it",
+                filename,
+            )
+            return True
+
+        by_index = {f.file_index: f for f in file_list}
+        # The device can list a file twice; keep its first place only
+        files = [new_file]
+        seen = {new_file.file_index}
+        for file_index in previous_order:
+            file_info = by_index.get(file_index)
+            if file_info is not None and file_index not in seen:
+                seen.add(file_index)
+                files.append(file_info)
+        files = files[:MAX_ENABLED_FILES]
+
+        wanted = [f.file_index for f in files]
+        current = coordinator.data.get("file_order") if coordinator.data else None
+        if current is None or current == wanted:
+            return True
+        if current == previous_order:
+            # The device didn't touch the order, so the file was there
+            # before (an overwrite the cached file list didn't know about)
+            return True
+        _LOGGER.info(
+            "Device changed the play order from %s to %s on upload; setting %s",
+            previous_order,
+            current,
+            wanted,
+        )
+        await async_write_file_order(adapter, coordinator, files)
+    except Exception:
+        _LOGGER.exception(
+            "Failed to put the play order right after uploading %s", filename
+        )
+    return True
 
 
 def tts_filename_from_message(message: str) -> str:

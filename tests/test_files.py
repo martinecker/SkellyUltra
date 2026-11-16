@@ -125,6 +125,46 @@ async def test_send_file_uses_the_transfer_overrides(
 
 
 @needs_ffmpeg
+async def test_new_file_goes_first_and_keeps_the_play_order(
+    hass, setup_integration, device, tone
+):
+    """The device mangles the order on upload ([3, 1] -> [4, 1, 1]).
+
+    The new file must end up first and enabled, and the other files keep
+    their order and enabled state.
+    """
+    await action(hass, "set_file_order", filenames=["scream.mp3", "hello.mp3"])
+    await action(hass, "send_file", file_path=str(tone), target_filename="new.mp3")
+    assert device.file_names_in_order() == ["new.mp3", "scream.mp3", "hello.mp3"]
+    assert device.file("laugh.mp3").index not in device.order
+    entry = setup_integration
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    assert coordinator.data["file_order"] == device.order
+
+
+@needs_ffmpeg
+async def test_overwriting_a_file_leaves_the_play_order(
+    hass, setup_integration, device, tone
+):
+    await action(hass, "set_file_order", filenames=["scream.mp3", "hello.mp3"])
+    await action(hass, "send_file", file_path=str(tone), target_filename="laugh.mp3")
+    assert device.file_names_in_order() == ["scream.mp3", "hello.mp3"]
+
+
+@needs_ffmpeg
+async def test_overwrite_unknown_to_ha_leaves_the_play_order(
+    hass, setup_integration, device, tone
+):
+    """An overwrite HA took for a new file (its file list was empty)."""
+    await action(hass, "set_file_order", filenames=["scream.mp3", "hello.mp3"])
+    entry = setup_integration
+    coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
+    coordinator._file_list = []
+    await action(hass, "send_file", file_path=str(tone), target_filename="laugh.mp3")
+    assert device.file_names_in_order() == ["scream.mp3", "hello.mp3"]
+
+
+@needs_ffmpeg
 async def test_overwriting_a_file_keeps_its_settings(
     hass, setup_integration, device, tone
 ):
