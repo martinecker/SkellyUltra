@@ -17,8 +17,8 @@ def device_sw_version(hass, entry) -> str | None:
 
 async def test_shows_firmware_version(hass, setup_integration, device):
     entry = setup_integration
-    assert firmware_state(hass, entry) == "v66"
-    assert device_sw_version(hass, entry) == "v66"
+    assert firmware_state(hass, entry) == "v68"
+    assert device_sw_version(hass, entry) == "v68"
 
 
 async def test_firmware_update_shows_after_reconnect(hass, setup_integration, device):
@@ -26,12 +26,12 @@ async def test_firmware_update_shows_after_reconnect(hass, setup_integration, de
     entry = setup_integration
     device.drop_connection()
     await advance(hass, 0)
-    device.firmware_version = 68
+    device.firmware_version = 70
     await advance(hass, 3)  # background reconnect (first try after 2 s)
 
     assert device.is_connected
-    assert firmware_state(hass, entry) == "v68"
-    assert device_sw_version(hass, entry) == "v68"
+    assert firmware_state(hass, entry) == "v70"
+    assert device_sw_version(hass, entry) == "v70"
 
 
 async def test_device_without_version_reply_still_works(hass, mock_ble, config_entry):

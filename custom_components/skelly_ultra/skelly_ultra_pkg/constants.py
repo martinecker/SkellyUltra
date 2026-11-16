@@ -4,12 +4,23 @@ This module defines all command tags and response prefixes used in the
 Skelly Ultra BLE protocol, similar to constants.js in the JavaScript codebase.
 """
 
+from enum import IntEnum
+
 # ============================================================================
 # PROTOCOL MARKERS
 # ============================================================================
 
 # Marker used before filename/name strings in command payloads
 PROTOCOL_MARKER_FILENAME = "5C55"
+
+
+class LightScene(IntEnum):
+    """Light scene preset, in file info (BBD0), live mode (BBE1) and F1."""
+
+    CUSTOM = 0  # each light channel's own settings
+    HALLOWEEN = 1
+    CHRISTMAS = 2
+
 
 # Device silently drops an upload whose target filename exceeds this length:
 # the transfer/confirm commands still ack with failed=0, but the file never

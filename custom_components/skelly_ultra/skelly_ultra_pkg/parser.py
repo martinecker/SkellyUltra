@@ -24,6 +24,7 @@ class LiveModeEvent:
     action: int
     eye_icon: int
     lights: list[LightInfo]
+    scene: const.LightScene | int | None = None # None when the firmware has no scenes
 
 
 @dataclass
@@ -124,6 +125,7 @@ class FileInfoEvent:
     db_pos: int
     name: str
     lights: list[LightInfo]
+    scene: const.LightScene | int | None = None # None when the firmware has no scenes (e.g. the Ultra Skelly's v66)
 
 
 @dataclass
@@ -139,10 +141,25 @@ class KeepAliveEvent:
 _FILENAME_MARKER = bytes.fromhex(const.PROTOCOL_MARKER_FILENAME)
 
 
+# File info (BBD0) tail layouts, told apart by where the name marker sits:
+# - scene firmware (12ft Skelly, Lethal Lily, Ultra Skelly v68): byte 56 light
+#   scene, byte 57 position, marker at 58
+# - older firmware (Ultra Skelly v66): byte 56 position, marker at 57
+_MARKER_WITH_SCENE = 58
+_MARKER_WITHOUT_SCENE = 57
+
+
+def _light_scene(value: int) -> const.LightScene | int:
+    """Return the LightScene for a scene byte; unknown values stay an int."""
+    try:
+        return const.LightScene(value)
+    except ValueError:
+        return value
+
+
 def _find_filename_marker(data: bytes) -> int:
     """Return the offset of a file info response's name marker, or -1."""
-    # Byte 58 on real devices (two-byte db_pos), 57 with a one-byte db_pos
-    for offset in (58, 57):
+    for offset in (_MARKER_WITH_SCENE, _MARKER_WITHOUT_SCENE):
         if data[offset : offset + 2] == _FILENAME_MARKER:
             return offset
     return data.find(_FILENAME_MARKER, 57)
@@ -217,10 +234,14 @@ def parse_notification(
         action = int(hexstr[4:6], 16)
         lights = _parse_lights(hexstr, offset=6)
         eye_icon = int(hexstr[90:92], 16)
+        # Scene firmware adds the live light scene after the eye icon (the
+        # phone app reads it only when the reply is longer than 47 bytes)
+        scene = _light_scene(data[46]) if len(data) > 47 else None
         return LiveModeEvent(
             action=action,
             eye_icon=eye_icon,
             lights=lights,
+            scene=scene,
         )
 
     if hexstr.startswith(const.RESP_VOLUME):
@@ -333,7 +354,13 @@ def parse_notification(
         lights = _parse_lights(hexstr, offset=26)
         eye_icon = int(hexstr[110:112], 16)
         marker = _find_filename_marker(data)
-        db_pos = int.from_bytes(data[56:marker], "big") if marker > 56 else 0
+        scene = None
+        db_pos = 0
+        if marker >= _MARKER_WITH_SCENE:
+            scene = _light_scene(data[56])
+            db_pos = data[57]
+        elif marker == _MARKER_WITHOUT_SCENE:
+            db_pos = data[56]
         name = get_utf16le_from_bytes(data[marker + 2 : -1]) if marker >= 0 else ""
         return FileInfoEvent(
             file_index=file_index,
@@ -344,6 +371,7 @@ def parse_notification(
             db_pos=db_pos,
             name=name,
             lights=lights,
+            scene=scene,
         )
 
     return None

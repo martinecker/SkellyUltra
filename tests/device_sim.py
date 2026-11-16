@@ -17,6 +17,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from custom_components.skelly_ultra.skelly_ultra_pkg import commands
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 
 CHANNELS = 6
 
@@ -59,6 +60,7 @@ class DeviceFile:
     eye_icon: int = 1
     lights: list[Light] = field(default_factory=_lights)
     data: bytes = b""
+    scene: LightScene = LightScene.CUSTOM
 
 
 @dataclass
@@ -81,7 +83,12 @@ class FakeSkellyDevice:
         self._disconnected_callback: Callable | None = None
         # Device state
         self.volume = 50
-        self.firmware_version = 66  # BBEE reply; None: no reply
+        self.firmware_version = 68  # BBEE reply; None: no reply
+        # Firmware with light scenes (12ft, Lily, Ultra v68): BBD0 has a scene
+        # byte before the position, BBE1 ends with the live scene. False: the
+        # older layout (Ultra v66).
+        self.has_scenes = True
+        self.live_scene = LightScene.CUSTOM
         self.live_name = "Skelly(Live)"
         self.pin_code = "1234"
         self.channels = [1, 1, 0, 0, 0, 0]
@@ -245,6 +252,9 @@ class FakeSkellyDevice:
         frame = b"\xbb\xe1" + bytes([self.action])
         frame += b"".join(light.to_bytes() for light in self.lights)
         frame += bytes([self.eye_icon])
+        if self.has_scenes:
+            frame += bytes([self.live_scene])
+            frame += bytes.fromhex(commands.crc8(frame))
         self._notify(frame)
 
     def _cmd_AAE5(self, p):
@@ -271,7 +281,7 @@ class FakeSkellyDevice:
                 + bytes([f.action])
                 + b"".join(light.to_bytes() for light in f.lights)
                 + bytes([f.eye_icon])
-                + pos.to_bytes(2, "big") # db_pos is two bytes
+                + (bytes([f.scene, pos]) if self.has_scenes else bytes([pos]))
                 + b"\x5c\x55"
                 + name
                 + b"\x00"

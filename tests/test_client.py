@@ -15,6 +15,7 @@ from custom_components.skelly_ultra.skelly_ultra_pkg.client import (
     ConnectionLostError,
     SkellyClient,
 )
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 from custom_components.skelly_ultra.skelly_ultra_pkg.file_transfer import (
     FileTransferError,
     FileTransferManager,
@@ -135,6 +136,30 @@ async def test_file_list_with_unicode_names(client, device):
     files = await client.get_file_list(timeout=2)
     assert [f.name for f in files] == ["hello.mp3", "Grüße 🎃.mp3"]
     assert [f.file_index for f in files] == [1, 2]
+
+
+@pytest.mark.parametrize("has_scenes", [True, False])
+async def test_file_list_reads_scene_and_position(client, device, has_scenes):
+    """Firmware with and without light scenes lays out the file info tail
+    differently; both give each file's position, and the scene if any."""
+    device.has_scenes = has_scenes
+    device.file("hello.mp3").scene = LightScene.CHRISTMAS
+    files = sorted(await client.get_file_list(), key=lambda f: f.file_index)
+    assert [f.db_pos for f in files] == [0, 1]
+    assert [f.name for f in files] == ["hello.mp3", "Grüße 🎃.mp3"]
+    expected_scenes = (
+        [LightScene.CHRISTMAS, LightScene.CUSTOM] if has_scenes else [None, None]
+    )
+    assert [f.scene for f in files] == expected_scenes
+
+
+@pytest.mark.parametrize("has_scenes", [True, False])
+async def test_live_mode_scene(client, device, has_scenes):
+    device.has_scenes = has_scenes
+    device.live_scene = LightScene.HALLOWEEN
+    live = await client.get_live_mode()
+    assert live.eye_icon == device.eye_icon
+    assert live.scene is (LightScene.HALLOWEEN if has_scenes else None)
 
 
 async def test_file_list_ignores_leftovers_and_repeats(client, device):
