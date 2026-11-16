@@ -16,11 +16,7 @@ from homeassistant.core import (
     SupportsResponse,
 )
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
-from homeassistant.helpers import (
-    config_validation as cv,
-    device_registry as dr,
-    entity_registry as er,
-)
+from homeassistant.helpers import config_validation as cv
 
 from .const import DOMAIN
 from .converse import SERVICE_CONVERSE, async_converse
@@ -31,6 +27,7 @@ from .file_settings import (
     check_file_selector,
     find_file,
 )
+from .helpers import SkellyNotFoundError, resolve_skelly
 from .perform import SERVICE_PERFORM, async_perform
 from .skelly_ultra_pkg.client import ConnectionLostError
 from .uploads import (
@@ -51,86 +48,25 @@ def get_adapter_from_service_call(
     call: ServiceCall,
     *,
     raise_on_error: bool = False,
-) -> tuple[any, str] | None:
-    """Extract adapter from service call data.
+) -> tuple[Any, str] | None:
+    """Return the adapter and config entry ID of the Skelly a call targets.
 
-    Resolves device_id or entity_id from the service call and returns
-    the corresponding adapter and entry_id. If neither is provided and
-    there is exactly one integration entry, that entry is used.
-
-    Args:
-        hass: Home Assistant instance
-        call: Service call with device_id or entity_id in data
-        raise_on_error: If True, raises HomeAssistantError on failures
-                      If False, logs errors and returns None
-
-    Returns:
-        Tuple of (adapter, entry_id) or None if resolution fails
-
-    Raises:
-        HomeAssistantError: If raise_on_error=True and resolution fails
+    The call gives a device_id or entity_id; without either, the only loaded
+    Skelly is used (see resolve_skelly). If it can't be found, raises
+    HomeAssistantError with raise_on_error, otherwise logs and returns None.
     """
-    device_id = call.data.get("device_id")
-    entity_id = call.data.get("entity_id")
-
-    # If entity_id provided, resolve to device_id
-    if not device_id and entity_id:
-        ent_reg = er.async_get(hass)
-        ent = ent_reg.async_get(entity_id)
-        if not ent:
-            msg = f"Entity {entity_id} not found"
-            if raise_on_error:
-                raise HomeAssistantError(msg)
-            _LOGGER.error(msg)
-            return None
-        if not ent.device_id:
-            msg = f"Entity {entity_id} has no device_id"
-            if raise_on_error:
-                raise HomeAssistantError(msg)
-            _LOGGER.error(msg)
-            return None
-        device_id = ent.device_id
-
-    # If no device specified, attempt to use single entry if available
-    entry_id: str | None = None
-    if not device_id:
-        entries = hass.data.get(DOMAIN, {})
-        if len(entries) == 1:
-            entry_id = next(iter(entries))
-            adapter = entries[entry_id]["adapter"]
-            return (adapter, entry_id)
-
-        msg = "No device_id or entity_id provided and multiple Skelly entries present"
+    try:
+        entry_id, _device_id = resolve_skelly(
+            hass,
+            device_id=call.data.get("device_id"),
+            entity_id=call.data.get("entity_id"),
+        )
+    except SkellyNotFoundError as err:
         if raise_on_error:
-            raise HomeAssistantError(msg)
-        _LOGGER.error(msg)
+            raise
+        _LOGGER.error("%s", err)
         return None
-
-    # Lookup device in device registry and find a config entry that matches
-    dev_reg = dr.async_get(hass)
-    device = dev_reg.async_get(device_id)
-    if not device:
-        msg = f"Device {device_id} not found"
-        if raise_on_error:
-            raise HomeAssistantError(msg)
-        _LOGGER.error(msg)
-        return None
-
-    # Find a config entry id for this integration within the device
-    for ce in device.config_entries:
-        if ce in hass.data.get(DOMAIN, {}):
-            entry_id = ce
-            break
-
-    if not entry_id:
-        msg = f"Device {device_id} is not associated with {DOMAIN} integration"
-        if raise_on_error:
-            raise HomeAssistantError(msg)
-        _LOGGER.error(msg)
-        return None
-
-    adapter = hass.data[DOMAIN][entry_id]["adapter"]
-    return (adapter, entry_id)
+    return hass.data[DOMAIN][entry_id]["adapter"], entry_id
 
 
 # Service schemas
@@ -573,25 +509,15 @@ def _resolve_participant(
     hass: HomeAssistant, spec: dict[str, Any]
 ) -> tuple[Any, str, str]:
     """Return the adapter, config entry id and device id of a converse participant."""
-    name = spec["name"]
-    device_id = spec.get("device_id")
-    if not device_id:
-        ent = er.async_get(hass).async_get(spec["entity_id"])
-        if ent is None or not ent.device_id:
-            raise ServiceValidationError(
-                f"{name}: entity {spec['entity_id']} not found or has no device"
-            )
-        device_id = ent.device_id
-    device = dr.async_get(hass).async_get(device_id)
-    if device is None:
-        raise ServiceValidationError(f"{name}: device {device_id} not found")
-    entries = hass.data.get(DOMAIN, {})
-    for entry_id in device.config_entries:
-        if entry_id in entries:
-            return entries[entry_id]["adapter"], entry_id, device_id
-    raise ServiceValidationError(
-        f"{name}: device {device_id} is not a loaded {DOMAIN} device"
-    )
+    try:
+        entry_id, device_id = resolve_skelly(
+            hass, device_id=spec.get("device_id"), entity_id=spec.get("entity_id")
+        )
+    except SkellyNotFoundError as err:
+        raise ServiceValidationError(f"{spec['name']}: {err}") from err
+    if device_id is None:  # the schema requires a device_id or entity_id
+        raise ServiceValidationError(f"{spec['name']}: give a device_id or entity_id")
+    return hass.data[DOMAIN][entry_id]["adapter"], entry_id, device_id
 
 
 async def async_converse_service(

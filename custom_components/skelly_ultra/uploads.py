@@ -55,7 +55,7 @@ _LOGGER = logging.getLogger(__name__)
 # hass.data key for the active FileTransferManager of each entry, so that
 # cancel_file_transfer can find it. Kept out of hass.data[DOMAIN], which must
 # only hold per-entry dicts (the single-device fallback in
-# get_adapter_from_service_call counts its keys).
+# helpers.resolve_skelly counts its keys).
 FILE_TRANSFERS_KEY = f"{DOMAIN}_file_transfers"
 
 # Filename stem used when a TTS message has nothing to build a name from

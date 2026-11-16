@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Collection
 from pathlib import Path
 from typing import Any, cast
 
@@ -10,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
 
 from .const import (
@@ -20,6 +22,76 @@ from .const import (
     DEVICE_TYPE_SKELLY,
     DOMAIN,
 )
+
+
+class SkellyNotFoundError(HomeAssistantError):
+    """The Skelly an action or message targets couldn't be found."""
+
+
+def device_config_entry_ids(device: dr.DeviceEntry) -> set[str]:
+    """Return the IDs of the config entries a device belongs to.
+
+    Newer HA has config_entry_id (one entry per device) and deprecates
+    config_entries; older HA has only config_entries. A device ID from
+    before HA split shared devices still finds a stand-in whose
+    config_entry_id is only the old primary entry, so all its entries are
+    used then (HA doesn't warn about config_entries for those).
+    """
+    if hasattr(device, "config_entry_id") and not getattr(
+        device, "is_composite_device", False
+    ):
+        return {device.config_entry_id} if device.config_entry_id else set()
+    return set(device.config_entries)
+
+
+def resolve_skelly(
+    hass: HomeAssistant,
+    *,
+    device_id: str | None = None,
+    entity_id: str | None = None,
+    entry_id: str | None = None,
+    loaded: Collection[str] | None = None,
+) -> tuple[str, str | None]:
+    """Return the config entry ID and device ID of the Skelly a call targets.
+
+    The target is a device_id, an entity_id (of an entity on the Skelly's
+    device) or a config entry_id, tried in that order. Without any, the only
+    loaded Skelly is used. Only loaded Skellys count: by default the
+    entries in hass.data[DOMAIN], or the IDs in loaded. The device ID is None
+    when the target was an entry_id or the only Skelly. Raises
+    SkellyNotFoundError saying why the target couldn't be found.
+    """
+    if loaded is None:
+        loaded = list(hass.data.get(DOMAIN, {}))
+    if not device_id and entity_id:
+        entity = er.async_get(hass).async_get(entity_id)
+        if entity is None:
+            raise SkellyNotFoundError(f"Entity {entity_id} not found")
+        if not entity.device_id:
+            raise SkellyNotFoundError(f"Entity {entity_id} has no device")
+        device_id = entity.device_id
+
+    if device_id:
+        device = dr.async_get(hass).async_get(device_id)
+        if device is None:
+            raise SkellyNotFoundError(f"Device {device_id} not found")
+        for candidate in sorted(device_config_entry_ids(device)):
+            if candidate in loaded:
+                return candidate, device_id
+        raise SkellyNotFoundError(f"Device {device_id} is not a loaded Skelly")
+
+    if entry_id:
+        if entry_id not in loaded:
+            raise SkellyNotFoundError(f"Config entry {entry_id} is not a loaded Skelly")
+        return entry_id, None
+
+    if len(loaded) == 1:
+        return next(iter(loaded)), None
+    if not loaded:
+        raise SkellyNotFoundError("No Skelly is loaded")
+    raise SkellyNotFoundError(
+        "More than one Skelly is loaded; give a device_id or entity_id"
+    )
 
 
 class DeviceLoggerAdapter(logging.LoggerAdapter):

@@ -31,10 +31,12 @@ from .const import CONF_DEVICE_TYPE, DEVICE_TYPE_SKELLY, DOMAIN
 from .skelly_ultra_pkg.constants import MAX_FILENAME_LENGTH
 from .helpers import (
     MAX_UI_EFFECT_SPEED,
+    SkellyNotFoundError,
     device_speed_to_ui,
     files_updated_signal,
     get_device_profile,
     movement_parts,
+    resolve_skelly,
 )
 from .select import BITRATE_OPTIONS
 from .sensor import idle_transfer_state
@@ -120,20 +122,26 @@ def _resolve_entry(hass: HomeAssistant, msg: dict[str, Any]) -> ConfigEntry | No
 
     Without entry_id or device_id, the only loaded entry is used.
     """
-    entries = [
-        entry
-        for entry in hass.config_entries.async_entries(DOMAIN)
-        if entry.state is ConfigEntryState.LOADED
-        and entry.entry_id in hass.data.get(DOMAIN, {})
+    if any(key in msg and not msg[key] for key in ("entry_id", "device_id")):
+        return None  # given, but blank
+    # Only entries that finished setting up count; one can stay in
+    # hass.data after a failed unload or setup
+    loaded = [
+        entry_id
+        for entry_id in hass.data.get(DOMAIN, {})
+        if (entry := hass.config_entries.async_get_entry(entry_id)) is not None
+        and entry.state is ConfigEntryState.LOADED
     ]
-    if "entry_id" in msg:
-        return next((e for e in entries if e.entry_id == msg["entry_id"]), None)
-    if "device_id" in msg:
-        device = dr.async_get(hass).async_get(msg["device_id"])
-        if device is None:
-            return None
-        return next((e for e in entries if e.entry_id in device.config_entries), None)
-    return entries[0] if len(entries) == 1 else None
+    try:
+        entry_id, _device_id = resolve_skelly(
+            hass,
+            device_id=msg.get("device_id"),
+            entry_id=msg.get("entry_id"),
+            loaded=loaded,
+        )
+    except SkellyNotFoundError:
+        return None
+    return hass.config_entries.async_get_entry(entry_id)
 
 
 def _send_not_found(

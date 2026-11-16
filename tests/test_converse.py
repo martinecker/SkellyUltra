@@ -475,7 +475,11 @@ async def test_converse_without_waiting_returns_at_the_first_line(
         (lambda c: c[:1], "2 to 6 participants"),
         (lambda c: [c[0], {**c[1], "name": "bones"}], "names must be different"),
         (lambda c: [c[0], {**c[1], "device_id": c[0]["device_id"]}], "same Skelly"),
-        (lambda c: [c[0], {**c[1], "device_id": "nope"}], "Rattles: device nope"),
+        (lambda c: [c[0], {**c[1], "device_id": "nope"}], "Rattles: Device nope not found"),
+        (
+            lambda c: [c[0], {**c[1], "device_id": "", "entity_id": "media_player.x"}],
+            "Rattles: Entity media_player.x not found",
+        ),
         (lambda c: [c[0], {"name": "X"}], "device_id or entity_id"),
     ],
 )
@@ -745,3 +749,49 @@ async def test_perform_speaks_after_a_ble_reconnect(
     result = await asyncio.wait_for(task, 15)
     assert result["status"] == "ok"
     assert [label for label, _look in skellys.log] == ["Bones"]
+
+
+async def test_actions_need_a_target_when_several_skellys_are_set_up(
+    hass, skellys
+):
+    with pytest.raises(HomeAssistantError, match="More than one Skelly"):
+        await hass.services.async_call(
+            DOMAIN, "play_file", {"file_index": 1}, blocking=True
+        )
+    assert not any(server.connected for server in skellys.servers)
+
+
+async def test_actions_find_the_skelly_by_device_or_entity(hass, skellys):
+    from homeassistant.helpers import entity_registry as er
+
+    ent_reg = er.async_get(hass)
+    entity = next(
+        e
+        for e in er.async_entries_for_config_entry(ent_reg, skellys.entries[1].entry_id)
+        if e.domain == "media_player"
+    )
+    for target in (
+        {"device_id": skellys.device_ids[1]},
+        {"entity_id": entity.entity_id},
+    ):
+        before = len(skellys.devices[1].playback)
+        await hass.services.async_call(
+            DOMAIN, "play_file", {**target, "file_index": 1}, blocking=True
+        )
+        assert len(skellys.devices[1].playback) == before + 1
+    assert skellys.devices[0].playback == []
+
+
+async def test_actions_reject_a_device_that_is_not_a_skelly(hass, skellys):
+    other = MockConfigEntry(domain="other")
+    other.add_to_hass(hass)
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=other.entry_id, identifiers={("other", "lamp")}
+    )
+    with pytest.raises(HomeAssistantError, match="is not a loaded Skelly"):
+        await hass.services.async_call(
+            DOMAIN,
+            "play_file",
+            {"device_id": device.id, "file_index": 1},
+            blocking=True,
+        )

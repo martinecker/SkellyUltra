@@ -543,6 +543,35 @@ async def test_target_needed_with_two_skellys(hass, setup_integration, hass_ws_c
     assert len(result["files"]) == 3
 
 
+async def test_entry_left_in_hass_data_does_not_count(
+    hass, setup_integration, hass_ws_client
+):
+    # An entry whose unload failed stays in hass.data without being loaded
+    stuck = MockConfigEntry(domain=DOMAIN, data={"address": "11:22:33:44:55:66"})
+    stuck.add_to_hass(hass)
+    hass.data[DOMAIN][stuck.entry_id] = {}
+    try:
+        client = await hass_ws_client(hass)
+        result = await ws_list(client)
+        assert len(result["files"]) == 3
+    finally:
+        del hass.data[DOMAIN][stuck.entry_id]
+
+
+def test_old_shared_device_id_uses_all_its_entries():
+    from types import SimpleNamespace
+
+    from custom_components.skelly_ultra.helpers import device_config_entry_ids
+
+    split = SimpleNamespace(config_entry_id="a", is_composite_device=False)
+    assert device_config_entry_ids(split) == {"a"}
+    old = SimpleNamespace(
+        config_entry_id="a", is_composite_device=True, config_entries={"a", "b"}
+    )
+    assert device_config_entry_ids(old) == {"a", "b"}
+    assert device_config_entry_ids(SimpleNamespace(config_entries={"c"})) == {"c"}
+
+
 @pytest.fixture
 def tone(tmp_path):
     path = tmp_path / "tone.wav"
