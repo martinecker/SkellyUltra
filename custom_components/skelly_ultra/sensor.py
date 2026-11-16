@@ -83,6 +83,12 @@ SENSORS: tuple[SkellySensorEntityDescription, ...] = (
         name="PIN Code",
         value_fn=lambda data: data.get("pin_code"),
     ),
+    SkellySensorEntityDescription(
+        key="firmware_version",
+        name="Firmware Version",
+        entity_category=EntityCategory.DIAGNOSTIC,
+        value_fn=lambda data: data.get("firmware_version"),
+    ),
 )
 
 

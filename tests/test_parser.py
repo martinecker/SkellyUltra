@@ -41,3 +41,10 @@ def test_file_info_without_a_name() -> None:
     event = parser.parse_notification(None, REAL_FILE_INFO[:58] + b"\x00")
     assert isinstance(event, parser.FileInfoEvent)
     assert event.name == ""
+
+
+def test_firmware_version() -> None:
+    """BBEE carries the version number in its first payload byte."""
+    # An Ultra Skelly on v68, padded to 8 bytes like every reply
+    event = parser.parse_notification(None, bytes.fromhex("BBEE440000000000"))
+    assert event == parser.VersionEvent(version=68)

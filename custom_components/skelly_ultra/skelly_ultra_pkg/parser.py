@@ -37,6 +37,11 @@ class LiveNameEvent:
 
 
 @dataclass
+class VersionEvent:
+    version: int  # firmware version number, e.g. 68 (shown as "v68")
+
+
+@dataclass
 class DeviceParamsEvent:
     channels: list[
         int
@@ -183,6 +188,7 @@ def parse_notification(
     LiveModeEvent
     | VolumeEvent
     | LiveNameEvent
+    | VersionEvent
     | DeviceParamsEvent
     | StartTransferEvent
     | ChunkDroppedEvent
@@ -226,6 +232,11 @@ def parse_notification(
         name_hex = hexstr[6 : 6 + length * 2]
         name = get_ascii(name_hex)
         return LiveNameEvent(name=name)
+
+    if hexstr.startswith(const.RESP_VERSION):
+        if len(data) < 3:
+            return None
+        return VersionEvent(version=data[2])
 
     if hexstr.startswith(const.RESP_DEVICE_PARAMS):
         channels = [int(hexstr[i : i + 2], 16) for i in range(4, 16, 2)]

@@ -81,6 +81,7 @@ class FakeSkellyDevice:
         self._disconnected_callback: Callable | None = None
         # Device state
         self.volume = 50
+        self.firmware_version = 66  # BBEE reply; None: no reply
         self.live_name = "Skelly(Live)"
         self.pin_code = "1234"
         self.channels = [1, 1, 0, 0, 0, 0]
@@ -248,6 +249,10 @@ class FakeSkellyDevice:
 
     def _cmd_AAE5(self, p):
         self._notify(bytes([0xBB, 0xE5, self.volume]))
+
+    def _cmd_AAEE(self, p):  # firmware version
+        if self.firmware_version is not None:
+            self._notify(bytes([0xBB, 0xEE, self.firmware_version]))
 
     def _cmd_AAE6(self, p):
         name = self.live_name.encode("ascii")

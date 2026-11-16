@@ -965,6 +965,11 @@ class SkellyClient:
         )
         return ev.name
 
+    async def get_version(self, timeout: float = 2.0) -> int:
+        """Query the firmware version and return its number (e.g. 68 for v68)."""
+        ev = await self._request(commands.query_version(), parser.VersionEvent, timeout)
+        return ev.version
+
     async def get_file_order(self, timeout: float = 2.0) -> list[int]:
         ev = await self._request(
             commands.query_file_order(), parser.FileOrderEvent, timeout

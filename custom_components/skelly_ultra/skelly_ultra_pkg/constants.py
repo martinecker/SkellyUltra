@@ -72,6 +72,7 @@ RESP_DEVICE_PARAMS = "BBE0"
 RESP_LIVE_MODE = "BBE1"
 RESP_VOLUME = "BBE5"
 RESP_LIVE_NAME = "BBE6"
+RESP_VERSION = "BBEE"  # Payload: firmware version (1 byte, e.g. 0x44 = v68)
 RESP_ENABLE_CLASSIC_BT = "BBFD"
 
 # File Query Responses (BBD series)
@@ -142,6 +143,7 @@ RESPONSE_PREFIXES = {
     RESP_LIVE_MODE: "LiveModeEvent",
     RESP_VOLUME: "VolumeEvent",
     RESP_LIVE_NAME: "LiveNameEvent",
+    RESP_VERSION: "VersionEvent",
     RESP_ENABLE_CLASSIC_BT: "EnableClassicBTEvent",
     # File query responses
     RESP_FILE_INFO: "FileInfoEvent",

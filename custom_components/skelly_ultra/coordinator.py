@@ -14,6 +14,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -28,6 +29,11 @@ from .skelly_ultra_pkg.client import ConnectionLostError
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def format_firmware_version(version: int | None) -> str | None:
+    """Return the firmware version as the phone app shows it, e.g. "v68"."""
+    return None if version is None else f"v{version}"
 
 
 class SkellyCoordinator(DataUpdateCoordinator):
@@ -72,6 +78,9 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._file_list_loading = False
         self._initial_update_done = False
         self._data_counters: dict[str, int] = {}
+        # Firmware version number (e.g. 68 for v68), read on every connect;
+        # None until a device answered
+        self.firmware_version: int | None = None
         self.settings_sync = SettingsSync(self, entry, self._logger)
         # Independent of _updates_paused (the Connected switch): holds off BLE
         # polling while the device plays an internal file.
@@ -83,8 +92,52 @@ class SkellyCoordinator(DataUpdateCoordinator):
         )
         adapter.register_disconnected_handler(self._on_device_disconnected)
         adapter.register_reconnected_callback(self._on_device_reconnected)
-        adapter.register_connected_hook(self.settings_sync.async_on_connected)
+        adapter.register_connected_hook(self._async_on_connected)
         self._logger.debug("SkellyCoordinator initialized for adapter: %s", adapter)
+
+    async def _async_on_connected(self) -> None:
+        """Read the firmware version, then let settings sync push its settings.
+
+        Runs inside the adapter's connect, before the first poll, so features
+        that depend on the firmware know it from the start.
+        """
+        await self._async_read_firmware_version()
+        await self.settings_sync.async_on_connected()
+
+    async def _async_read_firmware_version(self) -> None:
+        """Query the firmware version; keep the last known one if it fails.
+
+        It is read on every connect, as the device may have been updated with
+        the phone app meanwhile. The version also goes to the device registry,
+        where it shows as the device's firmware.
+        """
+        try:
+            version = await self.adapter.client.get_version(timeout=2.0)
+        except Exception as err:  # noqa: BLE001 - must not fail the connect
+            self._logger.debug(
+                "Couldn't read the firmware version: %s",
+                str(err) or type(err).__name__,
+            )
+            return
+        if version == self.firmware_version:
+            return
+        self._logger.info("Firmware version: v%d", version)
+        self.firmware_version = version
+        self._update_registry_sw_version()
+
+    def _update_registry_sw_version(self) -> None:
+        """Show the firmware version on the device page.
+
+        The first connect can finish before the entities created the device,
+        so this creates it from the same info if needed.
+        """
+        if self.device_info is None or self.firmware_version is None:
+            return
+        dr.async_get(self.hass).async_get_or_create(
+            config_entry_id=self._entry.entry_id,
+            **self.device_info,
+            sw_version=format_firmware_version(self.firmware_version),
+        )
 
     def async_update_data_optimistic(self, key: str, value: Any) -> None:
         """Update coordinator data optimistically and increment version counter.
@@ -654,6 +707,8 @@ class SkellyCoordinator(DataUpdateCoordinator):
                     "file_order": file_order,
                     # pin_code is the Bluetooth pairing PIN (e.g., "1234")
                     "pin_code": pin_code,
+                    # Firmware version as shown, e.g. "v68"; read on connect
+                    "firmware_version": format_firmware_version(self.firmware_version),
                     # lights is a list of small dicts with brightness, rgb, effect_type, color_cycle, and effect_speed
                     "lights": [
                         self._light_state_dict(light0),
