@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -12,6 +13,11 @@ from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .coordinator import SkellyCoordinator
+
+if TYPE_CHECKING:
+    from .client_adapter import SkellyClientAdapter
+
+_LOGGER = logging.getLogger(__name__)
 
 
 async def async_run_command(command: Awaitable[Any], failure: str) -> Any:
@@ -28,6 +34,22 @@ async def async_run_command(command: Awaitable[Any], failure: str) -> Any:
         raise HomeAssistantError(
             f"{failure}: {str(err) or type(err).__name__}"
         ) from err
+
+
+async def async_turn_on_live_mode(adapter: SkellyClientAdapter) -> str:
+    """Turn live mode on, as the Live Mode switch does.
+
+    Live mode stays wanted (and is restored later) even if it doesn't
+    connect now. Raises HomeAssistantError then.
+    """
+    failure = "Couldn't connect live mode"
+    result = await async_run_command(
+        adapter.async_turn_on_live_mode(raise_errors=True), failure
+    )
+    if not result:
+        raise HomeAssistantError(failure)
+    _LOGGER.info("Live mode connected: %s", result)
+    return result
 
 
 class SkellyEntity(Entity):

@@ -165,7 +165,7 @@ class SkellyLiveBTMacSensor(SkellyEntity, SensorEntity):
     @property
     def native_value(self):
         """Return the Live Mode BT MAC address or '<not connected>'."""
-        return self.adapter.client.live_mode_client_address or "<not connected>"
+        return self.adapter.live_mode_address or "<not connected>"
 
 
 class _SkellyLinkSignalSensor(SkellyEntity, SensorEntity):
@@ -256,7 +256,7 @@ class SkellyLiveModeSignalSensor(_SkellyLinkSignalSensor):
     _attr_native_unit_of_measurement = SIGNAL_STRENGTH_DECIBELS
 
     def _link_address(self) -> str | None:
-        return self.adapter.client.live_mode_client_address
+        return self.adapter.live_mode_address
 
 
 def idle_transfer_state() -> dict[str, Any]:

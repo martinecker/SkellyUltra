@@ -163,8 +163,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
         # A push on connect held back by playback, sent once it ends.
         self._push_after_playback = False
         self._closing = False
-        # The last live-mode check couldn't reach the REST server
-        self._live_check_failed = False
         adapter.register_disconnected_handler(self._on_device_disconnected)
         adapter.register_reconnected_callback(self._on_device_reconnected)
         adapter.register_connected_hook(self._async_on_connected)
@@ -855,74 +853,6 @@ class SkellyCoordinator(DataUpdateCoordinator):
             "effect_speed": int(getattr(light, "effect_speed", 0)),
         }
 
-    def _live_check_unanswered(self, mac: str, reason: object) -> None:
-        """Note that the REST server couldn't say whether live mode is up."""
-        if not self._live_check_failed:
-            self._logger.warning(
-                "Could not check live mode device %s with the REST server (%s); "
-                "will check again on the next poll",
-                mac,
-                reason,
-            )
-        self._live_check_failed = True
-
-    async def _async_check_live_mode(self) -> None:
-        """Check with the REST server that live mode is still connected.
-
-        If the server no longer lists the live-mode device, live mode is
-        cleaned up on our side and, if it should stay on, restored in the
-        background. If the server can't be asked (a timeout, a restart),
-        nothing changes: the next poll asks again, so one hiccup doesn't
-        turn live mode off.
-        """
-        expected_mac = self.adapter.client.live_mode_client_address
-        if not expected_mac:
-            return
-        try:
-            rest_status = await self.adapter.client.get_audio_status_live_mode()
-        except Exception as ex:
-            self._live_check_unanswered(expected_mac, ex)
-            return
-        bluetooth = rest_status.get("bluetooth")
-        connected_devices = (
-            bluetooth.get("devices") if isinstance(bluetooth, dict) else None
-        )
-        if not isinstance(connected_devices, list):
-            # An error reply (e.g. 503 while the server restarts)
-            self._live_check_unanswered(expected_mac, f"reply {rest_status!r}")
-            return
-        if self._live_check_failed:
-            self._logger.info("REST server answers again; live mode check resumed")
-        self._live_check_failed = False
-
-        self._logger.debug(
-            "REST server reports %d connected devices: %s",
-            len(connected_devices),
-            connected_devices,
-        )
-        # MAC addresses can differ in case
-        expected_mac_lower = expected_mac.lower()
-        if any(
-            str(device.get("mac", "")).lower() == expected_mac_lower
-            for device in connected_devices
-            if isinstance(device, dict)
-        ):
-            self._logger.debug(
-                "Live mode device %s is still connected to REST server", expected_mac
-            )
-            return
-        # Live mode may have been turned off or reconnected meanwhile
-        if self.adapter.client.live_mode_client_address != expected_mac:
-            return
-
-        self._logger.warning(
-            "Live mode device %s is no longer connected to REST server, cleaning up",
-            expected_mac,
-        )
-        await self.adapter.disconnect_live_mode()
-        # In the background: a pairing can take 30 s or more
-        self.adapter.start_live_mode_restore()
-
     async def _async_update_data(self) -> Any:
         # Skip updates if paused (e.g., when Connected switch is off)
         if self._updates_paused:
@@ -954,7 +884,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
                 raise UpdateFailed("Device not connected")
 
         # Outside action_lock: it only talks to the REST server
-        await self._async_check_live_mode()
+        await self.adapter.async_check_live_mode()
 
         # Use action_lock to prevent concurrent execution with file list refresh
         async with self.action_lock:

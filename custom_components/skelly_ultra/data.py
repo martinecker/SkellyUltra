@@ -17,7 +17,6 @@ if TYPE_CHECKING:
     from .media_player import SkellyLiveMediaPlayer
     from .perform import PerformManager
     from .sensor import SkellyFileTransferProgressSensor
-    from .switch import SkellyLiveModeSwitch
 
 
 class SkellyNotFoundError(HomeAssistantError):
@@ -33,7 +32,6 @@ class SkellyData:
     perform: PerformManager
     # Registered by the entities when they're added, so a disabled one
     # (never added) isn't used
-    live_mode_switch: SkellyLiveModeSwitch | None = None
     live_media_player: SkellyLiveMediaPlayer | None = None
     transfer_sensor: SkellyFileTransferProgressSensor | None = None
     # Set at the start of tearing down, after the platforms unloaded; the

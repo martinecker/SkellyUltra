@@ -14,7 +14,12 @@ from homeassistant.helpers.device_registry import DeviceInfo
 
 from .coordinator import SkellyCoordinator
 from .data import SkellyConfigEntry
-from .entity import SkellyCoordinatorEntity, SkellyEntity, async_run_command
+from .entity import (
+    SkellyCoordinatorEntity,
+    SkellyEntity,
+    async_run_command,
+    async_turn_on_live_mode,
+)
 from .helpers import get_device_info, get_device_profile
 
 _LOGGER = logging.getLogger(__name__)
@@ -199,71 +204,44 @@ class SkellyLiveModeSwitch(SkellyCoordinatorEntity, SwitchEntity):
         )
         self.hass = hass
         self.adapter = adapter
-        self._entry = entry
-        self._desired_live_mode_on = entry.options.get("live_mode_connected", False)
 
     @property
     def is_on(self) -> bool:
-        """Return True if live-mode client is connected or should be restored."""
-        client = self.adapter.client
-        if client.live_mode_client_address is not None:
+        """Return True if live mode is connected, or wanted while BLE is down."""
+        if self.adapter.live_mode_address is not None:
             return True
-        if client.is_connected:
+        if self.adapter.client.is_connected:
             return False
-        return self._desired_live_mode_on
+        return self.adapter.live_mode_should_connect
 
     async def async_added_to_hass(self) -> None:
         """When entity is added, subscribe to adapter updates."""
         await super().async_added_to_hass()
         self.adapter.register_live_mode_callback(self._handle_live_mode_change)
-        self.adapter.set_live_mode_preference(self._desired_live_mode_on)
-        # skelly_ultra.perform turns live mode on through this switch
-        self._entry.runtime_data.live_mode_switch = self
         self.async_write_ha_state()
 
     async def async_will_remove_from_hass(self) -> None:
         """Unregister adapter callbacks when entity is removed."""
         self.adapter.unregister_live_mode_callback(self._handle_live_mode_change)
-        data = getattr(self._entry, "runtime_data", None)
-        if data is not None and data.live_mode_switch is self:
-            data.live_mode_switch = None
         await super().async_will_remove_from_hass()
 
     async def async_turn_on(self, **kwargs) -> None:
         """Connect to the classic/live Bluetooth device exposed by the Skelly."""
-        self._desired_live_mode_on = True
-        self.adapter.set_live_mode_preference(True)
-        self._persist_desired_state()
-        failure = "Couldn't connect live mode"
         try:
-            result = await async_run_command(
-                self.adapter.connect_live_mode(raise_errors=True), failure
-            )
-            if not result:
-                raise HomeAssistantError(failure)
-            _LOGGER.info("Live mode connected: %s", result)
+            await async_turn_on_live_mode(self.adapter)
         finally:
             self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs) -> None:
         """Disconnect the classic/live Bluetooth device."""
-        self._desired_live_mode_on = False
-        self.adapter.set_live_mode_preference(False)
-        self._persist_desired_state()
         try:
             await async_run_command(
-                self.adapter.disconnect_live_mode(raise_errors=True),
+                self.adapter.async_turn_off_live_mode(raise_errors=True),
                 "Couldn't disconnect live mode",
             )
             _LOGGER.info("Live mode disconnected")
         finally:
             self.async_write_ha_state()
-
-    def _persist_desired_state(self) -> None:
-        """Persist the last requested live-mode state in the config entry."""
-        _persist_entry_option(
-            self.hass, self._entry, "live_mode_connected", self._desired_live_mode_on
-        )
 
     @callback
     def _handle_live_mode_change(self) -> None:

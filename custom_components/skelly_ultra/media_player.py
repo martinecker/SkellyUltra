@@ -74,25 +74,6 @@ def _media_title(media_id: str) -> str:
     return PurePosixPath(path.partition("?")[0]).name or "Audio"
 
 
-def _is_playing_on(status: dict[str, Any], mac: str | None) -> bool:
-    """Return True if the REST server's status shows audio playing to mac.
-
-    One REST server can serve several Skellys, and its audio.is_playing is
-    True while any of them plays. Its sessions list has one entry per
-    target MAC; a server too old to send it only has the overall flag.
-    """
-    audio = status.get("audio") or {}
-    sessions = audio.get("sessions")
-    if mac is None or not isinstance(sessions, list):
-        return bool(audio.get("is_playing", False))
-    return any(
-        isinstance(session, dict)
-        and str(session.get("target", "")).upper() == mac.upper()
-        and session.get("is_playing", False)
-        for session in sessions
-    )
-
-
 async def async_setup_entry(
     hass: HomeAssistant, entry: SkellyConfigEntry, async_add_entities
 ) -> None:
@@ -212,10 +193,10 @@ class SkellyLiveMediaPlayer(
     def available(self) -> bool:
         """Entity is only available when live mode is connected.
 
-        Directly checks the client's connection status for immediate updates,
+        Directly checks the adapter's connection status for immediate updates,
         rather than waiting for coordinator refresh.
         """
-        return self.adapter.client.live_mode_client_address is not None
+        return self.adapter.live_mode_address is not None
 
     @property
     def state(self) -> MediaPlayerState:
@@ -363,7 +344,7 @@ class SkellyLiveMediaPlayer(
 
             _LOGGER.info("REST server started playback successfully")
             self._is_playing = True
-            self._playing_mac = self.adapter.client.live_mode_client_address
+            self._playing_mac = self.adapter.live_mode_address
             self.async_write_ha_state()
 
             # Watch the REST server until the clip ends or is stopped
@@ -421,8 +402,7 @@ class SkellyLiveMediaPlayer(
                 if stop.is_set():
                     break
                 try:
-                    data = await self.adapter.client.get_audio_status_live_mode()
-                    playing = _is_playing_on(data, mac)
+                    playing = await self.adapter.async_live_playback_active(mac)
                 except Exception as err:  # noqa: BLE001 - any failure ends the watch
                     _LOGGER.debug(
                         "Couldn't check playback status, assuming it ended: %s",
@@ -462,7 +442,7 @@ class SkellyLiveMediaPlayer(
         _LOGGER.info("Requesting REST server to stop playback")
 
         # Only this Skelly's playback: without a MAC the server stops all
-        mac = self._playing_mac or self.adapter.client.live_mode_client_address
+        mac = self._playing_mac or self.adapter.live_mode_address
         try:
             if mac is None:
                 raise HomeAssistantError(

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 import logging
+from typing import Any
 
 from bleak import BleakClient
 from bleak_retry_connector import (
@@ -51,6 +52,7 @@ class SkellyClientAdapter:
         use_ble_proxy: bool = False,
         live_mode_should_connect: bool = False,
         logger: logging.Logger | logging.LoggerAdapter | None = None,
+        save_live_mode_wanted: Callable[[bool], None] | None = None,
     ) -> None:
         """Initialize the adapter.
 
@@ -58,6 +60,8 @@ class SkellyClientAdapter:
         address: optional BLE address for the Skelly device
         server_url: URL of the REST server for live mode features
         use_ble_proxy: if True, use REST server for BLE communication instead of direct connection
+        live_mode_should_connect: whether live mode is wanted (saved from last time)
+        save_live_mode_wanted: called when that changes, to keep it across restarts
         """
         self.hass = hass
         self.address = address
@@ -70,6 +74,9 @@ class SkellyClientAdapter:
         self._logger = logger or _LOGGER
         self._live_mode_callbacks: list = []
         self._live_mode_should_connect = live_mode_should_connect
+        self._save_live_mode_wanted = save_live_mode_wanted
+        # The last live-mode check couldn't reach the REST server
+        self._live_check_failed = False
         # Serializes connects, so the reconnect loop, the coordinator poll,
         # commands, the Connected switch and disconnect() never overlap.
         self._connect_lock = asyncio.Lock()
@@ -258,23 +265,136 @@ class SkellyClientAdapter:
             except Exception:
                 self._logger.exception("Error in live mode callback")
 
-    def set_live_mode_preference(self, should_connect: bool) -> None:
-        """Remember the desired live-mode state so it can be restored later."""
-        self._live_mode_should_connect = should_connect
+    def _set_live_mode_wanted(self, wanted: bool) -> None:
+        """Remember whether live mode is wanted, also across restarts."""
+        self._live_mode_should_connect = wanted
+        if self._save_live_mode_wanted is not None:
+            self._save_live_mode_wanted(wanted)
+        # The Live Mode switch shows the wanted state while BLE is down
+        self._notify_live_mode_change()
 
     @property
     def live_mode_should_connect(self) -> bool:
-        """Return True if live mode should be restored when possible."""
+        """Return True if live mode is wanted (restored when possible)."""
         return self._live_mode_should_connect
+
+    @property
+    def live_mode_address(self) -> str | None:
+        """Return the live-mode (classic BT) MAC address while connected."""
+        return self._client.live_mode_client_address
+
+    async def async_turn_on_live_mode(self, *, raise_errors: bool = False) -> str | None:
+        """Want live mode on and connect it.
+
+        It stays wanted (restored after reconnects and restarts) until
+        async_turn_off_live_mode, even if this connect fails. Returns the
+        connect result, or None on a failure (raised with raise_errors).
+        """
+        self._set_live_mode_wanted(True)
+        return await self.connect_live_mode(raise_errors=raise_errors)
+
+    async def async_turn_off_live_mode(self, *, raise_errors: bool = False) -> None:
+        """Want live mode off and disconnect it."""
+        self._set_live_mode_wanted(False)
+        await self.disconnect_live_mode(raise_errors=raise_errors)
+
+    def _live_check_unanswered(self, mac: str, reason: object) -> None:
+        """Note that the REST server couldn't say whether live mode is up."""
+        if not self._live_check_failed:
+            self._logger.warning(
+                "Could not check live mode device %s with the REST server (%s); "
+                "will check again on the next poll",
+                mac,
+                reason,
+            )
+        self._live_check_failed = True
+
+    async def async_check_live_mode(self) -> None:
+        """Check with the REST server that live mode is still connected.
+
+        If the server no longer lists the live-mode device, live mode is
+        cleaned up on our side and, if it should stay on, restored in the
+        background. If the server can't be asked (a timeout, a restart),
+        nothing changes: the next check asks again, so one hiccup doesn't
+        turn live mode off. The coordinator calls this on every poll.
+        """
+        expected_mac = self.live_mode_address
+        if not expected_mac:
+            return
+        try:
+            rest_status = await self._client.get_audio_status_live_mode()
+        except Exception as ex:
+            self._live_check_unanswered(expected_mac, ex)
+            return
+        bluetooth_status = rest_status.get("bluetooth")
+        connected_devices = (
+            bluetooth_status.get("devices")
+            if isinstance(bluetooth_status, dict)
+            else None
+        )
+        if not isinstance(connected_devices, list):
+            # An error reply (e.g. 503 while the server restarts)
+            self._live_check_unanswered(expected_mac, f"reply {rest_status!r}")
+            return
+        if self._live_check_failed:
+            self._logger.info("REST server answers again; live mode check resumed")
+        self._live_check_failed = False
+
+        self._logger.debug(
+            "REST server reports %d connected devices: %s",
+            len(connected_devices),
+            connected_devices,
+        )
+        # MAC addresses can differ in case
+        expected_mac_lower = expected_mac.lower()
+        if any(
+            str(device.get("mac", "")).lower() == expected_mac_lower
+            for device in connected_devices
+            if isinstance(device, dict)
+        ):
+            self._logger.debug(
+                "Live mode device %s is still connected to REST server", expected_mac
+            )
+            return
+        # Live mode may have been turned off or reconnected meanwhile
+        if self.live_mode_address != expected_mac:
+            return
+
+        self._logger.warning(
+            "Live mode device %s is no longer connected to REST server, cleaning up",
+            expected_mac,
+        )
+        await self.disconnect_live_mode()
+        # In the background: a pairing can take 30 s or more
+        self.start_live_mode_restore()
+
+    async def async_live_playback_active(self, mac: str | None) -> bool:
+        """Return True if the REST server is playing audio to mac.
+
+        One REST server can serve several Skellys, and its audio.is_playing
+        is True while any of them plays. Its sessions list has one entry per
+        target MAC; a server too old to send it only has the overall flag.
+        Errors are raised.
+        """
+        status = await self._client.get_audio_status_live_mode()
+        audio: dict[str, Any] = status.get("audio") or {}
+        sessions = audio.get("sessions")
+        if mac is None or not isinstance(sessions, list):
+            return bool(audio.get("is_playing", False))
+        return any(
+            isinstance(session, dict)
+            and str(session.get("target", "")).upper() == mac.upper()
+            and session.get("is_playing", False)
+            for session in sessions
+        )
 
     async def restore_live_mode_if_needed(self) -> None:
         """Reconnect live mode if it was previously on."""
         if not self._live_mode_should_connect:
             return
 
-        # Skip if the live-mode transport already reports a client address
-        live_mode_address = getattr(self._client, "live_mode_client_address", None)
-        if live_mode_address:
+        # Skip if live mode is connected already
+        if self.live_mode_address:
             return
 
         self._logger.info(

@@ -25,6 +25,7 @@ from homeassistant.helpers.storage import Store
 
 from .const import MOOD_LIGHT_SPEEDS, MOODS
 from .data import get_skelly_data, skelly_data
+from .entity import async_turn_on_live_mode
 from .file_settings import (
     FileSettings,
     LightSettings,
@@ -395,26 +396,13 @@ class SkellyStage:
             ) from None
 
     def live_mode_connected(self) -> bool:
-        return self.client.live_mode_client_address is not None
+        return self.adapter.live_mode_address is not None
 
     async def _async_turn_on_live_mode(self) -> None:
-        # Go through the Live Mode switch, so its state and the remembered
-        # preference ("leave it on") are updated the same as from the UI.
-        # Called on the entity directly, since a service call skips it while
-        # it is unavailable (e.g. before the first successful poll).
-        data = get_skelly_data(self.hass, self.entry_id)
-        switch = data.live_mode_switch if data is not None else None
+        # The same as the Live Mode switch, so live mode stays wanted
+        # ("leave it on") as when turned on from the UI
         try:
-            if switch is not None:
-                await switch.async_turn_on()
-            else:
-                # The switch entity is disabled: do what it would do
-                self.adapter.set_live_mode_preference(True)
-                self.hass.config_entries.async_update_entry(
-                    self.config_entry,
-                    options={**self.config_entry.options, "live_mode_connected": True},
-                )
-                await self.adapter.connect_live_mode()
+            await async_turn_on_live_mode(self.adapter)
         except HomeAssistantError as err:
             _LOGGER.warning("%s", err)
         except Exception:

@@ -84,6 +84,36 @@ async def test_perform_speaks_with_mood_and_restores_look(
     assert device.lights[0].rgb == (1, 2, 3) and device.lights[0].brightness == 200
 
 
+async def test_perform_turns_live_mode_on_like_the_switch(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    switch = entity_id(hass, setup_integration, "switch", "live_mode")
+    assert hass.states.get(switch).state == STATE_OFF
+    await perform(hass, message="Hi")
+    assert setup_integration.options["live_mode_connected"] is True
+    assert hass.states.get(switch).state == STATE_ON
+
+
+async def test_perform_turns_live_mode_on_with_the_switch_disabled(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    from homeassistant.helpers import entity_registry as er
+
+    entry = setup_integration
+    switch = entity_id(hass, entry, "switch", "live_mode")
+    er.async_get(hass).async_update_entity(
+        switch, disabled_by=er.RegistryEntryDisabler.USER
+    )
+    assert await hass.config_entries.async_reload(entry.entry_id)
+    await hass.async_block_till_done()
+    assert hass.states.get(switch) is None
+
+    result = await perform(hass, message="Hi")
+    assert result["status"] == "ok"
+    assert rest_server.connected
+    assert entry.options["live_mode_connected"] is True
+
+
 async def test_perform_without_mood_leaves_look_alone(
     hass, setup_integration, device, rest_server, tts_entity
 ):
@@ -392,6 +422,8 @@ async def test_live_mode_switch_reports_failed_connect(
         )
     assert not rest_server.connected
     assert hass.states.get(switch).state == STATE_OFF
+    # Still wanted, so a reconnect or restart tries again
+    assert setup_integration.options["live_mode_connected"] is True
 
 
 async def play_clip(hass, speaker, clip):

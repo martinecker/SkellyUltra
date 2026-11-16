@@ -93,6 +93,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: SkellyConfigEntry) -> bo
     device_info = get_device_info(hass, entry)
     device_name = get_device_name(entry, device_info)
     device_logger = DeviceLoggerAdapter(_LOGGER, {"device_name": device_name})
+
+    @callback
+    def _save_live_mode_wanted(wanted: bool) -> None:
+        if entry.options.get("live_mode_connected") != wanted:
+            hass.config_entries.async_update_entry(
+                entry, options={**entry.options, "live_mode_connected": wanted}
+            )
+
     adapter = SkellyClientAdapter(
         hass,
         address=address,
@@ -100,6 +108,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SkellyConfigEntry) -> bo
         use_ble_proxy=use_ble_proxy,
         live_mode_should_connect=options.get("live_mode_connected", False),
         logger=device_logger,
+        save_live_mode_wanted=_save_live_mode_wanted,
     )
     coordinator = SkellyCoordinator(
         hass,
