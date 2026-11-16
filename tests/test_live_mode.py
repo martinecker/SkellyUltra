@@ -23,7 +23,6 @@ from .rest_sim import LIVE_MAC
 
 @pytest.fixture(autouse=True)
 def fast_perform(monkeypatch):
-    monkeypatch.setattr(stage_module, "COMMAND_DELAY", 0)
     monkeypatch.setattr(stage_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
 
 
@@ -136,7 +135,7 @@ async def test_perform_tts_failure(
     hass, setup_integration, device, rest_server, tts_entity
 ):
     tts_entity.fail = True
-    with pytest.raises(HomeAssistantError, match="Text-to-speech failed"):
+    with pytest.raises(HomeAssistantError, match="Text-to-speech.*failed"):
         await perform(hass, message="Hi", mood="spooky")
     assert rest_server.plays == []
 

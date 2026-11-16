@@ -196,9 +196,11 @@ async def async_push_live_settings(
             continue
         light = cached_lights[channel]
         rgb = light.get("rgb")
+        effect_type = light.get("effect_type")
         lights[channel] = LightSettings(
             brightness=light.get("brightness"),
-            effect_type=light.get("effect_type"),
+            # The device can report 0, which isn't a mode it accepts
+            effect_type=effect_type if effect_type in (1, 2, 3) else None,
             # Sent for static lights too, so the speed HA shows survives a
             # later change to another effect.
             effect_speed=light.get("effect_speed"),

@@ -532,3 +532,41 @@ async def test_lethal_lily_gets_no_eye_write(hass, mock_ble):
     assert len(writes(device, VOLUME)) == 1  # nothing resent
     assert device.lights[0].rgb == (255, 0, 0)
     assert device.volume == 50
+
+
+async def test_live_push_skips_light_modes_the_device_rejects():
+    """A cached effect type of 0 (as the device can report) isn't sent."""
+    from custom_components.skelly_ultra.const import DEVICE_PROFILES
+    from custom_components.skelly_ultra.file_settings import async_push_live_settings
+
+    class Recorder:
+        def __init__(self):
+            self.modes = []
+            self.rgb = []
+
+        async def set_light_brightness(self, channel, *args):
+            pass
+
+        async def set_light_mode(self, channel, mode, *args):
+            self.modes.append((channel, mode))
+
+        async def set_light_speed(self, channel, *args):
+            pass
+
+        async def set_light_rgb(self, channel, *args):
+            self.rgb.append(channel)
+
+        async def set_eye_icon(self, *args):
+            pass
+
+    profile = next(iter(DEVICE_PROFILES.values()))
+    channels = [light["channel"] for light in profile["lights"]]
+    lights = [
+        {"rgb": (1, 2, 3), "brightness": 9, "effect_type": 0, "color_cycle": 0}
+        for _ in range(max(channels) + 1)
+    ]
+    lights[channels[0]]["effect_type"] = 2
+    client = Recorder()
+    await async_push_live_settings(client, profile, {"lights": lights})
+    assert client.modes == [(channels[0], 2)]
+    assert client.rgb == channels

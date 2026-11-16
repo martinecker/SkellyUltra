@@ -35,7 +35,6 @@ URL_2 = "http://rattles.local:8765"  # the mock matches hosts, not ports
 
 @pytest.fixture(autouse=True)
 def fast_perform(monkeypatch):
-    monkeypatch.setattr(stage_module, "COMMAND_DELAY", 0)
     monkeypatch.setattr(stage_module, "LIVE_MODE_POLL_INTERVAL", 0.01)
 
 

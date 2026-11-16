@@ -13,6 +13,7 @@ file (for example, generated TTS audio) only need async_upload_audio.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import tempfile
@@ -29,7 +30,7 @@ from homeassistant.components.media_source.const import (
     URI_SCHEME as MEDIA_SOURCE_URI_SCHEME,
     URI_SCHEME_REGEX as MEDIA_SOURCE_URI_SCHEME_REGEX,
 )
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.util import raise_if_invalid_path, slugify
@@ -151,13 +152,15 @@ async def _async_download_to_temp_file(
     return temp_path
 
 
-async def _async_tts_media_to_temp_file(
-    hass: HomeAssistant, media_id: str, temp_files: list[Path], engine: str
+async def async_tts_to_temp_file(
+    hass: HomeAssistant, media_id: str, engine: str, prefix: str = "skelly_tts_"
 ) -> Path:
     """Generate the audio for a TTS media source ID into a new temp file.
 
     The audio is fetched straight from the TTS manager, not over HTTP, so
-    this works without a configured HA URL.
+    this works without a configured HA URL. The caller deletes the file. If
+    the caller is cancelled while the file is written, it is deleted once
+    it has been.
     """
     try:
         extension, data = await tts.async_get_media_source_audio(hass, media_id)
@@ -165,16 +168,36 @@ async def _async_tts_media_to_temp_file(
         raise HomeAssistantError(f"Text-to-speech with {engine} failed: {err}") from err
 
     def write() -> Path:
-        temp_fd, temp_name = tempfile.mkstemp(
-            prefix="skelly_tts_", suffix=f".{extension}"
-        )
-        temp_path = Path(temp_name)
-        temp_files.append(temp_path)
-        with os.fdopen(temp_fd, "wb") as file:
-            file.write(data)
-        return temp_path
+        temp_fd, temp_name = tempfile.mkstemp(prefix=prefix, suffix=f".{extension}")
+        try:
+            with os.fdopen(temp_fd, "wb") as file:
+                file.write(data)
+        except BaseException:
+            remove_temp_files([Path(temp_name)])
+            raise
+        return Path(temp_name)
 
-    return await hass.async_add_executor_job(write)
+    future = hass.async_add_executor_job(write)
+    try:
+        return await asyncio.shield(future)
+    except asyncio.CancelledError:
+
+        @callback
+        def remove(done: asyncio.Future[Path]) -> None:
+            if not done.cancelled() and done.exception() is None:
+                hass.async_add_executor_job(remove_temp_files, [done.result()])
+
+        future.add_done_callback(remove)
+        raise
+
+
+async def _async_tts_media_to_temp_file(
+    hass: HomeAssistant, media_id: str, temp_files: list[Path], engine: str
+) -> Path:
+    """Like async_tts_to_temp_file, adding the file to temp_files."""
+    temp_path = await async_tts_to_temp_file(hass, media_id, engine)
+    temp_files.append(temp_path)
+    return temp_path
 
 
 async def _async_resolve_media_source_id(

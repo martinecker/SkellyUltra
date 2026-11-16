@@ -9,10 +9,8 @@ a camera snapshot.
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 from pathlib import Path
-import tempfile
 from typing import Any
 
 from homeassistant.components import tts
@@ -21,7 +19,14 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import DOMAIN, MOOD_LIGHT_SPEEDS, MOODS
+from .file_settings import (
+    FileSettings,
+    LightSettings,
+    async_apply_file_settings,
+    async_push_live_settings,
+)
 from .helpers import get_device_profile, movement_bits
+from .uploads import async_tts_to_temp_file, remove_temp_files
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,11 +37,6 @@ MOVEMENT_NONE = "none"
 
 DEFAULT_LIVE_MODE_TIMEOUT = 30.0
 DEFAULT_CAMERA_WAIT = 1.0
-
-# Delay between device writes. They are unacknowledged and the device can
-# drop them when sent back-to-back (same as FILE_SETTING_WRITE_DELAY in
-# file_settings.py).
-COMMAND_DELAY = 0.04
 
 # How often to check whether live mode has connected
 LIVE_MODE_POLL_INTERVAL = 0.5
@@ -93,39 +93,16 @@ async def async_render_tts(
         media_id = tts.generate_media_source_id(
             hass, line, engine=tts_entity, language=language, options=options
         )
-        extension, audio = await tts.async_get_media_source_audio(hass, media_id)
     except Exception as err:
         raise HomeAssistantError(f"Text-to-speech failed: {err}") from err
-
-    def write() -> Path:
-        with tempfile.NamedTemporaryFile(
-            delete=False, prefix="skelly_perform_", suffix=f".{extension}"
-        ) as file:
-            file.write(audio)
-        return Path(file.name)
-
-    future = hass.async_add_executor_job(write)
-    try:
-        return await asyncio.shield(future)
-    except asyncio.CancelledError:
-        # The file is written anyway; delete it once it is
-        @callback
-        def remove(done: asyncio.Future[Path]) -> None:
-            if not done.cancelled() and done.exception() is None:
-                hass.async_add_executor_job(_unlink_quietly, done.result())
-
-        future.add_done_callback(remove)
-        raise
-
-
-def _unlink_quietly(path: Path) -> None:
-    with contextlib.suppress(OSError):
-        path.unlink()
+    return await async_tts_to_temp_file(
+        hass, media_id, tts_entity, prefix="skelly_perform_"
+    )
 
 
 async def async_remove_file(hass: HomeAssistant, path: Path) -> None:
     """Delete a temporary file, ignoring errors."""
-    await hass.async_add_executor_job(_unlink_quietly, path)
+    await hass.async_add_executor_job(remove_temp_files, [path])
 
 
 async def async_wait_for_camera_update(
@@ -350,52 +327,58 @@ class SkellyStage:
             cache.get("action"),
         )
 
-    async def _paced(self, command) -> None:
-        await command
-        await asyncio.sleep(COMMAND_DELAY)
-
     async def async_apply_mood(self, mood_def: dict) -> None:
-        client = self.client
+        light_modes = self.profile["light_modes"]
+        mode = (
+            light_modes.index(
+                self.profile["mood_light_styles"][mood_def["light_style"]]
+            )
+            + 1
+        )
+        speed = (
+            MOOD_LIGHT_SPEEDS[mood_def["light_speed"]]
+            if mood_def["light_speed"]
+            else None
+        )
+        color_cycle = 1 if mood_def["color_cycle"] else 0
+        colors = mood_def["colors"]
+
+        eye_icon = None
+        if self.profile.get("has_eye_image"):
+            eye_icon = _eye_icon_index(self.profile, mood_def["eye_icon"])
+
+        lights: dict[int, LightSettings] = {}
+        changes: dict[int, dict[str, Any]] = {}
+        for position, light_def in enumerate(self.profile["lights"]):
+            channel = light_def["channel"]
+            rgb = tuple(colors[min(position, len(colors) - 1)])
+            lights[channel] = LightSettings(
+                brightness=255,
+                effect_type=mode,
+                effect_speed=speed,
+                rgb=rgb,
+                color_cycle=color_cycle,
+            )
+            changes[channel] = {
+                "rgb": rgb,
+                "brightness": 255,
+                "effect_type": mode,
+                "color_cycle": color_cycle,
+            }
+            if speed is not None:
+                changes[channel]["effect_speed"] = speed
+
         async with self.coordinator.action_lock:
-            if self.profile.get("has_eye_image"):
-                icon = _eye_icon_index(self.profile, mood_def["eye_icon"])
-                if icon is not None:
-                    await self._paced(client.set_eye_icon(icon))
-                    self.coordinator.async_update_data_optimistic("eye_icon", icon)
-
-            light_modes = self.profile["light_modes"]
-            mode = (
-                light_modes.index(
-                    self.profile["mood_light_styles"][mood_def["light_style"]]
-                )
-                + 1
+            # Cluster 0 with no name addresses the live settings
+            await async_apply_file_settings(
+                self.client,
+                self.profile,
+                0,
+                "",
+                FileSettings(eye_icon=eye_icon, lights=lights),
             )
-            speed = (
-                MOOD_LIGHT_SPEEDS[mood_def["light_speed"]]
-                if mood_def["light_speed"]
-                else None
-            )
-            color_cycle = 1 if mood_def["color_cycle"] else 0
-            colors = mood_def["colors"]
-
-            changes: dict[int, dict[str, Any]] = {}
-            for position, light_def in enumerate(self.profile["lights"]):
-                channel = light_def["channel"]
-                r, g, b = colors[min(position, len(colors) - 1)]
-                await self._paced(client.set_light_rgb(channel, r, g, b, color_cycle))
-                await self._paced(client.set_light_brightness(channel, 255))
-                await self._paced(client.set_light_mode(channel, mode))
-                if speed is not None:
-                    await self._paced(client.set_light_speed(channel, speed))
-
-                changes[channel] = {
-                    "rgb": (r, g, b),
-                    "brightness": 255,
-                    "effect_type": mode,
-                    "color_cycle": color_cycle,
-                }
-                if speed is not None:
-                    changes[channel]["effect_speed"] = speed
+            if eye_icon is not None:
+                self.coordinator.async_update_data_optimistic("eye_icon", eye_icon)
             self.coordinator.async_update_lights(changes)
 
     async def async_send_movement(self, action: int) -> None:
@@ -420,37 +403,13 @@ class SkellyStage:
         Best effort: a failure is logged, so it doesn't hide the result or
         the error of the perform or conversation itself.
         """
-        client = self.client
         try:
             async with self.coordinator.action_lock:
-                if eye_icon is not None and self.profile.get("has_eye_image"):
-                    await self._paced(client.set_eye_icon(int(eye_icon)))
-
-                for light_def in self.profile["lights"]:
-                    channel = light_def["channel"]
-                    if channel >= len(lights):
-                        continue
-                    light = lights[channel]
-                    if light.get("rgb") is not None:
-                        r, g, b = light["rgb"]
-                        await self._paced(
-                            client.set_light_rgb(
-                                channel, r, g, b, int(light.get("color_cycle") or 0)
-                            )
-                        )
-                    if light.get("brightness") is not None:
-                        await self._paced(
-                            client.set_light_brightness(channel, light["brightness"])
-                        )
-                    if light.get("effect_type"):
-                        await self._paced(
-                            client.set_light_mode(channel, light["effect_type"])
-                        )
-                    if light.get("effect_speed") is not None:
-                        await self._paced(
-                            client.set_light_speed(channel, light["effect_speed"])
-                        )
-
+                await async_push_live_settings(
+                    self.client,
+                    self.profile,
+                    {"eye_icon": eye_icon, "lights": lights},
+                )
                 if eye_icon is not None:
                     self.coordinator.async_update_data_optimistic("eye_icon", eye_icon)
                 if lights:
