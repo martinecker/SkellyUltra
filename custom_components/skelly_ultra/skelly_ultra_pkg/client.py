@@ -10,6 +10,7 @@ import aiohttp
 from bleak import BleakClient, BleakScanner
 
 from . import commands, parser
+from .events import ConnectionLostError, EventDispatcher, EventStream
 
 logger = logging.getLogger(__name__)
 
@@ -18,12 +19,7 @@ logger = logging.getLogger(__name__)
 PROXY_POLL_ERROR_LIMIT = 3
 
 
-class ConnectionLostError(TimeoutError):
-    """Raised to a caller waiting for a reply when the connection drops.
-
-    Subclasses TimeoutError so existing callers that handle a reply timeout
-    also handle this, just without waiting out the full timeout.
-    """
+__all__ = ["ConnectionLostError", "SkellyClient"]
 
 
 def _is_proxy_session_lost(error: str) -> bool:
@@ -77,7 +73,8 @@ class SkellyClient:
         self._parsed_handler: Callable[[Any, Any], None] | None = None
         self._disconnected_handler: Callable[[], None] | None = None
         self._reconnect_handler: Callable[[], Awaitable[bool]] | None = None
-        self.events: asyncio.Queue = asyncio.Queue()
+        # Parsed notifications go to whoever waits for them (see events.py)
+        self._events = EventDispatcher()
         # Set when the current connection is lost; replaced once each new
         # connection is up, so waiters can tell a drop of their connection from
         # a later one.
@@ -158,29 +155,13 @@ class SkellyClient:
         self._notify_disconnected()
 
     def _discard_pending_events(self) -> None:
-        """Drop queued events and wake anyone waiting for a reply.
+        """Drop buffered replies and wake anyone waiting for one.
 
         Replies to queries sent on a lost connection will never arrive, and
-        any already queued must not be matched to queries on the next one.
+        any already received must not be taken for replies on the next one.
         """
         self._connection_lost.set()
-        while not self.events.empty():
-            self.events.get_nowait()
-
-    def _drop_queued_file_info(self) -> None:
-        """Drop queued file info events; keep every other event, in order."""
-        kept = []
-        dropped = 0
-        while not self.events.empty():
-            ev = self.events.get_nowait()
-            if isinstance(ev, parser.FileInfoEvent):
-                dropped += 1
-            else:
-                kept.append(ev)
-        for ev in kept:
-            self.events.put_nowait(ev)
-        if dropped:
-            logger.debug("Dropped %d stale FileInfoEvents", dropped)
+        self._events.clear()
 
     def _notify_disconnected(self) -> None:
         """Call the registered disconnected handler, if any."""
@@ -190,32 +171,30 @@ class SkellyClient:
             except Exception:
                 logger.exception("Error in disconnected handler")
 
-    async def _next_event(self, timeout: float, connection_lost: asyncio.Event):
-        """Wait for the next queued event.
+    def subscribe(
+        self, predicate: Callable[[Any], bool]
+    ) -> contextlib.AbstractContextManager[EventStream]:
+        """Collect the device's events matching predicate, until the block ends.
 
-        Raises TimeoutError after `timeout`, or ConnectionLostError as soon as
-        `connection_lost` (the waiter's connection) is set.
+        Use as a context manager, entered before sending the command whose
+        replies are wanted.
         """
-        if connection_lost.is_set():
-            raise ConnectionLostError("Connection to device lost")
-        get_task = asyncio.ensure_future(self.events.get())
-        lost_task = asyncio.ensure_future(connection_lost.wait())
-        try:
-            await asyncio.wait(
-                (get_task, lost_task),
-                timeout=timeout,
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-        finally:
-            lost_task.cancel()
-            if not get_task.done():
-                get_task.cancel()
-        if connection_lost.is_set():
-            # A reply that raced the drop belongs to the lost connection.
-            raise ConnectionLostError("Connection to device lost")
-        if not get_task.done() or get_task.cancelled():
-            raise TimeoutError
-        return get_task.result()
+        return self._events.subscribe(predicate)
+
+    def add_event_listener(self, listener: Callable[[Any], None]) -> Callable[[], None]:
+        """Call listener(event) for each parsed event; returns a remover.
+
+        For events nobody asked for, e.g. parser.PlaybackEvent when playback
+        starts or ends on the device. The listener must not block.
+        """
+        return self._events.add_listener(listener)
+
+    def _handle_parsed_event(self, sender: Any, parsed: Any) -> None:
+        """Hand a parsed notification to its waiters and listeners."""
+        self._events.dispatch(parsed)
+        if self._parsed_handler:
+            with contextlib.suppress(Exception):
+                self._parsed_handler(sender, parsed)
 
     @property
     def is_connected(self) -> bool:
@@ -323,17 +302,12 @@ class SkellyClient:
             try:
                 parsed = parser.parse_notification(sender, data)
                 if parsed is not None:
-                    # push into events queue
-                    try:
-                        self.events.put_nowait(parsed)
-                        logger.debug("Parsed event queued: %s", parsed)
-                    except asyncio.QueueFull:
-                        pass
-                    if self._parsed_handler:
-                        with contextlib.suppress(Exception):
-                            self._parsed_handler(sender, parsed)
+                    self._handle_parsed_event(sender, parsed)
             except Exception:
-                pass
+                # e.g. a frame too short to parse; seen before, so not an error
+                logger.debug(
+                    "Couldn't handle notification %s", data.hex(), exc_info=True
+                )
 
         try:
             await self._client.start_notify(commands.NOTIFY_UUID, _notif_cb)
@@ -868,10 +842,8 @@ class SkellyClient:
         Raises:
             TimeoutError: If no confirmation is received within the timeout period
         """
-        await self.send_command(commands.delete_file(file_index, cluster))
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.DeleteFileEvent),
-            timeout=timeout,
+        ev = await self._request(
+            commands.delete_file(file_index, cluster), parser.DeleteFileEvent, timeout
         )
         return ev.success
 
@@ -891,38 +863,44 @@ class SkellyClient:
         Returns:
             List of FileInfoEvent objects received from the device
 
-        File info left in the queue from an earlier read (one that timed out,
-        or entries another waiter put back) is dropped first. A file reported
-        twice is counted once, its later report winning, and a report with a
-        different total (a late reply to an earlier read) starts the count
-        over, so the list has each file once.
+        Only file info that arrives after the query is sent counts. A file
+        reported twice is counted once, its later report winning, and a report
+        with a different total (a late reply to an earlier read that timed
+        out, or the files changed) starts the count over, so the list has each
+        file once.
 
         Raises:
             TimeoutError: If not all events are received within the timeout period
         """
-        self._drop_queued_file_info()
-        await self.query_file_list()
-
         loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        connection_lost = self._connection_lost
-        temp = []
         # By file_index, in the order first reported
         by_index: dict[int, parser.FileInfoEvent] = {}
         expected_count = None
 
-        try:
-            while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise TimeoutError(
-                        f"Timeout waiting for file info events. "
-                        f"Expected {expected_count}, received {len(by_index)}",
-                    )
+        async with self._events.reply_lock(parser.FileInfoEvent):
+            with self.subscribe(
+                lambda e: isinstance(e, parser.FileInfoEvent)
+            ) as stream:
+                await self.query_file_list()
+                # Like _request: the time counts from the query, and a
+                # reconnect while sending gives a new connection_lost
+                deadline = loop.time() + timeout
+                connection_lost = self._connection_lost
+                while expected_count is None or len(by_index) < expected_count:
+                    remaining = deadline - loop.time()
+                    try:
+                        if remaining <= 0:
+                            raise TimeoutError
+                        ev = await stream.next(remaining, connection_lost)
+                    except ConnectionLostError:
+                        # (A TimeoutError too, but not this timeout)
+                        raise
+                    except TimeoutError:
+                        raise TimeoutError(
+                            f"Timeout waiting for file info events. "
+                            f"Expected {expected_count}, received {len(by_index)}",
+                        ) from None
 
-                ev = await self._next_event(remaining, connection_lost)
-
-                if isinstance(ev, parser.FileInfoEvent):
                     if expected_count is not None and ev.total_files != expected_count:
                         # A late reply to an earlier read, or the files changed
                         # meanwhile: count again from this report on
@@ -938,38 +916,15 @@ class SkellyClient:
                             "Repeated FileInfoEvent for file %d", ev.file_index
                         )
                     by_index[ev.file_index] = ev
-                    logger.debug("Received FileInfoEvent %d", len(by_index))
-
-                    # First event tells us how many total to expect
+                    # The first report tells how many to expect
                     if expected_count is None:
                         expected_count = ev.total_files
                         logger.debug(
-                            "Expecting %d total FileInfoEvents",
-                            expected_count,
+                            "Expecting %d total FileInfoEvents", expected_count
                         )
 
-                    # Check if we've received all expected events
-                    if len(by_index) >= expected_count:
-                        logger.debug(
-                            "Collected all %d FileInfoEvents",
-                            len(by_index),
-                        )
-                        return list(by_index.values())
-                else:
-                    # Non-FileInfoEvent - save for re-queuing
-                    logger.debug(
-                        "Non-FileInfoEvent received while waiting: %s",
-                        type(ev).__name__,
-                    )
-                    temp.append(ev)
-
-        finally:
-            # Re-queue non-FileInfoEvent events, unless they came from a
-            # connection that has since been lost
-            if not connection_lost.is_set():
-                for e in temp:
-                    with contextlib.suppress(Exception):
-                        self.events.put_nowait(e)
+        logger.debug("Collected all %d FileInfoEvents", len(by_index))
+        return list(by_index.values())
 
     async def set_file_order(
         self,
@@ -982,79 +937,51 @@ class SkellyClient:
             commands.set_file_order(total, index, file_serial, filename),
         )
 
-    # Awaitable helpers that send a query and wait for a matching parsed event
-    async def _wait_for_event(self, predicate, timeout: float = 2.0):
-        """Wait for an event from self.events that matches predicate.
+    # Awaitable helpers that send a query and wait for its reply
+    async def _request(self, command: bytes, reply_type: type, timeout: float) -> Any:
+        """Send command and return the first reply_type event that follows.
 
-        Non-matching events are temporarily held and re-queued after a match or timeout.
-        Returns the matched event or raises asyncio.TimeoutError, or
-        ConnectionLostError as soon as the connection drops.
+        One query per reply type waits at a time, since replies can't be told
+        apart. Raises TimeoutError, or ConnectionLostError as soon as the
+        connection drops.
         """
-        loop = asyncio.get_running_loop()
-        deadline = loop.time() + timeout
-        connection_lost = self._connection_lost
-        temp = []
-        try:
-            while True:
-                remaining = deadline - loop.time()
-                if remaining <= 0:
-                    raise TimeoutError
-                ev = await self._next_event(remaining, connection_lost)
-                if predicate(ev):
-                    logger.debug("Matched event: %s", ev)
-                    return ev
-                # Log non-matching events for debugging before re-queuing
-                logger.debug("Non-matching event received while waiting: %s", ev)
-                temp.append(ev)
-        finally:
-            # re-queue temp events in order, unless they came from a
-            # connection that has since been lost
-            if not connection_lost.is_set():
-                for e in temp:
-                    with contextlib.suppress(Exception):
-                        self.events.put_nowait(e)
+        async with self._events.reply_lock(reply_type):
+            with self.subscribe(lambda e: isinstance(e, reply_type)) as stream:
+                await self.send_command(command)
+                # After sending: a reconnect while sending gives a new one
+                ev = await stream.next(timeout, self._connection_lost)
+        logger.debug("Matched event: %s", ev)
+        return ev
 
     async def get_volume(self, timeout: float = 2.0) -> int:
         """Query volume and await a VolumeEvent; returns the numeric volume."""
-        await self.send_command(commands.query_volume())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.VolumeEvent),
-            timeout=timeout,
-        )
+        ev = await self._request(commands.query_volume(), parser.VolumeEvent, timeout)
         return ev.volume
 
     async def get_live_name(self, timeout: float = 2.0) -> str:
         """Query the live name and await a LiveNameEvent; returns the name string."""
-        await self.send_command(commands.query_live_name())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveNameEvent),
-            timeout=timeout,
+        ev = await self._request(
+            commands.query_live_name(), parser.LiveNameEvent, timeout
         )
         return ev.name
 
     async def get_file_order(self, timeout: float = 2.0) -> list[int]:
-        await self.send_command(commands.query_file_order())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.FileOrderEvent),
-            timeout=timeout,
+        ev = await self._request(
+            commands.query_file_order(), parser.FileOrderEvent, timeout
         )
         return ev.file_indices
 
     async def get_eye_icon(self, timeout: float = 2.0) -> int:
         """Query the device live mode and return the eye_icon integer."""
-        await self.send_command(commands.query_live_mode())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent),
-            timeout=timeout,
+        ev = await self._request(
+            commands.query_live_mode(), parser.LiveModeEvent, timeout
         )
         return ev.eye_icon
 
     async def get_live_mode(self, timeout: float = 2.0) -> parser.LiveModeEvent:
         """Query the device live mode and return the parsed LiveModeEvent."""
-        await self.send_command(commands.query_live_mode())
-        return await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent),
-            timeout=timeout,
+        return await self._request(
+            commands.query_live_mode(), parser.LiveModeEvent, timeout
         )
 
     async def get_light_info(
@@ -1067,10 +994,8 @@ class SkellyClient:
         Channel is zero-based and valid values are 0..5. Raises IndexError if
         the channel is out of range.
         """
-        await self.send_command(commands.query_live_mode())
-        ev = await self._wait_for_event(
-            lambda e: isinstance(e, parser.LiveModeEvent),
-            timeout=timeout,
+        ev = await self._request(
+            commands.query_live_mode(), parser.LiveModeEvent, timeout
         )
         lights = ev.lights
         if channel < 0 or channel >= len(lights):
@@ -1078,10 +1003,8 @@ class SkellyClient:
         return lights[channel]
 
     async def get_capacity(self, timeout: float = 2.0) -> parser.CapacityEvent:
-        await self.send_command(commands.query_capacity())
-        return await self._wait_for_event(
-            lambda e: isinstance(e, parser.CapacityEvent),
-            timeout=timeout,
+        return await self._request(
+            commands.query_capacity(), parser.CapacityEvent, timeout
         )
 
     async def get_device_params(self, timeout: float = 2.0) -> parser.DeviceParamsEvent:
@@ -1090,10 +1013,8 @@ class SkellyClient:
         Returns:
             DeviceParamsEvent with device configuration parameters.
         """
-        await self.send_command(commands.query_device_params())
-        return await self._wait_for_event(
-            lambda e: isinstance(e, parser.DeviceParamsEvent),
-            timeout=timeout,
+        return await self._request(
+            commands.query_device_params(), parser.DeviceParamsEvent, timeout
         )
 
     # Private helper methods for connect_live_mode
@@ -1523,16 +1444,13 @@ class SkellyClient:
                             try:
                                 parsed = parser.parse_notification(sender, raw_data)
                                 if parsed is not None:
-                                    try:
-                                        self.events.put_nowait(parsed)
-                                        logger.debug("Parsed event queued: %s", parsed)
-                                    except asyncio.QueueFull:
-                                        pass
-                                    if self._parsed_handler:
-                                        with contextlib.suppress(Exception):
-                                            self._parsed_handler(sender, parsed)
+                                    self._handle_parsed_event(sender, parsed)
                             except Exception:
-                                pass
+                                logger.debug(
+                                    "Couldn't handle notification %s",
+                                    raw_data.hex(),
+                                    exc_info=True,
+                                )
 
                         except Exception:
                             logger.exception("Error processing notification from proxy")

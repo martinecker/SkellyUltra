@@ -103,6 +103,8 @@ class FakeSkellyDevice:
         # Chunks larger than this get lost (an MTU the link can't carry)
         self.max_chunk_payload: int | None = None
         self.unresponsive = False  # swallow queries (simulates a hung device)
+        # Report a lost upload chunk at once (BBC1 + early BBC2)
+        self.report_lost_chunks = False
         self.fail_connect = False
         self.connect_count = 0
         self.reachable = True  # False: out of range, HA cannot see it
@@ -387,6 +389,11 @@ class FakeSkellyDevice:
         assert self._upload is not None
         index, chunk = int.from_bytes(p[0:2], "big"), p[2:]
         if self.max_chunk_payload is not None and len(chunk) > self.max_chunk_payload:
+            if self.report_lost_chunks:
+                # Like the real device can: report the chunk dropped, and end
+                # the transfer as failed before the upload has finished
+                self._notify(b"\xbb\xc1\x01" + index.to_bytes(2, "big"))
+                self._notify(b"\xbb\xc2\x01" + index.to_bytes(2, "big"))
             return  # lost on the air
         self._upload["chunks"][index] = chunk
 
@@ -410,7 +417,17 @@ class FakeSkellyDevice:
             existing.data = data
             existing.action, existing.eye_icon, existing.lights = 0, 1, _lights()
         else:
-            self.add_file(name, data=data)
+            new = self.add_file(name, data=data)
+            # Like the real device: a new file goes first in the play order,
+            # but only the last entry moves down, so the first one is lost
+            # and the last one is listed twice ([3, 1] -> [4, 1, 1]).
+            order = self.order[:-1]
+            if order:
+                order.append(order[-1])
+                order[0] = new.index
+            else:
+                order = [new.index]
+            self.order = order
         self._upload = None
         self._notify(b"\xbb\xc3\x00")
 

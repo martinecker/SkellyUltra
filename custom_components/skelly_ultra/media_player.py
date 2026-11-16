@@ -22,7 +22,7 @@ from homeassistant.components.media_source.const import (
     URI_SCHEME as MEDIA_SOURCE_URI_SCHEME,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -547,21 +547,22 @@ class SkellyInternalFilesPlayer(
         self._current_file_index: int | None = None
         self._current_file_duration: int | None = None
         self._is_playing = False
-        self._monitor_task: asyncio.Task | None = None
 
         # Cache for eye icon images (loaded asynchronously on startup)
         self._profile = profile
         self._eye_icon_cache: dict[int, str] = {}
 
     async def async_added_to_hass(self) -> None:
-        """When entity is added to hass, load the file list and start event monitoring."""
+        """When entity is added to hass, follow playback and load the file list."""
         await super().async_added_to_hass()
+        # Show play/pause reports from the device as they arrive
+        self.async_on_remove(
+            self.adapter.client.add_event_listener(self._handle_device_event)
+        )
         # Pre-load eye icon images to avoid blocking I/O in property getter
         await self._async_load_eye_icon_cache()
         # Load file list on startup via coordinator
         await self.coordinator.async_refresh_file_list()
-        # Start monitoring PlaybackEvent notifications from device
-        self._monitor_task = asyncio.create_task(self._monitor_play_pause_events())
 
     async def _async_load_eye_icon_cache(self) -> None:
         """Load all eye icon images into cache asynchronously.
@@ -587,93 +588,34 @@ class SkellyInternalFilesPlayer(
                     "Failed to load eye icon image %d: %s", icon_num, img_path
                 )
 
-    async def async_will_remove_from_hass(self) -> None:
-        """Clean up when entity is removed."""
-        if self._monitor_task:
-            self._monitor_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._monitor_task
-        # Don't leave polling suppressed if we're torn down mid-playback.
-        self.coordinator.mark_playback_inactive()
-        await super().async_will_remove_from_hass()
+    @callback
+    def _handle_device_event(self, event: Any) -> None:
+        """Follow PlaybackEvents: play/pause reported by the device."""
+        if not isinstance(event, parser.PlaybackEvent):
+            return
+        _LOGGER.debug(
+            "Received PlaybackEvent: file_index=%d, playing=%s, duration=%d",
+            event.file_index,
+            event.playing,
+            event.duration,
+        )
 
-    async def _monitor_play_pause_events(self) -> None:
-        """Monitor the client's event queue for PlaybackEvent notifications.
+        # The end of a file played before the one now playing (reported
+        # after it started)
+        if (
+            not event.playing
+            and self._is_playing
+            and event.file_index != self._current_file_index
+        ):
+            return
 
-        This background task watches for device-initiated play/pause state changes
-        and updates the media player state accordingly.
-        """
-        _LOGGER.debug("Started monitoring PlaybackEvent notifications")
+        # Update our state to match the device
+        self._current_file_index = event.file_index
+        self._current_file_duration = event.duration
+        self._is_playing = event.playing
 
-        try:
-            while True:
-                # Check the event queue for PlaybackEvent
-                # We check without blocking to avoid interfering with other queue consumers
-                events_to_requeue = []
-
-                try:
-                    # Try to get an event without blocking
-                    while not self.adapter.client.events.empty():
-                        try:
-                            event = self.adapter.client.events.get_nowait()
-
-                            if isinstance(event, parser.PlaybackEvent):
-                                _LOGGER.debug(
-                                    "Received PlaybackEvent: file_index=%d, playing=%s, duration=%d",
-                                    event.file_index,
-                                    event.playing,
-                                    event.duration,
-                                )
-
-                                # The end of a file played before the one
-                                # now playing (reported after it started)
-                                if (
-                                    not event.playing
-                                    and self._is_playing
-                                    and event.file_index != self._current_file_index
-                                ):
-                                    continue
-
-                                # Update our state to match the device
-                                self._current_file_index = event.file_index
-                                self._current_file_duration = event.duration
-                                self._is_playing = event.playing
-
-                                # Suppress / resume coordinator BLE polling so
-                                # its query burst doesn't abort device-side playback.
-                                self.coordinator.set_playback(
-                                    event.file_index, event.playing, event.duration
-                                )
-
-                                # Update Home Assistant immediately
-                                self.async_write_ha_state()
-                            else:
-                                # Not a PlaybackEvent, re-queue it for other consumers
-                                events_to_requeue.append(event)
-
-                        except asyncio.QueueEmpty:
-                            break
-
-                    # Re-queue non-PlaybackEvent events
-                    for event in events_to_requeue:
-                        try:
-                            self.adapter.client.events.put_nowait(event)
-                        except asyncio.QueueFull:
-                            _LOGGER.warning(
-                                "Event queue full, dropping event: %s", event
-                            )
-
-                except Exception:
-                    _LOGGER.exception("Error processing event queue")
-
-                # Sleep briefly before checking again
-                await asyncio.sleep(0.1)
-
-        except asyncio.CancelledError:
-            _LOGGER.debug("PlaybackEvent monitoring task cancelled")
-            raise
-        except Exception:
-            _LOGGER.exception("Unexpected error in PlaybackEvent monitoring")
+        # (The coordinator follows the same reports, to hold off polling.)
+        self.async_write_ha_state()
 
     @property
     def state(self) -> MediaPlayerState:

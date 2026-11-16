@@ -5,6 +5,7 @@ status queries, so polling must pause while a file plays.
 """
 
 import asyncio
+import logging
 
 import pytest
 from homeassistant.components.media_player import MediaPlayerState
@@ -12,7 +13,6 @@ from homeassistant.const import ATTR_ENTITY_ID
 from homeassistant.exceptions import HomeAssistantError
 
 from custom_components.skelly_ultra.const import DOMAIN
-from custom_components.skelly_ultra.skelly_ultra_pkg import parser
 
 from .conftest import advance, coordinator, entity_id, wait_for
 from .device_sim import Playback
@@ -222,7 +222,7 @@ async def test_failed_or_unreported_play_holds_off_polling_briefly(
 
 
 async def test_end_of_the_previous_file_keeps_polling_held_off(
-    hass, setup_integration, device
+    hass, setup_integration, device, caplog
 ):
     """Switching files, the device reports the old one ended."""
     coord = coordinator(hass, setup_integration)
@@ -244,20 +244,32 @@ async def test_end_of_the_previous_file_keeps_polling_held_off(
         hass, lambda: coord.playback and coord.playback["file_index"] == b.index
     )
     # ... or after it, as the media player hears it
-    client = hass.data[DOMAIN][setup_integration.entry_id]["adapter"].client
-    client.events.put_nowait(parser.PlaybackEvent(a.index, False, 0))
-    await wait_for(
-        hass,
-        lambda: (
-            not any(
-                isinstance(e, parser.PlaybackEvent)
-                for e in list(client.events._queue)  # noqa: SLF001
-            )
-        ),
-    )
+    caplog.set_level(logging.DEBUG)
+    caplog.clear()
+    device.finish_playback(a.index)
+    await hass.async_block_till_done()
+    assert f"PlaybackEvent: file_index={a.index}, playing=False" in caplog.text
     assert coord.playback["file_index"] == b.index
     eid = player(hass, setup_integration)
     assert hass.states.get(eid).state == MediaPlayerState.PLAYING
     before = queries(device)
     await advance(hass, 31)
     assert queries(device) == before, "a poll now would stop B"
+
+
+async def test_late_end_of_the_previous_file_keeps_polling_held_off(
+    hass, setup_integration, device
+):
+    """A plays; B was sent seconds ago but hasn't reported yet; A ends."""
+    coord = coordinator(hass, setup_integration)
+    a = device.file("laugh.mp3")
+    b = device.file("scream.mp3")
+    coord.set_playback(a.index, True, 120)
+    # Play B went out 5 s ago, past the grace for "an end right after Play"
+    coord._play_sent_at = hass.loop.time() - 5
+    coord._play_sent_index = b.index
+    coord.set_playback(a.index, False, 0)
+    assert coord._playback_active, "a poll now would stop B"
+    # The end of B itself does end it
+    coord.set_playback(b.index, False, 0)
+    assert not coord._playback_active

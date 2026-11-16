@@ -24,6 +24,7 @@ from .client_adapter import SkellyClientAdapter
 from .const import CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS, DOMAIN
 from .file_settings import LIVE_SETTING_KEYS, async_push_live_settings
 from .helpers import DeviceLoggerAdapter, files_updated_signal, get_device_profile
+from .skelly_ultra_pkg import parser
 from .skelly_ultra_pkg.client import ConnectionLostError
 
 
@@ -138,8 +139,10 @@ class SkellyCoordinator(DataUpdateCoordinator):
         # reports apart (the same file can be played again)
         self._playback: dict[str, int] | None = None
         self._playback_reports = 0
-        # loop.time() of the last Play sent from HA
+        # loop.time() of the last Play sent from HA, and its file, until
+        # the device reports it playing
         self._play_sent_at: float | None = None
+        self._play_sent_index: int | None = None
         self._file_list: list[Any] = []
         # Set while the file list is read from the device, for a UI
         self._file_list_loading = False
@@ -450,6 +453,12 @@ class SkellyCoordinator(DataUpdateCoordinator):
         self._closing = True
         self._push_to_verify = None
 
+    def async_stop_playback_timer(self) -> None:
+        """Drop the playback safety timer; call once the entry has unloaded."""
+        if self._playback_active_timer is not None:
+            self._playback_active_timer.cancel()
+            self._playback_active_timer = None
+
     def async_resume_settings_push(self) -> None:
         """Undo async_stop_settings_push() after an unload failed."""
         self._closing = False
@@ -563,6 +572,16 @@ class SkellyCoordinator(DataUpdateCoordinator):
         """
         return self._playback
 
+    @callback
+    def handle_device_event(self, event: Any) -> None:
+        """Follow the device's play/pause reports (a client event listener).
+
+        Registered at setup, before the first connect, so a report is never
+        missed, even while the media player is still being added.
+        """
+        if isinstance(event, parser.PlaybackEvent):
+            self.set_playback(event.file_index, event.playing, event.duration)
+
     def set_playback(self, file_index: int, playing: bool, duration: int) -> None:
         """Record the device's report that a file started or stopped playing."""
         if playing:
@@ -579,12 +598,13 @@ class SkellyCoordinator(DataUpdateCoordinator):
             )
         elif self._playback is not None and self._playback["file_index"] != file_index:
             pass  # The end of a file played before the one now playing
-        elif (
-            self._play_sent_at is not None
-            and self.hass.loop.time() - self._play_sent_at < PLAY_SWITCH_GRACE_SECONDS
+        elif self._play_sent_at is not None and (
+            file_index != self._play_sent_index
+            or self.hass.loop.time() - self._play_sent_at < PLAY_SWITCH_GRACE_SECONDS
         ):
-            # Likely the end of the file played before, while the one just
-            # sent starts: keep polling held off for it
+            # The end of the file played before (or likely so, shortly after
+            # the Play), while the one just sent starts: keep polling held
+            # off for it
             self._set_playback(None)
         else:
             self.mark_playback_inactive()
@@ -604,6 +624,7 @@ class SkellyCoordinator(DataUpdateCoordinator):
             # Until the device reports playing (which sets the file's length)
             self.mark_playback_active(timeout=PLAY_REPORT_TIMEOUT_SECONDS)
             self._play_sent_at = self.hass.loop.time()
+            self._play_sent_index = file_index
             try:
                 await self.adapter.client.play_file(file_index)
             except BaseException:

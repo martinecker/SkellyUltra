@@ -107,6 +107,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         device_info,
         device_logger,
     )
+    # Play/pause reports hold off polling (it would stop the file)
+    entry.async_on_unload(
+        adapter.client.add_event_listener(coordinator.handle_device_event)
+    )
 
     # Before the first connect, which may send these settings to the device
     await coordinator.async_load_settings()
@@ -198,7 +202,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Before anything is torn down, so no update reaches a subscriber mid-unload
     async_end_file_subscriptions(hass, entry.entry_id)
-    # Removing the media players ends playback, which would send settings held back
+    # Ending playback tracking would send settings held back while a file plays
     data["coordinator"].async_stop_settings_push()
 
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
@@ -221,6 +225,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await data["adapter"].disconnect()
     except Exception:
         _LOGGER.debug("Failed to disconnect BLE client during unload", exc_info=True)
+    # After the disconnect, so no play report can start it again
+    data["coordinator"].async_stop_playback_timer()
 
     # Before a removal deletes the file, so a delayed save can't recreate it
     await data["coordinator"].async_flush_settings()

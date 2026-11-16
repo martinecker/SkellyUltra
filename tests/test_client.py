@@ -5,11 +5,12 @@ directly, for behavior that is hard to reach through entities.
 """
 
 import asyncio
+import logging
 
 import aiohttp
 import pytest
 
-from custom_components.skelly_ultra.skelly_ultra_pkg import commands
+from custom_components.skelly_ultra.skelly_ultra_pkg import commands, parser
 from custom_components.skelly_ultra.skelly_ultra_pkg.client import (
     ConnectionLostError,
     SkellyClient,
@@ -53,12 +54,81 @@ def test_frame_matches_capture_from_the_app():
 
 async def test_queries_get_their_own_reply(client, device):
     device.volume = 33
+    heard = []
+    client.add_event_listener(heard.append)
     # A notification nobody asked for arrives first (the device reports playback).
     device.finish_playback(1)
     assert await client.get_volume() == 33
-    # ...and is still there for whoever waits for it.
-    ev = await client._wait_for_event(lambda e: type(e).__name__ == "PlaybackEvent")
-    assert ev.file_index == 1
+    # ...and went to its listener at once, not after the query
+    assert isinstance(heard[0], parser.PlaybackEvent) and heard[0].file_index == 1
+
+
+async def test_playback_report_during_a_query_is_heard_at_once(client, device):
+    """A query waiting for its reply doesn't hold up other events."""
+    device.unresponsive = True
+    heard = []
+    client.add_event_listener(heard.append)
+    query = asyncio.create_task(client.get_volume(timeout=5))
+    await asyncio.sleep(0)
+    device.finish_playback(2)
+    await asyncio.sleep(0)
+    assert [e.file_index for e in heard] == [2]
+    assert not query.done(), "still waiting for its own reply"
+    query.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await query
+
+
+async def test_late_reply_is_not_taken_for_the_next_query(client, device):
+    """A reply that comes after its query timed out is dropped."""
+    device.volume = 10
+    device.unresponsive = True
+    with pytest.raises(TimeoutError):
+        await client.get_volume(timeout=0.01)
+    # The reply to the timed-out query arrives now
+    device.unresponsive = False
+    device._cmd_AAE5(b"")
+    await asyncio.sleep(0)
+    device.volume = 20
+    assert await client.get_volume() == 20
+
+
+async def test_queries_of_one_kind_take_turns(client, device):
+    """A second volume query waits until the first has its reply.
+
+    Replies can't be told apart, so with both waiting, the first reply
+    would answer both.
+    """
+    volume_query = commands.query_volume()
+    device.unresponsive = True
+    first = asyncio.create_task(client.get_volume(timeout=5))
+    second = asyncio.create_task(client.get_volume(timeout=5))
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert device.writes.count(volume_query) == 1, "the second waits its turn"
+
+    device.volume = 10
+    device._cmd_AAE5(b"")  # the first query's reply
+    assert await first == 10
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert device.writes.count(volume_query) == 2, "now the second is sent"
+    device.volume = 20
+    device._cmd_AAE5(b"")  # its reply
+    assert await second == 20
+
+
+async def test_events_reach_listeners_in_order(client, device):
+    heard = []
+    remove = client.add_event_listener(heard.append)
+    for index in (1, 2, 3):
+        device.finish_playback(index)
+    await asyncio.sleep(0)
+    assert [e.file_index for e in heard] == [1, 2, 3]
+    remove()
+    device.finish_playback(4)
+    await asyncio.sleep(0)
+    assert len(heard) == 3, "a removed listener hears nothing"
 
 
 async def test_file_list_with_unicode_names(client, device):
@@ -68,14 +138,12 @@ async def test_file_list_with_unicode_names(client, device):
 
 
 async def test_file_list_ignores_leftovers_and_repeats(client, device):
-    """Each file once, even with file info left over from an earlier read."""
-    # An earlier read (of two files) left its replies in the queue
+    """Each file once, even with file info from an earlier read."""
+    # An earlier read (of two files) that nobody waits for any more
     await client.query_file_list()
     await asyncio.sleep(0)
-    assert client.events.qsize() == 2
-    # Something else waiting meanwhile keeps its own events
-    device.finish_playback(2)
-    await asyncio.sleep(0)
+    heard = []
+    client.add_event_listener(heard.append)
     device.add_file("laugh.mp3")
 
     # The device repeats each reply to this read
@@ -86,10 +154,10 @@ async def test_file_list_ignores_leftovers_and_repeats(client, device):
         original(p)
 
     device._cmd_AAD0 = twice
+    device.finish_playback(2)  # something else meanwhile
     files = await client.get_file_list(timeout=2)
     assert [f.file_index for f in files] == [1, 2, 3]
-    ev = await client._wait_for_event(lambda e: type(e).__name__ == "PlaybackEvent")
-    assert ev.file_index == 2
+    assert [e.file_index for e in heard if isinstance(e, parser.PlaybackEvent)] == [2]
 
 
 async def test_file_list_starts_over_on_a_late_reply(client, device):
@@ -111,21 +179,63 @@ async def test_file_list_starts_over_on_a_late_reply(client, device):
     files = await client.get_file_list(timeout=2)
     assert [f.file_index for f in files] == [1, 2, 3]
     assert [f.total_files for f in files] == [3, 3, 3]
-    assert client.events.empty()
 
 
-async def test_file_list_times_out_while_other_events_keep_coming(
-    client, device, monkeypatch
-):
-    """The deadline passing between events gives the timeout, not a crash."""
+async def test_file_list_times_out_when_files_go_missing(client, device):
+    """The deadline passing between file reports gives the timeout."""
+    original = device._cmd_AAD0
+    notify = device._notify
 
-    async def other_event(timeout, connection_lost):
-        await asyncio.sleep(0.02)
-        return object()  # not file info
+    def first_file_only(p):
+        sent = []
+        device._notify = sent.append
+        original(p)
+        device._notify = notify
+        notify(sent[0])
 
-    monkeypatch.setattr(client, "_next_event", other_event)
-    with pytest.raises(TimeoutError, match="Timeout waiting for file info"):
+    device._cmd_AAD0 = first_file_only
+    with pytest.raises(TimeoutError, match="Expected 2, received 1"):
         await client.get_file_list(timeout=0.05)
+
+
+async def test_reply_buffered_when_the_link_drops_is_dropped(client, device):
+    """A reply received just before a drop is gone after it."""
+    with client.subscribe(lambda e: isinstance(e, parser.VolumeEvent)) as stream:
+        await client.send_command(commands.query_volume())
+        await asyncio.sleep(0)
+        assert stream.has(lambda e: True)
+        device.drop_connection()
+        await asyncio.sleep(0)
+        assert not stream.has(lambda e: True)
+
+
+async def test_cancelled_query_leaves_nothing_behind(client, device):
+    device.unresponsive = True
+    query = asyncio.create_task(client.get_volume(timeout=5))
+    await asyncio.sleep(0)
+    query.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await query
+    assert not client._events._streams, "its subscription ended"
+    device.unresponsive = False
+    device.volume = 7
+    assert await asyncio.wait_for(client.get_volume(), 1) == 7
+
+
+async def test_failing_listener_does_not_stop_others(client, device, caplog):
+    heard = []
+
+    def broken(event):
+        raise RuntimeError("boom")
+
+    client.add_event_listener(broken)
+    client.add_event_listener(heard.append)
+    device.volume = 5
+    assert await client.get_volume() == 5
+    device.finish_playback(1)
+    await asyncio.sleep(0)
+    assert [type(e).__name__ for e in heard] == ["VolumeEvent", "PlaybackEvent"]
+    assert "Error in event listener" in caplog.text
 
 
 async def test_drop_during_query_fails_fast(client, device):
@@ -164,6 +274,24 @@ async def test_upload_retries_with_smaller_chunks(client, device):
     )
     assert device.file("big.mp3").data == data
     assert progress[-1][0] == progress[-1][1]
+
+
+async def test_upload_stops_at_an_early_failure_report(client, device, caplog):
+    """The device can report a lost chunk before the upload has finished.
+
+    The rest of that attempt isn't sent, and its failure report isn't taken
+    for the next attempt's.
+    """
+    caplog.set_level(logging.DEBUG)
+    device.max_chunk_payload = 100
+    device.report_lost_chunks = True
+    data = bytes(range(256)) * 10
+    await FileTransferManager().send_file(client, data, "early.mp3")
+    assert device.file("early.mp3").data == data
+    assert "Received early BBC2" in caplog.text
+    # The first attempt stopped after its first (lost) chunk
+    first_attempt = device.writes[: device.writes.index(commands.cancel_send())]
+    assert sum(w[:2] == b"\xaa\xc1" for w in first_attempt) == 1
 
 
 async def test_upload_gives_up_eventually(client, device):
