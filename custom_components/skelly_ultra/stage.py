@@ -10,13 +10,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
+
+import voluptuous as vol
 
 from homeassistant.components import tts
 from homeassistant.core import Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, MOOD_LIGHT_SPEEDS, MOODS
 from .file_settings import (
@@ -40,6 +45,102 @@ DEFAULT_CAMERA_WAIT = 1.0
 
 # How often to check whether live mode has connected
 LIVE_MODE_POLL_INTERVAL = 0.5
+
+
+HISTORY_SIZE = 10
+HISTORY_STORAGE_VERSION = 1
+
+# Schema pieces perform and converse share
+
+NON_BLANK = vol.All(cv.string, vol.Strip, vol.Length(min=1, msg="must not be empty"))
+
+# Fields both actions take with the same meaning. Optional ones also take
+# None or "", which a blueprint passes for an input left blank; drop_blank
+# removes them.
+STAGE_SCHEMA_FIELDS: dict[Any, Any] = {
+    vol.Optional("camera_entity"): vol.Any(None, "", cv.entity_domain("camera")),
+    vol.Optional("camera_wait", default=DEFAULT_CAMERA_WAIT): vol.All(
+        vol.Coerce(float), vol.Range(min=0, max=60)
+    ),
+    vol.Optional("ai_task_entity"): vol.Any(None, "", cv.entity_domain("ai_task")),
+    vol.Optional("tts_options"): vol.Any(None, "", dict),
+    vol.Optional("language"): vol.Any(None, vol.All(cv.string, vol.Strip)),
+    vol.Optional("movement", default=[MOVEMENT_MOOD]): vol.All(
+        cv.ensure_list, [cv.string]
+    ),
+    vol.Optional("restore", default=True): cv.boolean,
+    vol.Optional("restore_movement", default=False): cv.boolean,
+    vol.Optional("live_mode_timeout", default=DEFAULT_LIVE_MODE_TIMEOUT): vol.All(
+        vol.Coerce(float), vol.Range(min=1, max=300)
+    ),
+    vol.Optional("wait_until_done", default=True): cv.boolean,
+}
+
+# The blankable fields of STAGE_SCHEMA_FIELDS
+STAGE_BLANKABLE = ("camera_entity", "ai_task_entity", "language", "tts_options")
+
+
+def drop_blank(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
+    """Return data without the given keys whose value is blank."""
+    return {k: v for k, v in data.items() if k not in keys or v}
+
+
+def check_movement(data: dict[str, Any]) -> None:
+    """Raise vol.Invalid if movement mixes mood or none with parts."""
+    movement = data["movement"]
+    if len(movement) > 1 and (MOVEMENT_MOOD in movement or MOVEMENT_NONE in movement):
+        raise vol.Invalid("movement takes mood, none, or a list of parts, not a mix")
+
+
+# The AI's answer to "is someone in the camera image"
+PERSON_PRESENT_FIELD = {
+    "description": "Whether a person can be seen in the image",
+    "required": True,
+    "selector": {"boolean": {}},
+}
+
+
+def person_present_from(result: dict[str, Any], camera: str | None) -> bool | None:
+    """Return the AI's person_present answer, or None without a camera."""
+    if camera and "person_present" in result:
+        return bool(result["person_present"])
+    return None
+
+
+class RecentHistory:
+    """The most recent items (lines, topics) an action keeps, so the AI
+    doesn't repeat them. Stored as {field: [...]}."""
+
+    def __init__(self, hass: HomeAssistant, storage_key: str, field: str) -> None:
+        self._store: Store[dict[str, Any]] = Store(
+            hass, HISTORY_STORAGE_VERSION, storage_key
+        )
+        self._field = field
+        self._loaded = False
+        self.items: list[str] = []
+
+    async def async_load(self) -> None:
+        """Load the items from storage, once."""
+        if self._loaded:
+            return
+        data = await self._store.async_load()
+        items = data.get(self._field, []) if isinstance(data, dict) else []
+        self.items = [str(item) for item in items][-HISTORY_SIZE:]
+        self._loaded = True
+
+    async def async_add(self, item: str) -> None:
+        """Append an item, keeping the most recent ones."""
+        self.items = [*self.items, item][-HISTORY_SIZE:]
+        await self._store.async_save({self._field: self.items})
+
+    async def async_clear(self) -> None:
+        """Forget all items."""
+        self.items = []
+        await self._store.async_save({self._field: self.items})
+
+    async def async_remove(self) -> None:
+        """Delete the stored items."""
+        await self._store.async_remove()
 
 
 class StageState:
@@ -416,6 +517,62 @@ class SkellyStage:
                     self.coordinator.async_update_data_optimistic("lights", lights)
         except Exception:
             _LOGGER.exception("Failed to restore eyes and lights")
+
+
+class StageRun(Protocol):
+    """One run of perform or converse, as async_run_marked_busy runs it."""
+
+    # The rest of the run, still going after async_run returned
+    # (wait_until_done off); None if there is none
+    background_task: asyncio.Task | None
+
+    async def async_run(self) -> dict[str, Any]: ...
+
+
+async def async_run_marked_busy(
+    states: list[StageState], run: StageRun
+) -> dict[str, Any]:
+    """Run run.async_run() with the Skellys marked running.
+
+    They stay marked until its background task, if any, has finished too.
+    The caller checks that none of them is running already.
+    """
+    for state in states:
+        state.running = True
+
+    def release(_task: asyncio.Task | None = None) -> None:
+        for state in states:
+            state.running = False
+
+    try:
+        return await run.async_run()
+    finally:
+        background = run.background_task
+        if background is None or background.done():
+            release()
+        else:
+            background.add_done_callback(release)
+
+
+def start_in_background(
+    hass: HomeAssistant, coro: Coroutine[Any, Any, None], what: str
+) -> asyncio.Task:
+    """Run the rest of a run as a background task; failures are logged."""
+    task = hass.async_create_background_task(coro, f"skelly_ultra {what.lower()}")
+
+    def log_result(done: asyncio.Task) -> None:
+        if not done.cancelled() and (err := done.exception()) is not None:
+            _LOGGER.error("%s failed: %s", what, err)
+
+    task.add_done_callback(log_result)
+    return task
+
+
+async def async_wait_started(task: asyncio.Task, started: asyncio.Future[None]) -> None:
+    """Wait until playback has started, or raise why the task ended before."""
+    await asyncio.wait({started, task}, return_when=asyncio.FIRST_COMPLETED)
+    if not started.done():
+        task.result()
 
 
 async def async_wait_all(tasks: list[asyncio.Task]) -> None:

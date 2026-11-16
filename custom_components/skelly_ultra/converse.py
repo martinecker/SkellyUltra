@@ -19,25 +19,31 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.storage import Store
 from homeassistant.util.hass_dict import HassKey
 
 from .const import DOMAIN, MOODS
 from .stage import (
-    DEFAULT_CAMERA_WAIT,
-    DEFAULT_LIVE_MODE_TIMEOUT,
     MOOD_AUTO,
     MOOD_NONE,
-    MOVEMENT_MOOD,
-    MOVEMENT_NONE,
+    NON_BLANK,
+    PERSON_PRESENT_FIELD,
+    STAGE_BLANKABLE,
+    STAGE_SCHEMA_FIELDS,
+    RecentHistory,
     SkellyStage,
     StageState,
     async_generate_ai_data,
     async_remove_file,
     async_render_tts,
+    async_run_marked_busy,
     async_wait_all,
     async_wait_for_camera_update,
+    async_wait_started,
+    check_movement,
     check_tts,
+    drop_blank,
+    person_present_from,
+    start_in_background,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,8 +51,6 @@ _LOGGER = logging.getLogger(__name__)
 MAX_PARTICIPANTS = 6
 DEFAULT_MAX_LINES = 6
 DEFAULT_PAUSE = 0.3
-HISTORY_SIZE = 10
-HISTORY_STORAGE_VERSION = 1
 # Lines rendered by the TTS entities at the same time
 TTS_CONCURRENCY = 3
 
@@ -58,16 +62,10 @@ ADAPTER_HINT = (
     "on its REST server"
 )
 
-DATA_CONVERSE: HassKey[ConverseHistory] = HassKey(f"{DOMAIN}_converse")
+DATA_CONVERSE: HassKey[RecentHistory] = HassKey(f"{DOMAIN}_converse")
 
 # Optional fields a blueprint may pass as empty when its input is left blank
-_BLANKABLE = (
-    "camera_entity",
-    "ai_task_entity",
-    "language",
-    "tts_options",
-    "tts_entity",
-)
+_BLANKABLE = (*STAGE_BLANKABLE, "tts_entity")
 _PARTICIPANT_BLANKABLE = (
     "device_id",
     "entity_id",
@@ -77,15 +75,9 @@ _PARTICIPANT_BLANKABLE = (
     "tts_entity",
 )
 
-_NON_BLANK = vol.All(cv.string, vol.Strip, vol.Length(min=1, msg="must not be empty"))
-
-
-def _drop_blank(data: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
-    return {k: v for k, v in data.items() if k not in keys or v}
-
 
 def _validate_participant(data: dict[str, Any]) -> dict[str, Any]:
-    data = _drop_blank(data, _PARTICIPANT_BLANKABLE)
+    data = drop_blank(data, _PARTICIPANT_BLANKABLE)
     if not data.get("device_id") and not data.get("entity_id"):
         raise vol.Invalid("each participant needs a device_id or entity_id")
     return data
@@ -95,7 +87,7 @@ PARTICIPANT_SCHEMA = vol.All(
     {
         vol.Optional("device_id"): vol.Any(None, "", cv.string),
         vol.Optional("entity_id"): vol.Any(None, "", cv.entity_id),
-        vol.Required("name"): _NON_BLANK,
+        vol.Required("name"): NON_BLANK,
         vol.Optional("persona"): vol.Any(None, vol.All(cv.string, vol.Strip)),
         vol.Optional("tts_entity"): vol.Any(None, "", cv.entity_domain("tts")),
         vol.Optional("tts_options"): vol.Any(None, "", dict),
@@ -107,7 +99,7 @@ PARTICIPANT_SCHEMA = vol.All(
 
 def _validate_converse(data: dict[str, Any]) -> dict[str, Any]:
     """Drop blank optional fields and check combinations a schema can't express."""
-    data = _drop_blank(data, _BLANKABLE)
+    data = drop_blank(data, _BLANKABLE)
     participants = data["participants"]
     names = [p["name"].casefold() for p in participants]
     if len(set(names)) != len(names):
@@ -116,9 +108,7 @@ def _validate_converse(data: dict[str, Any]) -> dict[str, Any]:
         raise vol.Invalid(
             "give a tts_entity, either for the action or for each participant"
         )
-    movement = data["movement"]
-    if len(movement) > 1 and (MOVEMENT_MOOD in movement or MOVEMENT_NONE in movement):
-        raise vol.Invalid("movement takes mood, none, or a list of parts, not a mix")
+    check_movement(data)
     return data
 
 
@@ -134,72 +124,33 @@ SERVICE_CONVERSE = vol.Schema(
                     msg=f"a conversation needs 2 to {MAX_PARTICIPANTS} participants",
                 ),
             ),
-            vol.Required("prompt"): _NON_BLANK,
+            vol.Required("prompt"): NON_BLANK,
             vol.Optional("max_lines", default=DEFAULT_MAX_LINES): vol.All(
                 vol.Coerce(int), vol.Range(min=2, max=20)
             ),
-            vol.Optional("camera_entity"): vol.Any(
-                None, "", cv.entity_domain("camera")
-            ),
-            vol.Optional("camera_wait", default=DEFAULT_CAMERA_WAIT): vol.All(
-                vol.Coerce(float), vol.Range(min=0, max=60)
-            ),
-            vol.Optional("ai_task_entity"): vol.Any(
-                None, "", cv.entity_domain("ai_task")
-            ),
             vol.Optional("tts_entity"): vol.Any(None, "", cv.entity_domain("tts")),
-            vol.Optional("tts_options"): vol.Any(None, "", dict),
-            vol.Optional("language"): vol.Any(None, vol.All(cv.string, vol.Strip)),
             vol.Optional("mood", default=MOOD_AUTO): vol.In(
                 [MOOD_AUTO, MOOD_NONE, *MOODS]
             ),
-            vol.Optional("movement", default=[MOVEMENT_MOOD]): vol.All(
-                cv.ensure_list, [cv.string]
-            ),
-            vol.Optional("restore", default=True): cv.boolean,
-            vol.Optional("restore_movement", default=False): cv.boolean,
             vol.Optional("pause", default=DEFAULT_PAUSE): vol.All(
                 vol.Coerce(float), vol.Range(min=0, max=10)
             ),
-            vol.Optional(
-                "live_mode_timeout", default=DEFAULT_LIVE_MODE_TIMEOUT
-            ): vol.All(vol.Coerce(float), vol.Range(min=1, max=300)),
             vol.Optional("on_line_error", default=LINE_ERROR_SKIP): vol.In(
                 [LINE_ERROR_SKIP, LINE_ERROR_ABORT]
             ),
-            vol.Optional("wait_until_done", default=True): cv.boolean,
+            **STAGE_SCHEMA_FIELDS,
         },
         _validate_converse,
     )
 )
 
 
-class ConverseHistory:
-    """Topics of recent conversations, so the AI picks new ones."""
-
-    def __init__(self, hass: HomeAssistant) -> None:
-        self._store: Store[dict[str, Any]] = Store(
-            hass, HISTORY_STORAGE_VERSION, f"{DOMAIN}.converse_history"
-        )
-        self.topics: list[str] = []
-        self._loaded = False
-
-    async def async_load(self) -> None:
-        if self._loaded:
-            return
-        data = await self._store.async_load()
-        topics = data.get("topics", []) if isinstance(data, dict) else []
-        self.topics = [str(topic) for topic in topics][-HISTORY_SIZE:]
-        self._loaded = True
-
-    async def async_add_topic(self, topic: str) -> None:
-        self.topics = [*self.topics, topic][-HISTORY_SIZE:]
-        await self._store.async_save({"topics": self.topics})
-
-
-def _history(hass: HomeAssistant) -> ConverseHistory:
+def _history(hass: HomeAssistant) -> RecentHistory:
+    """The topics of recent conversations, so the AI picks new ones."""
     if (history := hass.data.get(DATA_CONVERSE)) is None:
-        history = hass.data[DATA_CONVERSE] = ConverseHistory(hass)
+        history = hass.data[DATA_CONVERSE] = RecentHistory(
+            hass, f"{DOMAIN}.converse_history", "topics"
+        )
     return history
 
 
@@ -312,20 +263,16 @@ class _Converse:
                     finally:
                         await self._async_discard_audio()
 
-                task = self.hass.async_create_background_task(
-                    play_all(), "skelly_ultra converse"
+                self.background_task = start_in_background(
+                    self.hass, play_all(), "Converse"
                 )
-                self.background_task = task
-                task.add_done_callback(_log_background_result)
-                await asyncio.wait({started, task}, return_when=asyncio.FIRST_COMPLETED)
-                if not started.done():
-                    task.result()  # raises the reason no line started
+                await async_wait_started(self.background_task, started)
         finally:
             if self.background_task is None:
                 await self._async_discard_audio()
 
         if topic:
-            await self.history.async_add_topic(topic)
+            await self.history.async_add(topic)
 
         lines = []
         for line in self.lines:
@@ -343,7 +290,7 @@ class _Converse:
             "topic": topic,
             "lines": lines,
             "person_present": person_present,
-            "history": list(self.history.topics),
+            "history": list(self.history.items),
         }
 
     async def _async_ensure_live_mode(self, participant: _Participant) -> None:
@@ -372,10 +319,10 @@ class _Converse:
         )
         if data["mood"] == MOOD_AUTO:
             text += " Give each line the mood that fits it best."
-        if self.history.topics:
+        if self.history.items:
             text += (
                 "\n\nPick a different topic than these recent conversations:\n"
-                + "\n".join(f"- {topic}" for topic in self.history.topics)
+                + "\n".join(f"- {topic}" for topic in self.history.items)
             )
         return text
 
@@ -407,11 +354,7 @@ class _Converse:
             },
         }
         if self.data.get("camera_entity"):
-            structure["person_present"] = {
-                "description": "Whether a person can be seen in the image",
-                "required": True,
-                "selector": {"boolean": {}},
-            }
+            structure["person_present"] = PERSON_PRESENT_FIELD
         return structure
 
     async def _async_generate_script(self) -> tuple[str | None, bool | None]:
@@ -446,10 +389,7 @@ class _Converse:
         for line in self.lines:
             line.audio = asyncio.create_task(self._async_render(line, semaphore))
         topic = str(result.get("topic") or "").strip() or None
-        person_present = None
-        if camera and "person_present" in result:
-            person_present = bool(result["person_present"])
-        return topic, person_present
+        return topic, person_present_from(result, camera)
 
     def _parse_lines(self, raw: Any) -> list[_Line]:
         """Turn the AI's lines into _Lines, dropping unusable ones."""
@@ -604,12 +544,6 @@ class _Converse:
                 await stage.async_restore_movement(participant.old_action)
 
 
-def _log_background_result(task: asyncio.Task) -> None:
-    """Log a failure of a conversation that continued in the background."""
-    if not task.cancelled() and (err := task.exception()) is not None:
-        _LOGGER.error("Converse failed: %s", err)
-
-
 async def async_converse(
     hass: HomeAssistant,
     participants: list[tuple[Any, str, dict[str, Any]]],
@@ -629,20 +563,4 @@ async def async_converse(
         )
         return {"status": "busy", "busy": busy}
 
-    states = converse.states
-    for state in states:
-        state.running = True
-
-    def release(_task: asyncio.Task | None = None) -> None:
-        for state in states:
-            state.running = False
-
-    try:
-        return await converse.async_run()
-    finally:
-        background = converse.background_task
-        if background is None or background.done():
-            release()
-        else:
-            # Still busy until the last line has finished and looks are restored
-            background.add_done_callback(release)
+    return await async_run_marked_busy(converse.states, converse)

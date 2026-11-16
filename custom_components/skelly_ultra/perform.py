@@ -18,80 +18,56 @@ import voluptuous as vol
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
-from homeassistant.helpers.storage import Store
 
 from .const import DOMAIN, MOODS
 from .stage import (
-    DEFAULT_CAMERA_WAIT,
-    DEFAULT_LIVE_MODE_TIMEOUT,
     MOOD_AUTO,
     MOOD_NONE,
-    MOVEMENT_MOOD,
-    MOVEMENT_NONE,
+    NON_BLANK,
+    PERSON_PRESENT_FIELD,
+    STAGE_BLANKABLE,
+    STAGE_SCHEMA_FIELDS,
+    RecentHistory,
     SkellyStage,
     StageState,
     async_generate_ai_data,
     async_remove_file,
     async_render_tts,
+    async_run_marked_busy,
     async_wait_all,
     async_wait_for_camera_update,
+    async_wait_started,
+    check_movement,
     check_tts,
+    drop_blank,
+    person_present_from,
+    start_in_background,
 )
 
 _LOGGER = logging.getLogger(__name__)
 
-HISTORY_SIZE = 10
-HISTORY_STORAGE_VERSION = 1
-
-
-# Optional fields a blueprint may pass as empty when its input is left blank
-_BLANKABLE = ("camera_entity", "ai_task_entity", "language", "tts_options")
-
 
 def _validate_perform(data: dict[str, Any]) -> dict[str, Any]:
     """Drop blank optional fields and check combinations a schema can't express."""
-    data = {k: v for k, v in data.items() if k not in _BLANKABLE or v}
+    data = drop_blank(data, STAGE_BLANKABLE)
     if data.get("camera_entity") and "prompt" not in data:
         raise vol.Invalid("camera_entity needs a prompt")
     if "message" in data and data.get("mood") == MOOD_AUTO:
         raise vol.Invalid("mood auto needs a prompt; give a mood name with message")
-    movement = data["movement"]
-    if len(movement) > 1 and (MOVEMENT_MOOD in movement or MOVEMENT_NONE in movement):
-        raise vol.Invalid("movement takes mood, none, or a list of parts, not a mix")
+    check_movement(data)
     return data
 
-
-_NON_BLANK = vol.All(cv.string, vol.Strip, vol.Length(min=1, msg="must not be empty"))
 
 SERVICE_PERFORM = vol.Schema(
     vol.All(
         {
             vol.Optional("device_id"): cv.string,
             vol.Optional("entity_id"): cv.entity_id,
-            vol.Exclusive("message", "line"): _NON_BLANK,
-            vol.Exclusive("prompt", "line"): _NON_BLANK,
-            vol.Optional("camera_entity"): vol.Any(
-                None, "", cv.entity_domain("camera")
-            ),
-            vol.Optional("ai_task_entity"): vol.Any(
-                None, "", cv.entity_domain("ai_task")
-            ),
+            vol.Exclusive("message", "line"): NON_BLANK,
+            vol.Exclusive("prompt", "line"): NON_BLANK,
             vol.Required("tts_entity"): cv.entity_domain("tts"),
-            vol.Optional("language"): vol.Any(None, vol.All(cv.string, vol.Strip)),
-            vol.Optional("tts_options"): vol.Any(None, dict),
             vol.Optional("mood"): vol.In([MOOD_AUTO, MOOD_NONE, *MOODS]),
-            vol.Optional("movement", default=[MOVEMENT_MOOD]): vol.All(
-                cv.ensure_list, [cv.string]
-            ),
-            vol.Optional("restore", default=True): cv.boolean,
-            vol.Optional("restore_movement", default=False): cv.boolean,
-            vol.Optional(
-                "live_mode_timeout", default=DEFAULT_LIVE_MODE_TIMEOUT
-            ): vol.All(vol.Coerce(float), vol.Range(min=1, max=300)),
-            vol.Optional("wait_until_done", default=True): cv.boolean,
-            vol.Optional("camera_wait", default=DEFAULT_CAMERA_WAIT): vol.All(
-                vol.Coerce(float), vol.Range(min=0, max=60)
-            ),
+            **STAGE_SCHEMA_FIELDS,
         },
         cv.has_at_least_one_key("message", "prompt"),
         _validate_perform,
@@ -99,13 +75,13 @@ SERVICE_PERFORM = vol.Schema(
 )
 
 
-def _history_store(hass: HomeAssistant, entry_id: str) -> Store[dict[str, Any]]:
-    return Store(hass, HISTORY_STORAGE_VERSION, f"{DOMAIN}.{entry_id}.perform_history")
+def _new_history(hass: HomeAssistant, entry_id: str) -> RecentHistory:
+    return RecentHistory(hass, f"{DOMAIN}.{entry_id}.perform_history", "lines")
 
 
 async def async_remove_perform_history(hass: HomeAssistant, entry_id: str) -> None:
     """Delete the stored perform history of a removed config entry."""
-    await _history_store(hass, entry_id).async_remove()
+    await _new_history(hass, entry_id).async_remove()
 
 
 class PerformManager(StageState):
@@ -114,24 +90,24 @@ class PerformManager(StageState):
     def __init__(self, hass: HomeAssistant, entry_id: str) -> None:
         """Initialize the manager for a config entry."""
         super().__init__()
-        self._store = _history_store(hass, entry_id)
-        self.history: list[str] = []
+        self._history = _new_history(hass, entry_id)
+
+    @property
+    def history(self) -> list[str]:
+        """The most recent AI lines, oldest first."""
+        return self._history.items
 
     async def async_load(self) -> None:
-        """Load the line history from storage."""
-        data = await self._store.async_load()
-        lines = data.get("lines", []) if isinstance(data, dict) else []
-        self.history = [str(line) for line in lines][-HISTORY_SIZE:]
+        """Load the line history from storage (once)."""
+        await self._history.async_load()
 
     async def async_add_line(self, line: str) -> None:
         """Append an AI line to the history, keeping the most recent ones."""
-        self.history = [*self.history, line][-HISTORY_SIZE:]
-        await self._store.async_save({"lines": self.history})
+        await self._history.async_add(line)
 
     async def async_clear(self) -> None:
         """Forget all lines in the history."""
-        self.history = []
-        await self._store.async_save({"lines": self.history})
+        await self._history.async_clear()
 
 
 class _Perform:
@@ -214,14 +190,10 @@ class _Perform:
         else:
             # Return once the line starts playing, so callers can act on it
             # (e.g. notify) while the Skelly speaks; the rest runs on.
-            task = self.hass.async_create_background_task(
-                perform_line(), "skelly_ultra perform"
+            self.background_task = start_in_background(
+                self.hass, perform_line(), "Perform"
             )
-            self.background_task = task
-            task.add_done_callback(_log_background_result)
-            await asyncio.wait({started, task}, return_when=asyncio.FIRST_COMPLETED)
-            if not started.done():
-                task.result()  # raises the reason playback didn't start
+            await async_wait_started(self.background_task, started)
 
         if ai_task is not None:
             await self.manager.async_add_line(line)
@@ -265,11 +237,7 @@ class _Perform:
                 "selector": {"select": {"options": list(MOODS)}},
             }
         if camera:
-            structure["person_present"] = {
-                "description": "Whether a person can be seen in the image",
-                "required": True,
-                "selector": {"boolean": {}},
-            }
+            structure["person_present"] = PERSON_PRESENT_FIELD
 
         result = await async_generate_ai_data(
             self.hass,
@@ -291,11 +259,7 @@ class _Perform:
                 _LOGGER.warning("Perform: AI picked unknown mood %r, using none", mood)
                 mood = MOOD_NONE
 
-        person_present = None
-        if camera and "person_present" in result:
-            person_present = bool(result["person_present"])
-
-        return line, mood, person_present
+        return line, mood, person_present_from(result, camera)
 
     async def _async_perform_line(
         self,
@@ -343,12 +307,6 @@ class _Perform:
                 await stage.async_restore_movement(old_action)
 
 
-def _log_background_result(task: asyncio.Task) -> None:
-    """Log a failure of a perform that continued in the background."""
-    if not task.cancelled() and (err := task.exception()) is not None:
-        _LOGGER.error("Perform failed: %s", err)
-
-
 async def async_perform(
     hass: HomeAssistant,
     adapter: Any,
@@ -357,20 +315,7 @@ async def async_perform(
 ) -> dict[str, Any]:
     """Run skelly_ultra.perform on one Skelly and return the response data."""
     perform = _Perform(hass, adapter, entry_id, data)
-    manager = perform.manager
-    if manager.running:
+    if perform.manager.running:
         _LOGGER.info("Perform: already running on this Skelly, dropping this call")
         return {"status": "busy"}
-
-    manager.running = True
-    try:
-        return await perform.async_run()
-    finally:
-        background = perform.background_task
-        if background is None or background.done():
-            manager.running = False
-        else:
-            # Still busy until the line has finished and the look is restored
-            background.add_done_callback(
-                lambda _task: setattr(manager, "running", False)
-            )
+    return await async_run_marked_busy([perform.manager], perform)
