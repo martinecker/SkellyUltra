@@ -1,9 +1,9 @@
 """Audio processor for Skelly Ultra devices.
 
-Handles audio file conversion to the format required by Skelly devices:
-- 8 kHz sample rate
+Handles audio file conversion to the format the phone app uploads:
+- MP3 (MPEG-1 Layer III), CBR 32 kbps
+- 44.1 kHz sample rate
 - Mono (single channel)
-- MP3 format
 """
 
 from __future__ import annotations
@@ -27,22 +27,23 @@ class AudioProcessingError(Exception):
 class AudioProcessor:
     """Process audio files for Skelly device compatibility.
 
-    The Skelly device requires audio in a specific format:
-    - Sample rate: 8000 Hz (8 kHz)
+    Uploads use the format of the phone app's recordings:
+    - Sample rate: 44100 Hz (44.1 kHz)
     - Channels: 1 (mono)
-    - Format: MP3
+    - Format: MP3, CBR 32 kbps
 
     This processor takes any audio file supported by pydub (mp3, wav, ogg, flac, etc.)
     and converts it to the required format.
     """
 
     # Skelly device requirements
-    TARGET_SAMPLE_RATE = 8000  # 8 kHz
+    TARGET_SAMPLE_RATE = 44100  # 44.1 kHz
     TARGET_CHANNELS = 1  # mono
     TARGET_FORMAT = "mp3"
 
     # MP3 encoding parameters
-    MP3_BITRATE = "32k"  # Decent quality for 8kHz mono speech
+    # The lowest bitrate MPEG-1 allows; LAME raises lower ones to it
+    MP3_BITRATE = "32k"
 
     @classmethod
     def process_file(
@@ -122,14 +123,14 @@ class AudioProcessor:
             audio: Input AudioSegment
 
         Returns:
-            Converted AudioSegment (8kHz mono)
+            Converted AudioSegment (44.1 kHz mono)
         """
         # Convert to mono if stereo
         if audio.channels > 1:
             logger.debug("Converting from %d channels to mono", audio.channels)
             audio = audio.set_channels(cls.TARGET_CHANNELS)
 
-        # Resample to 8 kHz if needed
+        # Resample to 44.1 kHz if needed
         if audio.frame_rate != cls.TARGET_SAMPLE_RATE:
             logger.debug(
                 "Resampling from %d Hz to %d Hz",

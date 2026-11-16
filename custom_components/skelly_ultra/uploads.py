@@ -350,7 +350,7 @@ async def async_upload_audio(
     """Convert a local audio file and upload it to the device.
 
     Normalizes and validates `target_filename`, converts `local_file` to the
-    device's 8 kHz mono MP3 format (honoring the bitrate override), and
+    device's 44.1 kHz mono MP3 format (honoring the bitrate override), and
     transfers it while updating the transfer progress sensor. If a file with
     the same name already exists on the device, its movement/eye/light
     settings are restored after the overwrite. Refreshes the file list on
@@ -402,7 +402,7 @@ async def async_upload_audio(
                 bitrate = coordinator.data.get("bitrate_override")
                 _LOGGER.debug("Using bitrate override: %s", bitrate)
 
-        # Process audio to required format (8kHz mono MP3)
+        # Process audio to the device format (44.1 kHz mono MP3)
         # Run audio processing in executor to avoid blocking event loop
         _LOGGER.debug("Processing audio file: %s", local_file)
         processed_file = await hass.async_add_executor_job(

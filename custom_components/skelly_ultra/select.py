@@ -16,7 +16,8 @@ from .helpers import get_device_info, get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
 
 # Bitrate options for MP3 encoding
-BITRATE_OPTIONS = ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"]
+# MP3 bitrates for uploads; 32k is the lowest MPEG-1 (44.1 kHz) allows
+BITRATE_OPTIONS = ["32k", "64k", "128k", "192k", "256k", "320k"]
 
 
 async def async_setup_entry(

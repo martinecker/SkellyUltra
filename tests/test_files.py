@@ -57,11 +57,43 @@ def tone(tmp_path):
             "lavfi",
             "-i",
             "sine=frequency=440:duration=1",
+            # Stereo 48 kHz, so the upload has to convert it
+            "-ac",
+            "2",
+            "-ar",
+            "48000",
             str(path),
         ],
         check=True,
     )
     return path
+
+
+def _mp3_frame_headers(data: bytes) -> list[tuple]:
+    """Return (version, layer, kbps, sample rate, mode) of every MP3 frame."""
+    if data[:3] == b"ID3":
+        size = data[6] << 21 | data[7] << 14 | data[8] << 7 | data[9]
+        data = data[10 + size :]
+    kbps_mpeg1_l3 = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320]
+    frames = []
+    pos = 0
+    while pos + 4 <= len(data):
+        header = int.from_bytes(data[pos : pos + 4], "big")
+        if header >> 21 != 0x7FF:  # frame sync
+            break
+        assert (header >> 19) & 3 == 3 and (header >> 17) & 3 == 1, (
+            "not MPEG-1 Layer III"
+        )
+        kbps = kbps_mpeg1_l3[(header >> 12) & 0xF]
+        rate = (44100, 48000, 32000)[(header >> 10) & 3]
+        padding = (header >> 9) & 1
+        mode = "mono" if (header >> 6) & 3 == 3 else "stereo"
+        size = 144 * kbps * 1000 // rate + padding
+        # Skip the encoder's Xing/Info tag frame, which holds no audio
+        if data[pos + 21 : pos + 25] not in (b"Xing", b"Info"):
+            frames.append(("MPEG-1", "Layer III", kbps, rate, mode))
+        pos += size
+    return frames
 
 
 @needs_ffmpeg
@@ -75,7 +107,11 @@ async def test_send_file_uploads_as_mp3(hass, setup_integration, device, tone):
         target_filename="Boo Sound.wav",
     )
     uploaded = device.file("Boo Sound.mp3")
-    assert uploaded.data[:3] == b"ID3" or uploaded.data[0] == 0xFF, "MP3 data"
+    # The format the phone app uploads: MPEG-1 Layer III, 44.1 kHz, mono,
+    # CBR 32 kbps
+    frames = _mp3_frame_headers(uploaded.data)
+    assert frames, "MP3 data"
+    assert set(frames) == {("MPEG-1", "Layer III", 32, 44100, "mono")}
     assert result == {"filename": "Boo Sound.mp3", "file_index": uploaded.index}
     # Shows up in Home Assistant without waiting for a poll.
     assert sensor(hass, entry, "file_count_received") == "4"

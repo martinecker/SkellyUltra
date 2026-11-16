@@ -140,7 +140,7 @@
 			"override": false,
 			"value": "32k",
 			"default": "32k",
-			"options": ["8k", "16k", "32k", "64k", "128k", "192k", "256k", "320k"],
+			"options": ["32k", "64k", "128k", "192k", "256k", "320k"],
 			"switch_entity": "switch.skelly_santa_override_bitrate",
 			"value_entity": "select.skelly_santa_override_bitrate_value"
 		}

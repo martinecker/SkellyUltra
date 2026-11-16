@@ -774,7 +774,7 @@ Both actions fail with an error if the Skelly can't be reached or rejects the co
 
 ### 📤 Uploading Audio Files to Device
 
-The integration provides file transfer services to upload audio files to the device's internal storage. Audio files are automatically converted to 8kHz mono MP3 format for compatibility with the device.
+The integration provides file transfer services to upload audio files to the device's internal storage. Audio files are automatically converted to 44.1 kHz mono MP3 at 32 kbps, the format the phone app uploads.
 
 #### Send File Service
 
@@ -817,7 +817,7 @@ data:
 **Notes**:
 
 - The `.mp3` extension is added automatically to `target_filename`
-- Audio is automatically converted to the preferred device format, which is 8kHz mono MP3 format
+- Audio is automatically converted to the preferred device format, which is 44.1 kHz mono MP3 at 32 kbps (CBR), like the phone app's recordings
 - Supported input formats: MP3, WAV, FLAC, OGG, M4A, and many others
 - Upload progress is displayed in Home Assistant logs
 - Large files may take several minutes to upload over BLE
