@@ -239,7 +239,7 @@ async def test_end_of_the_previous_file_keeps_polling_held_off(
     # The "ended" report of A comes before B's "playing"
     coord.set_playback(a.index, False, 0)
     assert coord.playback is None
-    assert coord._playback_active, "a poll now would stop B"
+    assert coord.playback_active, "a poll now would stop B"
     await wait_for(
         hass, lambda: coord.playback and coord.playback["file_index"] == b.index
     )
@@ -266,10 +266,10 @@ async def test_late_end_of_the_previous_file_keeps_polling_held_off(
     b = device.file("scream.mp3")
     coord.set_playback(a.index, True, 120)
     # Play B went out 5 s ago, past the grace for "an end right after Play"
-    coord._play_sent_at = hass.loop.time() - 5
-    coord._play_sent_index = b.index
+    coord.playback_guard._play_sent_at = hass.loop.time() - 5
+    coord.playback_guard._play_sent_index = b.index
     coord.set_playback(a.index, False, 0)
-    assert coord._playback_active, "a poll now would stop B"
+    assert coord.playback_active, "a poll now would stop B"
     # The end of B itself does end it
     coord.set_playback(b.index, False, 0)
-    assert not coord._playback_active
+    assert not coord.playback_active

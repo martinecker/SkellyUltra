@@ -490,7 +490,7 @@ async def test_removal_right_after_a_change_leaves_no_file(
 ):
     entry = setup_integration
     key = f"skelly_ultra.{entry.entry_id}.settings"
-    with patch("custom_components.skelly_ultra.coordinator.SETTINGS_SAVE_DELAY", 5):
+    with patch("custom_components.skelly_ultra.settings_sync.SETTINGS_SAVE_DELAY", 5):
         await hass.services.async_call(
             "number",
             "set_value",

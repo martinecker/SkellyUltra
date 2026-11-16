@@ -13,12 +13,13 @@ from homeassistant.core import HomeAssistant, callback
 
 from .client_adapter import SkellyClientAdapter
 from .const import CONF_SERVER_URL, CONF_USE_BLE_PROXY, DEFAULT_SERVER_URL, DOMAIN
-from .coordinator import SkellyCoordinator, async_remove_settings
+from .coordinator import SkellyCoordinator
 from .data import SkellyConfigEntry, SkellyData, get_skelly_data, skelly_entries
 from .frontend import async_setup_frontend, async_update_panel
 from .helpers import DeviceLoggerAdapter, get_device_info, get_device_name
 from .perform import PerformManager, async_remove_perform_history
 from .services import register_services, unregister_services
+from .settings_sync import async_remove_settings
 from .websocket_api import async_end_file_subscriptions, async_setup_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
