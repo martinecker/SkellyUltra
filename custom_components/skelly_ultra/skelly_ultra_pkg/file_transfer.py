@@ -93,13 +93,17 @@ class FileTransferManager:
     TIMEOUT_END_MIN = 5.0  # minimum seconds to wait for BBC2
     TIMEOUT_END_PER_KB = 0.4  # seconds per kilobyte of file size
     TIMEOUT_CONFIRM = 5.0  # seconds to wait for BBC3
-    CHUNK_DELAY = 0.05  # seconds between chunks (50ms)
+    # Pause between chunks, like the phone app's 100 ms; can be overridden
+    DEFAULT_CHUNK_DELAY_MS = 100
+    MIN_CHUNK_DELAY_MS = 10
+    MAX_CHUNK_DELAY_MS = 1000
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
         self._state = TransferState()
         self._lock = asyncio.Lock()
         self._chunk_cache: dict[int, bytes] = {}
+        self._chunk_delay_ms = self.DEFAULT_CHUNK_DELAY_MS
 
     @staticmethod
     def calculate_chunk_size_from_mtu(mtu: int) -> int:
@@ -159,6 +163,20 @@ class FileTransferManager:
         logger.debug("Using default chunk size: %d bytes", self.DEFAULT_CHUNK_SIZE)
         return self.DEFAULT_CHUNK_SIZE
 
+    def get_chunk_delay_ms(self, override_ms: int | None = None) -> int:
+        """Return the pause between chunks: the override if valid, else 100 ms."""
+        if override_ms is not None:
+            if self.MIN_CHUNK_DELAY_MS <= override_ms <= self.MAX_CHUNK_DELAY_MS:
+                logger.info("Using user override chunk delay: %d ms", override_ms)
+                return override_ms
+            logger.warning(
+                "Override chunk delay %d ms out of range (%d-%d), using default",
+                override_ms,
+                self.MIN_CHUNK_DELAY_MS,
+                self.MAX_CHUNK_DELAY_MS,
+            )
+        return self.DEFAULT_CHUNK_DELAY_MS
+
     @property
     def state(self) -> TransferState:
         """Get current transfer state (read-only copy)."""
@@ -178,6 +196,7 @@ class FileTransferManager:
         filename: str,
         progress_callback: Callable[[int, int], None] | None = None,
         override_chunk_size: int | None = None,
+        override_chunk_delay_ms: int | None = None,
     ) -> None:
         """Send file to device with progress tracking.
 
@@ -187,6 +206,7 @@ class FileTransferManager:
             filename: Target filename on device
             progress_callback: Optional callback(sent_chunks, total_chunks)
             override_chunk_size: Optional user-specified chunk size (bypasses MTU calculation)
+            override_chunk_delay_ms: Optional user-specified pause between chunks
 
         Raises:
             FileTransferError: On transfer failure
@@ -205,6 +225,7 @@ class FileTransferManager:
             self._state.sent_chunks = 0
             self._state.total_chunks = 0
             self._chunk_cache.clear()
+            self._chunk_delay_ms = self.get_chunk_delay_ms(override_chunk_delay_ms)
 
             try:
                 await self._do_transfer(
@@ -512,8 +533,8 @@ class FileTransferManager:
                 except Exception:
                     logger.exception("Error in progress callback")
 
-            # Small delay to avoid overwhelming the device
-            await asyncio.sleep(self.CHUNK_DELAY)
+            # Pace the chunks: the device loses them when they come too fast
+            await asyncio.sleep(self._chunk_delay_ms / 1000)
 
         logger.debug("All %d chunks sent", chunk_count)
 

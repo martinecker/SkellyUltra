@@ -5,6 +5,7 @@ import { errorMessage } from "../api/actions";
 import {
 	SMALL_CHUNK_SIZE,
 	setBitrate,
+	setChunkDelay,
 	setChunkSize,
 } from "../api/transfer-settings";
 import type { TransferSettings } from "../api/types";
@@ -13,6 +14,7 @@ import { strings } from "../strings";
 import { sharedStyles } from "../styles";
 
 const CHUNK_STEP = 10;
+const DELAY_STEP = 10;
 // How long (in ms) a change is shown before the reported settings, if they
 // don't come back with it (e.g. HA skipped the call on an unavailable entity)
 export const SETTINGS_SETTLE_MS = 3000;
@@ -23,11 +25,30 @@ function applied(settings: TransferSettings, expected: TransferSettings) {
 		a.override === b.override && (!a.override || a.value === b.value);
 	return (
 		same(settings.chunk_size, expected.chunk_size) &&
+		same(settings.chunk_delay, expected.chunk_delay) &&
 		same(settings.bitrate, expected.bitrate)
 	);
 }
 
-// The chunk size and bitrate overrides of a Skelly's file transfers. They
+// The value typed into a number box, rounded to the step and kept in range;
+// null if it's empty, not a number or unchanged (the box shows the value)
+function typedValue(
+	input: HTMLInputElement,
+	{ min, max, value: current }: { min: number; max: number; value: number },
+	step: number,
+): number | null {
+	const typed = Number(input.value);
+	if (!Number.isFinite(typed) || input.value.trim() === "") {
+		input.value = String(current);
+		return null;
+	}
+	const value = Math.min(max, Math.max(min, Math.round(typed / step) * step));
+	input.value = String(value);
+	return value === current ? null : value;
+}
+
+// The chunk size, chunk delay and bitrate overrides of a Skelly's file
+// transfers. They
 // apply to the next transfer and change the integration's override entities.
 export class SkTransferSettings extends LitElement {
 	@property({ attribute: false }) hass?: HomeAssistant;
@@ -150,7 +171,7 @@ export class SkTransferSettings extends LitElement {
 		if (!settings) {
 			return nothing;
 		}
-		const { chunk_size: chunk, bitrate } = settings;
+		const { chunk_size: chunk, chunk_delay: delay, bitrate } = settings;
 		const off = this.disabled || this._busy;
 		const small =
 			!chunk.override && chunk.auto !== null && chunk.auto < SMALL_CHUNK_SIZE;
@@ -192,6 +213,36 @@ export class SkTransferSettings extends LitElement {
 						? html`<p class="warning">${strings.chunkSmall(chunk.auto)}</p>`
 						: nothing
 				}
+				<div class="row">
+					<label>
+						<input
+							type="checkbox"
+							class="delay-override"
+							.checked=${live(delay.override)}
+							?disabled=${off || !delay.switch_entity || !delay.value_entity}
+							@change=${this._onDelayOverride}
+						/>
+						${strings.delayOverride}
+					</label>
+					${
+						delay.override
+							? html`<span>
+									<input
+										type="number"
+										class="chunk-delay"
+										aria-label=${strings.delayOverride}
+										min=${delay.min}
+										max=${delay.max}
+										step=${DELAY_STEP}
+										.value=${live(String(delay.value))}
+										?disabled=${off}
+										@change=${this._onDelay}
+									/>
+									${strings.delayUnit}
+								</span>`
+							: html`<span class="note">${strings.delayDefault(delay.default)}</span>`
+					}
+				</div>
 				<div class="row">
 					<label>
 						<input
@@ -244,25 +295,49 @@ export class SkTransferSettings extends LitElement {
 
 	private _onChunkSize(ev: Event) {
 		const settings = this._expected ?? this.settings;
-		const input = ev.target as HTMLInputElement;
 		if (!settings) {
 			return;
 		}
-		const { min, max, value: current } = settings.chunk_size;
-		const typed = Number(input.value);
-		if (!Number.isFinite(typed) || input.value.trim() === "") {
-			input.value = String(current);
-			return;
-		}
-		const value = Math.min(
-			max,
-			Math.max(min, Math.round(typed / CHUNK_STEP) * CHUNK_STEP),
+		const value = typedValue(
+			ev.target as HTMLInputElement,
+			settings.chunk_size,
+			CHUNK_STEP,
 		);
-		input.value = String(value);
-		if (value !== current) {
+		if (value !== null) {
 			void this._apply(
 				{ ...settings, chunk_size: { ...settings.chunk_size, value } },
 				(hass) => setChunkSize(hass, settings, value),
+			);
+		}
+	}
+
+	private _onDelayOverride(ev: Event) {
+		const settings = this._expected ?? this.settings;
+		if (!settings) {
+			return;
+		}
+		const on = (ev.target as HTMLInputElement).checked;
+		void this._apply(
+			{ ...settings, chunk_delay: { ...settings.chunk_delay, override: on } },
+			(hass) =>
+				setChunkDelay(hass, settings, on ? settings.chunk_delay.value : null),
+		);
+	}
+
+	private _onDelay(ev: Event) {
+		const settings = this._expected ?? this.settings;
+		if (!settings) {
+			return;
+		}
+		const value = typedValue(
+			ev.target as HTMLInputElement,
+			settings.chunk_delay,
+			DELAY_STEP,
+		);
+		if (value !== null) {
+			void this._apply(
+				{ ...settings, chunk_delay: { ...settings.chunk_delay, value } },
+				(hass) => setChunkDelay(hass, settings, value),
 			);
 		}
 	}

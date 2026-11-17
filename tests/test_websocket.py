@@ -264,11 +264,15 @@ async def test_transfer_settings_follow_the_override_entities(
     client = await hass_ws_client(hass)
     settings = (await ws_list(client))["transfer_settings"]
     chunk = settings["chunk_size"]
+    delay = settings["chunk_delay"]
     bitrate = settings["bitrate"]
-    # The simulator's MTU of 247 allows 244-byte chunks
+    # The simulator's MTU of 247 allows 239-byte chunks
     assert chunk["override"] is False
     assert chunk["auto"] == 239
     assert (chunk["min"], chunk["max"]) == (15, 500)
+    assert delay["override"] is False
+    assert delay["default"] == delay["value"] == 100
+    assert (delay["min"], delay["max"]) == (10, 1000)
     assert bitrate["override"] is False
     assert bitrate["default"] == bitrate["value"] == "32k"
     assert "250k" not in bitrate["options"] and "64k" in bitrate["options"]
@@ -281,6 +285,13 @@ async def test_transfer_settings_follow_the_override_entities(
             domain, DOMAIN, f"{entry.entry_id}_{unique_id}"
         )
         assert chunk[key].startswith(f"{domain}.")
+    for key, domain, unique_id in (
+        ("switch_entity", "switch", "override_chunk_delay"),
+        ("value_entity", "number", "chunk_delay"),
+    ):
+        assert delay[key] == registry.async_get_entity_id(
+            domain, DOMAIN, f"{entry.entry_id}_{unique_id}"
+        )
     for key, domain, unique_id in (
         ("switch_entity", "switch", "override_bitrate"),
         ("value_entity", "select", "bitrate"),
@@ -305,6 +316,15 @@ async def test_transfer_settings_follow_the_override_entities(
         blocking=True,
     )
     await hass.services.async_call(
+        "switch", "turn_on", {"entity_id": delay["switch_entity"]}, blocking=True
+    )
+    await hass.services.async_call(
+        "number",
+        "set_value",
+        {"entity_id": delay["value_entity"], "value": 40},
+        blocking=True,
+    )
+    await hass.services.async_call(
         "switch", "turn_on", {"entity_id": bitrate["switch_entity"]}, blocking=True
     )
     await hass.services.async_call(
@@ -317,10 +337,12 @@ async def test_transfer_settings_follow_the_override_entities(
     event = await next_event(client)
     while (
         event["transfer_settings"]["chunk_size"]["value"] != 300
+        or event["transfer_settings"]["chunk_delay"]["value"] != 40
         or event["transfer_settings"]["bitrate"]["value"] != "64k"
     ):
         event = await next_event(client)
     assert event["transfer_settings"]["chunk_size"]["override"] is True
+    assert event["transfer_settings"]["chunk_delay"]["override"] is True
     assert event["transfer_settings"]["bitrate"]["override"] is True
 
 

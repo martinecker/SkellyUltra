@@ -219,6 +219,9 @@ export const strings = {
 		`Chunks of ${bytes} bytes make transfers slow. An override of 250 is usually much faster; if transfers then fail, go lower.`,
 	smallChunksNotice: (bytes: number) =>
 		`Files are sent in chunks of ${bytes} bytes, which makes transfers slow. You can override the chunk size under Add file › Transfer settings.`,
+	delayOverride: "Override chunk delay",
+	delayDefault: (ms: number) => `Automatic: ${ms} ms between chunks`,
+	delayUnit: "ms",
 	bitrateOverride: "Override bitrate",
 	bitrateDefault: (bitrate: string) => `Automatic: ${bitrate}`,
 	settingsNotApplied:

@@ -1,4 +1,4 @@
-// The file transfer overrides (chunk size and MP3 bitrate) are the
+// The file transfer overrides (chunk size, chunk delay and MP3 bitrate) are the
 // integration's own entities: an override switch and a value entity each.
 // The value entity only takes a value while its switch is on.
 
@@ -13,15 +13,16 @@ const turn = (hass: HomeAssistant, entityId: string, on: boolean) =>
 		entity_id: entityId,
 	});
 
-// Turns the chunk size override on (with a value) or off (null)
-export async function setChunkSize(
+// Turns a number override on (with a value) or off (null)
+async function setNumberOverride(
 	hass: HomeAssistant,
-	settings: TransferSettings,
+	override: { switch_entity: string | null; value_entity: string | null },
+	what: string,
 	value: number | null,
 ): Promise<void> {
-	const { switch_entity, value_entity } = settings.chunk_size;
+	const { switch_entity, value_entity } = override;
 	if (!switch_entity || (value !== null && !value_entity)) {
-		throw new Error("The chunk size entities aren't available");
+		throw new Error(`The ${what} entities aren't available`);
 	}
 	if (value === null) {
 		await turn(hass, switch_entity, false);
@@ -33,6 +34,20 @@ export async function setChunkSize(
 		value,
 	});
 }
+
+// Turns the chunk size override on (with a value) or off (null)
+export const setChunkSize = (
+	hass: HomeAssistant,
+	settings: TransferSettings,
+	value: number | null,
+) => setNumberOverride(hass, settings.chunk_size, "chunk size", value);
+
+// Turns the chunk delay override on (with a value in ms) or off (null)
+export const setChunkDelay = (
+	hass: HomeAssistant,
+	settings: TransferSettings,
+	value: number | null,
+) => setNumberOverride(hass, settings.chunk_delay, "chunk delay", value);
 
 // Turns the bitrate override on (with a value) or off (null)
 export async function setBitrate(

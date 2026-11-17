@@ -429,17 +429,22 @@ async def async_upload_audio(
                 target_filename,
             )
 
-            # Check if chunk size override is enabled
+            # Chunk size and chunk delay overrides, if they're on
             override_chunk_size = None
-            if coordinator.data:
-                override_enabled = coordinator.data.get("override_chunk_size", False)
-                if override_enabled:
-                    override_chunk_size = coordinator.data.get(
-                        "chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE
-                    )
-                    _LOGGER.debug(
-                        "Using chunk size override: %d bytes", override_chunk_size
-                    )
+            override_chunk_delay = None
+            overrides = coordinator.data or {}
+            if overrides.get("override_chunk_size", False):
+                override_chunk_size = overrides.get(
+                    "chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE
+                )
+                _LOGGER.debug(
+                    "Using chunk size override: %d bytes", override_chunk_size
+                )
+            if overrides.get("override_chunk_delay", False):
+                override_chunk_delay = overrides.get(
+                    "chunk_delay_override", FileTransferManager.DEFAULT_CHUNK_DELAY_MS
+                )
+                _LOGGER.debug("Using chunk delay override: %d ms", override_chunk_delay)
 
             # A new file makes the device rewrite its play order, and it
             # gets that wrong (it drops one entry and lists another twice).
@@ -469,6 +474,7 @@ async def async_upload_audio(
                 target_filename,
                 progress_callback,
                 override_chunk_size,
+                override_chunk_delay,
             )
 
             # If this was an overwrite, restore the previous movement/eye/light

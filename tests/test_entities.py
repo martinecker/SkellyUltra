@@ -318,9 +318,12 @@ async def test_movement_trigger_needs_a_movement_switch(
 async def test_override_values_need_their_switch(hass, setup_integration):
     entry = setup_integration
     chunk_size = entity_id(hass, entry, "number", "chunk_size")
+    chunk_delay = entity_id(hass, entry, "number", "chunk_delay")
     bitrate = entity_id(hass, entry, "select", "bitrate")
     with pytest.raises(ServiceValidationError, match="Override Chunk Size"):
         await call(hass, "number", "set_value", chunk_size, value=100)
+    with pytest.raises(ServiceValidationError, match="Override Chunk Delay"):
+        await call(hass, "number", "set_value", chunk_delay, value=50)
     with pytest.raises(ServiceValidationError, match="Override Bitrate"):
         await call(hass, "select", "select_option", bitrate, option="64k")
 
@@ -331,11 +334,19 @@ async def test_override_values_need_their_switch(hass, setup_integration):
         entity_id(hass, entry, "switch", "override_chunk_size"),
     )
     await call(
+        hass,
+        "switch",
+        "turn_on",
+        entity_id(hass, entry, "switch", "override_chunk_delay"),
+    )
+    await call(
         hass, "switch", "turn_on", entity_id(hass, entry, "switch", "override_bitrate")
     )
     await call(hass, "number", "set_value", chunk_size, value=100)
+    await call(hass, "number", "set_value", chunk_delay, value=50)
     await call(hass, "select", "select_option", bitrate, option="64k")
     assert hass.states.get(chunk_size).state == "100"
+    assert hass.states.get(chunk_delay).state == "50"
     assert hass.states.get(bitrate).state == "64k"
 
 

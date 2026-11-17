@@ -369,8 +369,8 @@ The integration creates different entities depending on which device type you co
   - Shared volume control with device
 - **Sensors**: Volume, live name, storage capacity, file count, file order, BT MAC, pin code, file transfer progress
 - **Signal strength sensors** (diagnostic): RSSI of the live-mode classic link (in dB relative to the controller's golden receive range, 0 = good) and, in BLE proxy mode, of the BLE link (in dBm). Both are read by the REST server, which needs to run as root or in the privileged Docker container for this. Not available for direct BLE connections, since Home Assistant's Bluetooth stack doesn't report RSSI for connected devices
-- **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Bitrate
-- **Numbers**: Volume, Override Chunk Size Value
+- **Switches**: Connected (master on/off), Live Mode, Override Chunk Size, Override Chunk Delay, Override Bitrate
+- **Numbers**: Volume, Override Chunk Size Value, Override Chunk Delay Value (pause between upload chunks, 100 ms by default like the phone app)
 - **Buttons**: Trigger Movement, Push Settings to Skelly (see below), Clear Perform History
 
 **Note about entity IDs**: Entity IDs are generated based on:

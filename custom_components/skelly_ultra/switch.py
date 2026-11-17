@@ -88,6 +88,13 @@ async def async_setup_entry(
                 coordinator,
                 entry.entry_id,
                 device_info,
+                "override_chunk_delay",
+                "Override Chunk Delay",
+            ),
+            SkellyOverrideSwitch(
+                coordinator,
+                entry.entry_id,
+                device_info,
                 "override_bitrate",
                 "Override Bitrate",
             ),
@@ -379,7 +386,7 @@ class SkellyMovementSwitch(SkellyCoordinatorEntity, SwitchEntity):
 class SkellyOverrideSwitch(SkellyCoordinatorEntity, SwitchEntity):
     """Switch to enable/disable a manual override for file transfers.
 
-    Shared by the chunk-size and bitrate override switches, which only
+    Shared by the chunk size, chunk delay and bitrate override switches, which only
     differ in which coordinator data key and display name they use.
     """
 

@@ -13,8 +13,10 @@ const base = (fixture as FilesPayload).transfer_settings;
 const settingsWith = (
 	chunk: Partial<TransferSettings["chunk_size"]> = {},
 	bitrate: Partial<TransferSettings["bitrate"]> = {},
+	delay: Partial<TransferSettings["chunk_delay"]> = {},
 ): TransferSettings => ({
 	chunk_size: { ...base.chunk_size, ...chunk },
+	chunk_delay: { ...base.chunk_delay, ...delay },
 	bitrate: { ...base.bitrate, ...bitrate },
 });
 
@@ -45,13 +47,15 @@ describe("transfer settings", () => {
 		document.body.innerHTML = "";
 	});
 
-	it("shows the automatic chunk size and bitrate", async () => {
+	it("shows the automatic chunk size, chunk delay and bitrate", async () => {
 		const { el } = await show(base);
 		const text = el.shadowRoot?.textContent ?? "";
-		expect(text).toContain("Automatic: 244 bytes");
+		expect(text).toContain("Automatic: 239 bytes");
+		expect(text).toContain("Automatic: 100 ms between chunks");
 		expect(text).toContain("Automatic: 32k");
 		expect(text).not.toContain("make transfers slow");
 		expect($(el, "input.chunk-size")).toBeNull();
+		expect($(el, "input.chunk-delay")).toBeNull();
 		expect($(el, "select.bitrate")).toBeNull();
 	});
 
@@ -119,6 +123,66 @@ describe("transfer settings", () => {
 		expect($<HTMLInputElement>(el, "input.chunk-size").value).toBe("30");
 	});
 
+	it("turns the chunk delay override on with its value, then changes it", async () => {
+		const { el, hass } = await show(base);
+		const box = $<HTMLInputElement>(el, "input.delay-override");
+		box.checked = true;
+		box.dispatchEvent(new Event("change"));
+		await settle(el);
+		expect(hass.callService.mock.calls).toEqual([
+			[
+				"switch",
+				"turn_on",
+				{ entity_id: "switch.skelly_santa_override_chunk_delay" },
+			],
+			[
+				"number",
+				"set_value",
+				{
+					entity_id: "number.skelly_santa_override_chunk_delay_value",
+					value: 100,
+				},
+			],
+		]);
+		const delay = $<HTMLInputElement>(el, "input.chunk-delay");
+		expect(delay.value).toBe("100");
+
+		// Typed values are rounded to the step and kept in range
+		hass.callService.mockClear();
+		delay.value = "5000";
+		delay.dispatchEvent(new Event("change"));
+		await settle(el);
+		expect(hass.callService.mock.calls.at(-1)?.[2]).toMatchObject({
+			value: 1000,
+		});
+		delay.value = "3";
+		delay.dispatchEvent(new Event("change"));
+		await settle(el);
+		expect(hass.callService.mock.calls.at(-1)?.[2]).toMatchObject({
+			value: 10,
+		});
+		expect(delay.value).toBe("10");
+
+		// The file list's settings replace the shown ones
+		el.settings = settingsWith({}, {}, { override: true, value: 10 });
+		await settle(el);
+		expect($<HTMLInputElement>(el, "input.chunk-delay").value).toBe("10");
+
+		// And off again
+		hass.callService.mockClear();
+		const on = $<HTMLInputElement>(el, "input.delay-override");
+		on.checked = false;
+		on.dispatchEvent(new Event("change"));
+		await settle(el);
+		expect(hass.callService.mock.calls).toEqual([
+			[
+				"switch",
+				"turn_off",
+				{ entity_id: "switch.skelly_santa_override_chunk_delay" },
+			],
+		]);
+	});
+
 	it("turns an override off", async () => {
 		const { el, hass } = await show(
 			settingsWith({ override: true }, { override: true, value: "64k" }),
@@ -137,7 +201,7 @@ describe("transfer settings", () => {
 	it("picks a bitrate", async () => {
 		const { el, hass } = await show(settingsWith({}, { override: true }));
 		const select = $<HTMLSelectElement>(el, "select.bitrate");
-		select.value = "16k";
+		select.value = "128k";
 		select.dispatchEvent(new Event("change"));
 		await settle(el);
 		expect(hass.callService).toHaveBeenLastCalledWith(
@@ -145,7 +209,7 @@ describe("transfer settings", () => {
 			"select_option",
 			{
 				entity_id: "select.skelly_santa_override_bitrate_value",
-				option: "16k",
+				option: "128k",
 			},
 		);
 	});

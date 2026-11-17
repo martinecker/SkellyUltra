@@ -130,11 +130,20 @@
 		"chunk_size": {
 			"override": false,
 			"value": 250,
-			"auto": 244,
-			"min": 20,
+			"auto": 239,
+			"min": 15,
 			"max": 500,
 			"switch_entity": "switch.skelly_santa_override_chunk_size",
 			"value_entity": "number.skelly_santa_override_chunk_size_value"
+		},
+		"chunk_delay": {
+			"override": false,
+			"value": 100,
+			"default": 100,
+			"min": 10,
+			"max": 1000,
+			"switch_entity": "switch.skelly_santa_override_chunk_delay",
+			"value_entity": "number.skelly_santa_override_chunk_delay_value"
 		},
 		"bitrate": {
 			"override": false,

@@ -267,6 +267,7 @@ def _transfer_settings(
     """
     entry_id = entry.entry_id
     chunk_override = bool(data.get("override_chunk_size", False))
+    delay_override = bool(data.get("override_chunk_delay", False))
     bitrate_override = bool(data.get("override_bitrate", False))
     return {
         "chunk_size": {
@@ -282,6 +283,19 @@ def _transfer_settings(
                 hass, "switch", f"{entry_id}_override_chunk_size"
             ),
             "value_entity": _entity_id(hass, "number", f"{entry_id}_chunk_size"),
+        },
+        "chunk_delay": {
+            "override": delay_override,
+            "value": data.get(
+                "chunk_delay_override", FileTransferManager.DEFAULT_CHUNK_DELAY_MS
+            ),
+            "default": FileTransferManager.DEFAULT_CHUNK_DELAY_MS,
+            "min": FileTransferManager.MIN_CHUNK_DELAY_MS,
+            "max": FileTransferManager.MAX_CHUNK_DELAY_MS,
+            "switch_entity": _entity_id(
+                hass, "switch", f"{entry_id}_override_chunk_delay"
+            ),
+            "value_entity": _entity_id(hass, "number", f"{entry_id}_chunk_delay"),
         },
         "bitrate": {
             "override": bitrate_override,

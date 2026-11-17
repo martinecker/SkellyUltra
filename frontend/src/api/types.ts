@@ -146,6 +146,12 @@ export interface TransferSettings {
 		min: number;
 		max: number;
 	};
+	// The pause between chunks, in ms
+	chunk_delay: TransferOverride<number> & {
+		default: number;
+		min: number;
+		max: number;
+	};
 	bitrate: TransferOverride<string> & {
 		default: string;
 		options: string[];

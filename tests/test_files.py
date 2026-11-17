@@ -129,9 +129,14 @@ async def test_send_file_uses_the_transfer_overrides(
     send_file = uploads.FileTransferManager.send_file
     process_file = uploads.AudioProcessor.process_file
 
-    async def spy_send(self, client, data, name, progress=None, chunk_size=None):
+    async def spy_send(
+        self, client, data, name, progress=None, chunk_size=None, chunk_delay=None
+    ):
         used["chunk_size"] = chunk_size
-        return await send_file(self, client, data, name, progress, chunk_size)
+        used["chunk_delay"] = chunk_delay
+        return await send_file(
+            self, client, data, name, progress, chunk_size, chunk_delay
+        )
 
     def spy_process(path, output=None, bitrate=None):
         used["bitrate"] = bitrate
@@ -141,11 +146,13 @@ async def test_send_file_uses_the_transfer_overrides(
     monkeypatch.setattr(uploads.AudioProcessor, "process_file", spy_process)
 
     await action(hass, "send_file", file_path=str(tone), target_filename="a.mp3")
-    assert used == {"chunk_size": None, "bitrate": None}
+    assert used == {"chunk_size": None, "chunk_delay": None, "bitrate": None}
 
     for domain, service, suffix, data in (
         ("switch", "turn_on", "override_chunk_size", {}),
         ("number", "set_value", "chunk_size", {"value": 300}),
+        ("switch", "turn_on", "override_chunk_delay", {}),
+        ("number", "set_value", "chunk_delay", {"value": 20}),
         ("switch", "turn_on", "override_bitrate", {}),
         ("select", "select_option", "bitrate", {"option": "64k"}),
     ):
@@ -156,7 +163,7 @@ async def test_send_file_uses_the_transfer_overrides(
             blocking=True,
         )
     await action(hass, "send_file", file_path=str(tone), target_filename="b.mp3")
-    assert used == {"chunk_size": 300, "bitrate": "64k"}
+    assert used == {"chunk_size": 300, "chunk_delay": 20, "bitrate": "64k"}
     assert device.file("b.mp3").data
 
 

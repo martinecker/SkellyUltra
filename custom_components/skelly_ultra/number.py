@@ -5,7 +5,7 @@ from __future__ import annotations
 from functools import partial
 
 from homeassistant.components.number import NumberEntity
-from homeassistant.const import PERCENTAGE
+from homeassistant.const import PERCENTAGE, UnitOfTime
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers.device_registry import DeviceInfo
@@ -48,6 +48,7 @@ async def async_setup_entry(
         )
 
     entities.append(SkellyChunkSizeNumber(coordinator, entry.entry_id, device_info))
+    entities.append(SkellyChunkDelayNumber(coordinator, entry.entry_id, device_info))
 
     async_add_entities(entities)
 
@@ -151,12 +152,64 @@ class SkellyEffectSpeedNumber(SkellyCoordinatorEntity, NumberEntity):
         )
 
 
-class SkellyChunkSizeNumber(SkellyCoordinatorEntity, NumberEntity):
-    """Number entity for the file transfer chunk size override value.
+class SkellyOverrideValueNumber(SkellyCoordinatorEntity, NumberEntity):
+    """Number entity for a file transfer override value.
 
-    Holds the chunk size used when the Override Chunk Size switch is on
-    (defaults to DEFAULT_CHUNK_SIZE). It can only be changed while the
-    override is on; when it's off, transfers use the MTU-based chunk size.
+    Holds the value used while its override switch is on (data_key in the
+    coordinator data, the default until set). It can only be changed while
+    the override is on; when it's off, transfers use the automatic value.
+    """
+
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+        key: str,
+        name: str,
+        *,
+        switch_key: str,
+        switch_name: str,
+        data_key: str,
+        default: int,
+    ) -> None:
+        """Initialize the override value number entity."""
+        super().__init__(coordinator, entry_id, device_info, key, name)
+        self._switch_key = switch_key
+        self._switch_name = switch_name
+        self._data_key = data_key
+        self._default = default
+
+    @property
+    def mode(self) -> str:
+        """Return mode based on override switch state."""
+        override_enabled = self.coordinator_data.get(self._switch_key, False)
+        return "box" if override_enabled else "slider"
+
+    @property
+    def native_value(self) -> int | None:
+        """Return the override value, or the default if not set yet."""
+        data = self.coordinator.data
+        if not data:
+            return None
+
+        return data.get(self._data_key, self._default)
+
+    async def async_set_native_value(self, value: float) -> None:
+        """Set the override value; only while the override is on."""
+        if not self.coordinator_data.get(self._switch_key, False):
+            raise ServiceValidationError(
+                f"Turn on {self._switch_name} to change this value"
+            )
+
+        self.coordinator.async_update_data_optimistic(self._data_key, int(value))
+        self.async_write_ha_state()
+
+
+class SkellyChunkSizeNumber(SkellyOverrideValueNumber):
+    """The file transfer chunk size used with Override Chunk Size on.
+
+    Without the override, transfers use the MTU-based chunk size.
     """
 
     _attr_native_unit_of_measurement = "bytes"
@@ -179,29 +232,42 @@ class SkellyChunkSizeNumber(SkellyCoordinatorEntity, NumberEntity):
             device_info,
             "chunk_size",
             "Override Chunk Size Value",
+            switch_key="override_chunk_size",
+            switch_name="Override Chunk Size",
+            data_key="chunk_size_override",
+            default=FileTransferManager.DEFAULT_CHUNK_SIZE,
         )
 
-    @property
-    def mode(self) -> str:
-        """Return mode based on override switch state."""
-        override_enabled = self.coordinator_data.get("override_chunk_size", False)
-        return "box" if override_enabled else "slider"
 
-    @property
-    def native_value(self) -> int | None:
-        """Return the chunk size override value, or the default if not set yet."""
-        data = self.coordinator.data
-        if not data:
-            return None
+class SkellyChunkDelayNumber(SkellyOverrideValueNumber):
+    """The pause between file transfer chunks used with Override Chunk Delay on.
 
-        return data.get("chunk_size_override", FileTransferManager.DEFAULT_CHUNK_SIZE)
+    Without the override, transfers pause 100 ms between chunks, like the
+    phone app.
+    """
 
-    async def async_set_native_value(self, value: float) -> None:
-        """Set the chunk size override value; only while the override is on."""
-        if not self.coordinator_data.get("override_chunk_size", False):
-            raise ServiceValidationError(
-                "Turn on Override Chunk Size to change the chunk size"
-            )
+    _attr_native_unit_of_measurement = UnitOfTime.MILLISECONDS
+    _attr_icon = "mdi:timer-outline"
+    _attr_native_min_value = FileTransferManager.MIN_CHUNK_DELAY_MS
+    _attr_native_max_value = FileTransferManager.MAX_CHUNK_DELAY_MS
+    _attr_native_step = 10
 
-        self.coordinator.async_update_data_optimistic("chunk_size_override", int(value))
-        self.async_write_ha_state()
+    def __init__(
+        self,
+        coordinator: SkellyCoordinator,
+        entry_id: str,
+        device_info: DeviceInfo | None,
+    ) -> None:
+        """Initialize the chunk delay number entity."""
+        # Named to sort next to the "Override Chunk Delay" switch in the HA UI
+        super().__init__(
+            coordinator,
+            entry_id,
+            device_info,
+            "chunk_delay",
+            "Override Chunk Delay Value",
+            switch_key="override_chunk_delay",
+            switch_name="Override Chunk Delay",
+            data_key="chunk_delay_override",
+            default=FileTransferManager.DEFAULT_CHUNK_DELAY_MS,
+        )

@@ -10,7 +10,11 @@ import logging
 import aiohttp
 import pytest
 
-from custom_components.skelly_ultra.skelly_ultra_pkg import commands, parser
+from custom_components.skelly_ultra.skelly_ultra_pkg import (
+    commands,
+    file_transfer,
+    parser,
+)
 from custom_components.skelly_ultra.skelly_ultra_pkg.client import (
     ConnectionLostError,
     SkellyClient,
@@ -43,7 +47,7 @@ async def client(device):
 
 @pytest.fixture(autouse=True)
 def fast_transfers(monkeypatch):
-    monkeypatch.setattr(FileTransferManager, "CHUNK_DELAY", 0)
+    monkeypatch.setattr(FileTransferManager, "DEFAULT_CHUNK_DELAY_MS", 0)
 
 
 def test_frame_matches_capture_from_the_app():
@@ -305,6 +309,31 @@ async def test_upload_chunks_fill_one_write(client, device, mtu, chunk):
     sizes = [len(w) - 5 for w in device.writes if w[:2] == b"\xaa\xc1"]
     assert max(sizes) == chunk
     assert len(sizes) == -(-len(data) // chunk)  # no retry
+
+
+@pytest.mark.parametrize(("override", "pause"), [(None, 0.1), (30, 0.03), (5, 0.1)])
+async def test_upload_pauses_between_chunks(
+    client, device, monkeypatch, override, pause
+):
+    """Chunks go out 100 ms apart like the app's, or as overridden (10-1000 ms)."""
+    monkeypatch.setattr(FileTransferManager, "DEFAULT_CHUNK_DELAY_MS", 100)
+    pauses = []
+    real_sleep = asyncio.sleep
+
+    async def sleep(seconds, *args):
+        # The pause that follows each chunk
+        if device.writes and device.writes[-1][:2] == b"\xaa\xc1":
+            pauses.append(seconds)
+        await real_sleep(0)
+
+    monkeypatch.setattr(file_transfer.asyncio, "sleep", sleep)
+    data = bytes(1000)
+    await FileTransferManager().send_file(
+        client, data, "paced.mp3", override_chunk_delay_ms=override
+    )
+    assert device.file("paced.mp3").data == data
+    chunks = sum(w[:2] == b"\xaa\xc1" for w in device.writes)
+    assert pauses == [pause] * chunks
 
 
 def test_chunk_size_at_the_smallest_mtu():
