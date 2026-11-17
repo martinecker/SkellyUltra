@@ -107,6 +107,7 @@ class FakeSkellyDevice:
         self._upload: dict | None = None
         # Test knobs
         self.writes: list[bytes] = []  # every command frame received
+        self.oversized_writes: list[bytes] = []  # longer than MTU - 3, lost
         self.bad_frames: list[bytes] = []  # frames ignored for a bad checksum
         # Chunks larger than this get lost (an MTU the link can't carry)
         self.max_chunk_payload: int | None = None
@@ -175,6 +176,10 @@ class FakeSkellyDevice:
         if not self.is_connected:
             raise ConnectionError("Not connected")
         data = bytes(data)
+        if len(data) > self.mtu_size - 3:
+            # More than one ATT write can carry: lost on the way
+            self.oversized_writes.append(data)
+            return
         self.writes.append(data)
         self._handle(data)
 

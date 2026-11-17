@@ -289,8 +289,32 @@ async def test_upload_round_trip(client, device):
     assert device.file("boo.mp3").data == data
 
 
+@pytest.mark.parametrize(
+    ("mtu", "chunk"), [(185, 177), (247, 239), (512, 500), (517, 500)]
+)
+async def test_upload_chunks_fill_one_write(client, device, mtu, chunk):
+    """Each C1 frame fits the MTU, like the app's: data is MTU - 8 bytes.
+
+    The file goes through on the first attempt, without a lost write.
+    """
+    device.mtu_size = mtu
+    data = bytes(range(256)) * 8
+    await FileTransferManager().send_file(client, data, "fit.mp3")
+    assert device.file("fit.mp3").data == data
+    assert device.oversized_writes == []
+    sizes = [len(w) - 5 for w in device.writes if w[:2] == b"\xaa\xc1"]
+    assert max(sizes) == chunk
+    assert len(sizes) == -(-len(data) // chunk)  # no retry
+
+
+def test_chunk_size_at_the_smallest_mtu():
+    # At MTU 23 a C1 frame holds 15 data bytes. (The C0 frame with the name
+    # doesn't fit there at all, so uploads need a bigger MTU anyway.)
+    assert FileTransferManager.calculate_chunk_size_from_mtu(23) == 15
+
+
 async def test_upload_retries_with_smaller_chunks(client, device):
-    device.mtu_size = 247  # suggests ~244-byte chunks...
+    device.mtu_size = 247  # suggests 239-byte chunks...
     device.max_chunk_payload = 100  # ...but only 100 get through
     data = bytes(range(256)) * 10
     progress = []

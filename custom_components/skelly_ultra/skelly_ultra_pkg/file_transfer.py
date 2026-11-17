@@ -82,10 +82,13 @@ class FileTransferManager:
     """
 
     # Protocol constants
-    MIN_CHUNK_SIZE = 20  # Minimum bytes per chunk
+    # Smallest chunk: what fits the smallest BLE MTU (23 - CHUNK_OVERHEAD)
+    MIN_CHUNK_SIZE = 15
     MAX_CHUNK_SIZE = 500  # Maximum bytes per chunk
     DEFAULT_CHUNK_SIZE = 250  # Conservative default for unknown MTU
-    ATT_OVERHEAD = 3  # ATT protocol overhead bytes
+    # MTU bytes a chunk can't use: the ATT write header (3) and the C1 frame
+    # around the data (AA C1, index u16, CRC: 5). Same as the phone app.
+    CHUNK_OVERHEAD = 8
     TIMEOUT_START = 5.0  # seconds to wait for BBC0
     TIMEOUT_END_MIN = 5.0  # minimum seconds to wait for BBC2
     TIMEOUT_END_PER_KB = 0.4  # seconds per kilobyte of file size
@@ -102,15 +105,17 @@ class FileTransferManager:
     def calculate_chunk_size_from_mtu(mtu: int) -> int:
         """Calculate optimal chunk size from MTU value.
 
+        A whole C1 frame then fills one write (MTU - 3 bytes), as in the
+        phone app. A bigger frame doesn't fit and gets lost.
+
         Args:
-            mtu: The BLE MTU size in bytes
+            mtu: The negotiated BLE (ATT) MTU in bytes
 
         Returns:
             Optimal chunk size in bytes, constrained to valid range
         """
-        # Account for ATT protocol overhead
         chunk_size = min(
-            mtu - FileTransferManager.ATT_OVERHEAD,
+            mtu - FileTransferManager.CHUNK_OVERHEAD,
             FileTransferManager.MAX_CHUNK_SIZE,
         )
         return max(chunk_size, FileTransferManager.MIN_CHUNK_SIZE)
@@ -124,7 +129,7 @@ class FileTransferManager:
 
         Args:
             client: The BLE client to query for MTU
-            override_size: Optional manual chunk size override (50-500 bytes)
+            override_size: Optional manual chunk size override (15-500 bytes)
 
         Returns:
             Optimal chunk size in bytes

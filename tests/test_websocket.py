@@ -267,8 +267,8 @@ async def test_transfer_settings_follow_the_override_entities(
     bitrate = settings["bitrate"]
     # The simulator's MTU of 247 allows 244-byte chunks
     assert chunk["override"] is False
-    assert chunk["auto"] == 244
-    assert (chunk["min"], chunk["max"]) == (20, 500)
+    assert chunk["auto"] == 239
+    assert (chunk["min"], chunk["max"]) == (15, 500)
     assert bitrate["override"] is False
     assert bitrate["default"] == bitrate["value"] == "32k"
     assert "250k" not in bitrate["options"] and "64k" in bitrate["options"]
