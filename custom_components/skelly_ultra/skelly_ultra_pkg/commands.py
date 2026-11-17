@@ -3,7 +3,10 @@
 All functions are pure and return bytes for BLE writes.
 """
 
+from collections.abc import Sequence
+
 from . import constants as const
+from .parser import LightInfo
 
 WRITE_UUID = "0000ae01-0000-1000-8000-00805f9b34fb"
 NOTIFY_UUID = "0000ae02-0000-1000-8000-00805f9b34fb"
@@ -234,6 +237,63 @@ def set_light_speed(
     return build_cmd(const.CMD_SET_LIGHT_SPEED, payload)
 
 
+LIGHT_CHANNELS = 6  # F1 always carries this many
+
+
+def _light_hex(light: LightInfo) -> str:
+    if not 1 <= light.effect_type <= 3:
+        raise ValueError(f"Light mode must be 1, 2, or 3, got {light.effect_type}")
+    values = (light.brightness, *light.rgb, light.effect_speed)
+    if len(light.rgb) != 3 or not all(0 <= v <= 255 for v in values):
+        raise ValueError(f"Light values must be between 0 and 255, got {light}")
+    if light.color_cycle not in (0, 1):
+        raise ValueError(f"color cycle value must be 0 or 1, got {light.color_cycle}")
+    r, g, b = light.rgb
+    return "".join(
+        int_to_hex(v, 1)
+        for v in (
+            light.effect_type,
+            light.brightness,
+            r,
+            g,
+            b,
+            light.color_cycle,
+            light.effect_speed,
+        )
+    )
+
+
+def set_all_lights(
+    lights: Sequence[LightInfo],
+    cluster: int = 0,
+    scene: int = const.LightScene.CUSTOM,
+) -> bytes:
+    """F1: set every light channel and the light scene in one command.
+
+    lights are the channels from 0 on (1-6 of them). F1 always carries 6;
+    the missing ones repeat the given channels in turn, as the phone app
+    fills them. cluster 0 sets the live lights, a file's cluster that file's
+    (the app sends audio mode 0 with cluster 0, 1 with a file's cluster).
+    Unlike F2-F6 it carries no file name. Only for firmware with the
+    set_all_lights capability: older firmware (the v66 Ultra) doesn't know F1.
+    """
+    if not 1 <= len(lights) <= LIGHT_CHANNELS:
+        raise ValueError(
+            f"Need 1 to {LIGHT_CHANNELS} light channels, got {len(lights)}"
+        )
+    _validate_cluster(cluster)
+    if not 0 <= scene <= 255:
+        raise ValueError(f"Scene must be between 0 and 255, got {scene}")
+    channels = [lights[i % len(lights)] for i in range(LIGHT_CHANNELS)]
+    payload = (
+        int_to_hex(cluster, 4)
+        + int_to_hex(0 if cluster == 0 else 1, 1)  # audio mode: live / file
+        + int_to_hex(scene, 1)
+        + "".join(_light_hex(light) for light in channels)
+    )
+    return build_cmd(const.CMD_SET_ALL_LIGHTS, payload)
+
+
 def select_rgb_channel(channel: int) -> bytes:
     _validate_channel(channel)
     return build_cmd(const.CMD_SELECT_RGB_CHANNEL, _channel_hex(channel))
@@ -367,7 +427,9 @@ def set_file_order(total: int, index: int, file_serial: int, filename: str) -> b
     if not 0 <= index <= 0xFF:
         raise ValueError(f"Index must be between 0 and 255, got {index}")
     if not 0 <= file_serial <= 0xFFFF:
-        raise ValueError(f"File serial must be between 0 and {0xFFFF}, got {file_serial}")
+        raise ValueError(
+            f"File serial must be between 0 and {0xFFFF}, got {file_serial}"
+        )
     if not filename:
         raise ValueError("Filename cannot be empty")
     payload = (

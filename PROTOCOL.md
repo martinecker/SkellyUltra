@@ -337,6 +337,8 @@ The tail is told apart by where the `5C 55` name marker sits:
 
 For a preset the app sends mode 1, brightness 255 and speed 0 on every channel, in the same F1. The device stores the scene number, and BBE1/BBD0 report it back.
 
+**F1 details.** The app always pairs the audioMode byte with the cluster: `cluster 0, audioMode 0` from the live lights screen, and `<file's cluster>, audioMode 1` from a file's light settings. F1 always carries 6 channels. For a device with fewer, the app repeats its channels in turn: one light becomes 6 copies, and two lights go A B A B A B.
+
 ## 9. Movement and eyes
 
 **Movement** (CA, and the action byte of BBE1/BBD0) is a bit field. A set bit moves that part; 255 means "all", which the app shows as an icon of its own.
