@@ -17,6 +17,7 @@ from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     CONF_SERVER_URL,
     CONF_USE_BLE_PROXY,
+    DEVICE_TYPE_SANTA,
     DEVICE_TYPE_SKELLY,
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
@@ -191,6 +192,23 @@ async def test_scan_lists_only_skellies_and_detects_model(hass, rest_server):
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert result["data"][CONF_DEVICE_TYPE] == DEVICE_TYPE_SKELLY_12FT
     assert result["data"]["name"] == "12ft Skelly"
+
+
+@pytest.mark.parametrize("name", ["Ultra Santa", "Santa Claus"])
+async def test_scan_detects_ultra_santa(hass, rest_server, name):
+    """Both names the app knows for the Santa pick the Ultra Santa profile."""
+    rest_server.devices.append({"name": name, "address": "44:44:44:44:44:44"})
+    result = await start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        form(**{CONF_USE_BLE_PROXY: True, "mode": "scan", "address": ""}),
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"address": "44:44:44:44:44:44"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_DEVICE_TYPE] == DEVICE_TYPE_SANTA
+    assert result["data"]["name"] == name
 
 
 async def test_scan_show_all_includes_other_devices(hass, rest_server):

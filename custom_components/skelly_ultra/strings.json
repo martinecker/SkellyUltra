@@ -246,7 +246,7 @@
         },
         "eye_icon": {
           "name": "Eye icon",
-          "description": "The 1-based eye icon number, as in the Eye Icon select. Not available on Lethal Lily."
+          "description": "The 1-based eye icon number, as in the Eye Icon select. Not available on Lethal Lily or Ultra Santa."
         },
         "lights": {
           "name": "Lights",

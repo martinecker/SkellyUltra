@@ -12,6 +12,7 @@ from custom_components.skelly_ultra import file_order, file_settings
 from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     DEVICE_TYPE_LILY,
+    DEVICE_TYPE_SANTA,
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
 )
@@ -391,6 +392,9 @@ async def test_edit_file_movements_by_part_name(hass, setup_integration, device)
         (DEVICE_TYPE_SKELLY_12FT, ["head"], 0x02),
         (DEVICE_TYPE_LILY, ["wrist", "eyes"], 0x21),
         (DEVICE_TYPE_LILY, ["all"], 255),
+        # The app's Santa bits: eyes 0x01, head 0x02, torso 0x04, arm 0x08
+        (DEVICE_TYPE_SANTA, ["eyes", "arm"], 0x09),
+        (DEVICE_TYPE_SANTA, ["head", "torso"], 0x06),
     ],
 )
 async def test_edit_file_movement_bits_follow_device_profile(
@@ -406,8 +410,9 @@ async def test_edit_file_movement_bits_follow_device_profile(
     await action(hass, "edit_file", filename="hello.mp3", movements=parts)
     assert mock_ble.file("hello.mp3").action == bits
     # Parts of other models are refused
+    other = "wrist" if device_type == DEVICE_TYPE_SANTA else "torso"
     with pytest.raises(HomeAssistantError, match="Unknown movement"):
-        await action(hass, "edit_file", filename="hello.mp3", movements=["torso"])
+        await action(hass, "edit_file", filename="hello.mp3", movements=[other])
 
 
 async def test_edit_file_sends_nothing_when_unchanged(hass, setup_integration, device):

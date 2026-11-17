@@ -317,7 +317,7 @@ def _live_controls(
     select.select_option, number.set_value, switch.turn_on, button.press),
     like any automation. Each is None when it isn't in the entity registry;
     a disabled one is listed but has no state. Only what the device's
-    profile has is listed: e.g. no eye icon on Lethal Lily.
+    profile has is listed: e.g. no eye icon on Lethal Lily or Ultra Santa.
     """
     entry_id = entry.entry_id
     return {

@@ -1,6 +1,6 @@
 # 💀 Skelly Ultra Integration
 
-Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly and 12 ft Skelly Halloween animatronics and the 7 ft Lethal Lily animatronic witch BLE devices.
+Home Assistant integration for the Home Depot 6.5 ft Ultra Skelly and 12 ft Skelly Halloween animatronics and the 7 ft Lethal Lily animatronic witch BLE devices, with untested support for the 6.5 ft Ultra Santa.
 
 ![Example Skelly Dashboard](screenshots/dashboard.jpg)
 
@@ -34,14 +34,14 @@ There is a companion project that provides a fully web browser-based controller 
 
 - 💀 **Skelly panel and dashboard card**: A sidebar panel to manage the files on your devices (play, edit lights, eyes and movement, reorder, upload, record with text-to-speech, delete) and a card that says text through the Skelly and plays its files
 - 📊 **Sensor entities**: Volume, live name, storage capacity, file count, file order
-- 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly), Torso (12ft Skelly) or Lantern (Lethal Lily)
+- 💡 **Light entities**: RGB lighting control — Torso and Head (Ultra Skelly), Torso (12ft Skelly) or Lantern (Lethal Lily, Ultra Santa)
 - 🔌 **Switch entities**:
   - Live Mode (enables classic Bluetooth speaker)
   - Color Cycle (rainbow effect per light channel)
-  - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly) or Wrist/Elbow/Head/Eyes/All (Lethal Lily)
+  - Movement controls — Head/Arm/Torso/All (Ultra Skelly), Head (12ft Skelly), Wrist/Elbow/Head/Eyes/All (Lethal Lily) or Eyes/Head/Torso/Arm/All (Ultra Santa)
 - 🔘 **Button entities**: Trigger Movement (performs one movement using the enabled movement switches), Push Settings to Skelly, Clear Perform History
 - 🎚️ **Number entities**: Volume control, effect speed per light channel
-- 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly) or Flickering/Pulsing/Chasing (Lethal Lily)
+- 🎨 **Select entities**: Effect mode per light channel — Static/Strobe/Pulse (Ultra Skelly and 12ft Skelly), Flickering/Pulsing/Chasing (Lethal Lily) or Static/Sparkle/Pulsing (Ultra Santa)
 - 🎵 **Media Player entities**:
   - **Live Mode Speaker**: Play audio to the device's Bluetooth speaker (when Live Mode is enabled)
     - Supports TTS (Text-to-Speech) services
@@ -118,6 +118,7 @@ The device will now be discoverable via Bluetooth as `<Device Name>(Live)`. The 
 | Ultra Skelly | Animated Skelly | Ultra Skelly v2 | Animated Skelly(Live) or Ultra Skelly v2(Live) |
 | 12ft Skelly | — | 12ft Skelly | 12ft Skelly(Live) |
 | Lethal Lily | — | Lethal Lily | Lethal Lily(Live) |
+| Ultra Santa | — | Ultra Santa or Santa Claus | Ultra Santa(Live) or Santa Claus(Live) |
 
 **Step 2: Pair Using bluetoothctl**
 
@@ -236,6 +237,7 @@ If you want to use the live mode audio feature, set up and start the Skelly Ultr
    - **Ultra Skelly** — the 6.5 ft skeleton (BLE names: "Animated Skelly" on older firmware, "Ultra Skelly v2" on current firmware)
    - **12ft Skelly** — the 12 ft skeleton (BLE name: "12ft Skelly")
    - **Lethal Lily** — the 7 ft animatronic witch (BLE name: "Lethal Lily")
+   - **Ultra Santa** — the 6.5 ft animated Santa (BLE names: "Ultra Santa" or "Santa Claus")
 
 4. **Configure connection settings** (Step 2 of the config flow):
    - Choose connection mode:
@@ -353,6 +355,15 @@ The integration creates different entities depending on which device type you co
 - **Effect mode select**: Lantern Effect Mode — Flickering / Pulsing / Chasing
 - **Effect speed number**: Lantern Effect Speed
 - **Color cycle switch**: Lantern Color Cycle
+
+#### Ultra Santa
+
+- **Lights**: Lantern (channel 0) — RGB with brightness
+- **Movement switches**: Eyes, Head, Torso, Arm, All
+- **Effect mode select**: Lantern Effect Mode — Static / Sparkle / Pulsing
+- **Effect speed number**: Lantern Effect Speed
+- **Color cycle switch**: Lantern Color Cycle
+- No eye icons: the eyes are a movement, not a display
 
 #### All devices
 
@@ -570,7 +581,7 @@ The response has `status` (`ok` or `busy`), `line`, `mood`, `person_present` (on
 | `playful` | Fireworks | Color cycle, fast pulse | Full |
 | `mysterious` | Gray Eyeball | Blue, slow pulse | Subtle |
 
-Subtle movement is the head on the Skelly and head and eyes on Lethal Lily; full movement is all parts (the 12ft Skelly only moves its head). Lethal Lily has no eye icons, so its eyes are left alone.
+Subtle movement is the head on the Skelly and head and eyes on Lethal Lily and Ultra Santa; full movement is all parts (the 12ft Skelly only moves its head). Lethal Lily and Ultra Santa have no eye icons, so their eyes are left alone.
 
 #### Line History
 
@@ -725,7 +736,7 @@ The media player exposes the following attributes when a file is selected/playin
 - `file_index`: The 1-based index of the file
 - `file_name`: The filename
 - `file_duration`: Duration in seconds, reported by the device once playback starts (not available until then)
-- `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. 12ft Skelly: bit 1 = head. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Value 255 means all parts.
+- `file_action`: Associated action/movement setting as a bitfield. Ultra Skelly: bit 0 = head, bit 1 = arm, bit 2 = torso. 12ft Skelly: bit 1 = head. Lethal Lily: bit 0 = wrist, bit 1 = elbow, bit 4 = head, bit 5 = eyes. Ultra Santa: bit 0 = eyes, bit 1 = head, bit 2 = torso, bit 3 = arm. Value 255 means all parts.
 - `file_eye_icon`: Associated eye icon
 - `file_cluster`: File cluster information
 - `total_files`: Total number of files on device
@@ -925,9 +936,9 @@ data:
 
 **Notes**:
 
-- Movement parts depend on the device: Ultra Skelly has `all`, `head`, `arm`, `torso`; 12ft Skelly has `head`; Lethal Lily has `all`, `wrist`, `elbow`, `head`, `eyes`
-- Light channels: Ultra Skelly has 0 (torso) and 1 (head); 12ft Skelly and Lethal Lily have 0. Light mode names are Static, Strobe, Pulse (Lethal Lily: Flickering, Pulsing, Chasing)
-- Eye icons aren't available on Lethal Lily
+- Movement parts depend on the device: Ultra Skelly has `all`, `head`, `arm`, `torso`; 12ft Skelly has `head`; Lethal Lily has `all`, `wrist`, `elbow`, `head`, `eyes`; Ultra Santa has `all`, `eyes`, `head`, `torso`, `arm`
+- Light channels: Ultra Skelly has 0 (torso) and 1 (head); 12ft Skelly, Lethal Lily and Ultra Santa have 0. Light mode names are Static, Strobe, Pulse (Lethal Lily: Flickering, Pulsing, Chasing; Ultra Santa: Static, Sparkle, Pulsing)
+- Eye icons aren't available on Lethal Lily or Ultra Santa
 - The file list is refreshed before the edit (to find the file) and after it, if anything changed or a write failed partway
 - The device must be connected and not playing a file, since the file list can't be read during playback
 
@@ -1187,5 +1198,5 @@ See [tests/README.md](tests/README.md) for details.
 
 Released under the [MIT License](LICENSE).
 
-This integration is provided as-is for use with Ultra Skelly, 12ft Skelly and Lethal Lily devices. Use it at your own risk. It might brick your Skelly.
+This integration is provided as-is for use with Ultra Skelly, 12ft Skelly, Lethal Lily and Ultra Santa devices. Use it at your own risk. It might brick your Skelly.
 

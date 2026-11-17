@@ -42,7 +42,7 @@ export interface EyeIconInfo {
 }
 
 export interface DeviceProfile {
-	type: string; // ultra_skelly, skelly_12ft or lethal_lily
+	type: string; // ultra_skelly, skelly_12ft, lethal_lily or ultra_santa
 	display_name: string;
 	movements: MovementInfo[];
 	lights: LightChannelInfo[];

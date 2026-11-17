@@ -10,6 +10,7 @@ from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     DEVICE_PROFILES,
     DEVICE_TYPE_LILY,
+    DEVICE_TYPE_SANTA,
     DEVICE_TYPE_SKELLY,
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
@@ -39,9 +40,12 @@ ALL_CAPABILITIES = (
         # Older than anything tested
         (DEVICE_TYPE_SKELLY_12FT, 13, False),
         (DEVICE_TYPE_LILY, 23, False),
+        # No Santa firmware seen yet, so any version has them
+        (DEVICE_TYPE_SANTA, 1, True),
         # Not read yet
         (DEVICE_TYPE_SKELLY, None, False),
         (DEVICE_TYPE_SKELLY_12FT, None, False),
+        (DEVICE_TYPE_SANTA, None, False),
     ],
 )
 def test_capabilities_by_firmware(device_type, firmware, capable) -> None:

@@ -15,6 +15,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry
 from custom_components.skelly_ultra.const import (
     CONF_DEVICE_TYPE,
     DEVICE_TYPE_LILY,
+    DEVICE_TYPE_SANTA,
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
 )
@@ -215,6 +216,18 @@ def _unique_ids(hass, entry) -> set[str]:
             DEVICE_TYPE_LILY,
             {"light_0"},
             {"eye_icon", "eye_icon_image", "movement_arm", "light_1"},
+        ),
+        (
+            DEVICE_TYPE_SANTA,
+            {
+                "light_0",
+                "movement_all",
+                "movement_eyes",
+                "movement_head",
+                "movement_torso",
+                "movement_arm",
+            },
+            {"eye_icon", "eye_icon_image", "movement_wrist", "light_1"},
         ),
     ],
 )

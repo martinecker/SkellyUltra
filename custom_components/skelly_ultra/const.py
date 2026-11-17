@@ -24,6 +24,7 @@ CONF_DEVICE_TYPE = "device_type"
 DEVICE_TYPE_SKELLY = "ultra_skelly"
 DEVICE_TYPE_SKELLY_12FT = "skelly_12ft"
 DEVICE_TYPE_LILY = "lethal_lily"
+DEVICE_TYPE_SANTA = "ultra_santa"
 
 
 # Capabilities that depend on the firmware, keys of a profile's capabilities.
@@ -204,6 +205,38 @@ DEVICE_PROFILES: dict[str, DeviceProfile] = {
             CAPABILITY_LIGHT_SCENES: 24,
             CAPABILITY_SET_ALL_LIGHTS: 24,
             CAPABILITY_JAW_DATA: 24,
+        },
+    },
+    DEVICE_TYPE_SANTA: {
+        "display_name": "Ultra Santa",
+        "default_name": "Ultra Santa",
+        "ble_names": ["ultra santa", "santa claus"],
+        "has_eye_image": False,
+        "eye_icons": [],
+        "image_folder": "santa",
+        "movements": [
+            {"part": "all", "bit": 255},
+            {"part": "eyes", "bit": 0x01},
+            {"part": "head", "bit": 0x02},
+            {"part": "torso", "bit": 0x04},
+            {"part": "arm", "bit": 0x08},
+        ],
+        "lights": [
+            {"label": "Lantern", "channel": 0},
+        ],
+        "light_modes": ["Static", "Sparkle", "Pulsing"],
+        "mood_light_styles": {
+            "steady": "Static",
+            "pulse": "Pulsing",
+            "flash": "Sparkle",
+        },
+        "mood_movements": {"subtle": ["eyes", "head"], "full": ["all"]},
+        # The app treats Santa as a scene model; its firmware versions are
+        # unknown, so any version counts as capable
+        "capabilities": {
+            CAPABILITY_LIGHT_SCENES: 0,
+            CAPABILITY_SET_ALL_LIGHTS: 0,
+            CAPABILITY_JAW_DATA: 0,
         },
     },
 }

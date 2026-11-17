@@ -33,6 +33,7 @@ This gets you basic control: lights, switches, sensors, and playing files stored
 4. **Select your device type**:
    - **Ultra Skelly** — the 6.5 ft skeleton animatronic
    - **Lethal Lily** — the 7 ft animatronic witch
+   - **Ultra Santa** — the 6.5 ft animated Santa
 5. Click **Submit**, then choose **Scan** to automatically find your device
    - *Or choose **Manual** if you know the Bluetooth MAC address*
 
@@ -229,7 +230,7 @@ See the [README](README.md) for all fields.
 
 - Make sure the device is **powered on**
 - Check that **Bluetooth is enabled** on your Home Assistant device
-- The scan filter accepts: "Animated Skelly" (Ultra Skelly old firmware), "Ultra Skelly v2" (Ultra Skelly new firmware), and "Lethal Lily". If your device shows up as something different, use **Manual** mode with the MAC address.
+- The scan filter accepts: "Animated Skelly" (Ultra Skelly old firmware), "Ultra Skelly v2" (Ultra Skelly new firmware), "Lethal Lily", "Ultra Santa" and "Santa Claus". If your device shows up as something different, use **Manual** mode with the MAC address.
 - Try using **Manual** mode and enter the MAC address if you know it (visible via `bluetoothctl scan on`)
 
 ### Live Mode not working?
