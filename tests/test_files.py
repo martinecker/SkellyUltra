@@ -231,6 +231,21 @@ async def test_overwriting_a_file_keeps_its_settings(
     assert (laugh.action, laugh.eye_icon, laugh.lights) == settings
 
 
+@needs_ffmpeg
+async def test_overwrite_is_refused_without_free_space(
+    hass, setup_integration, device, tone
+):
+    """The free-space check runs for an overwrite too; the old file stays."""
+    laugh = device.file("laugh.mp3")
+    old = laugh.data
+    device.capacity_kb = 1
+    with pytest.raises(HomeAssistantError, match="Not enough space"):
+        await action(
+            hass, "send_file", file_path=str(tone), target_filename="laugh.mp3"
+        )
+    assert laugh.data == old
+
+
 async def test_too_long_filename_is_refused_before_upload(
     hass, setup_integration, device, tmp_path
 ):

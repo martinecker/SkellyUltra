@@ -23,6 +23,7 @@ from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 from custom_components.skelly_ultra.skelly_ultra_pkg.file_transfer import (
     FileTransferError,
     FileTransferManager,
+    InsufficientSpaceError,
 )
 
 from .device_sim import FakeSkellyDevice
@@ -334,6 +335,32 @@ async def test_upload_pauses_between_chunks(
     assert device.file("paced.mp3").data == data
     chunks = sum(w[:2] == b"\xaa\xc1" for w in device.writes)
     assert pauses == [pause] * chunks
+
+
+@pytest.mark.parametrize(("free_kb", "fits"), [(3, True), (2, False), (0, False)])
+async def test_upload_needs_free_space(client, device, free_kb, fits):
+    """Like the app: a 1001-2000 byte file needs 2 KB, and less than the free KB."""
+    device.capacity_kb = free_kb
+    data = bytes(1500)
+    if fits:
+        await FileTransferManager().send_file(client, data, "fits.mp3")
+        assert device.file("fits.mp3").data == data
+        return
+    with pytest.raises(InsufficientSpaceError, match=f"needs 2 KB, {free_kb} KB"):
+        await FileTransferManager().send_file(client, data, "fits.mp3")
+    # Refused before the upload started
+    assert not any(w[:2] == b"\xaa\xc0" for w in device.writes)
+
+
+async def test_upload_goes_ahead_without_a_free_space_reply(
+    client, device, monkeypatch
+):
+    monkeypatch.setattr(FileTransferManager, "TIMEOUT_CAPACITY", 0.05)
+    device.capacity_kb = 0
+    monkeypatch.setattr(device, "_cmd_AAD2", lambda p: None)  # no BBD2
+    data = bytes(500)
+    await FileTransferManager().send_file(client, data, "anyway.mp3")
+    assert device.file("anyway.mp3").data == data
 
 
 def test_chunk_size_at_the_smallest_mtu():

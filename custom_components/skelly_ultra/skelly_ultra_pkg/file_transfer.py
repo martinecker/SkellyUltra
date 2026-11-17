@@ -46,6 +46,10 @@ class FileTransferTimeout(FileTransferError):
     """Exception raised when transfer times out."""
 
 
+class InsufficientSpaceError(FileTransferError):
+    """The device doesn't have room for the file."""
+
+
 @dataclass
 class TransferState:
     """Track file transfer state."""
@@ -93,6 +97,7 @@ class FileTransferManager:
     TIMEOUT_END_MIN = 5.0  # minimum seconds to wait for BBC2
     TIMEOUT_END_PER_KB = 0.4  # seconds per kilobyte of file size
     TIMEOUT_CONFIRM = 5.0  # seconds to wait for BBC3
+    TIMEOUT_CAPACITY = 2.0  # seconds to wait for BBD2
     # Pause between chunks, like the phone app's 100 ms; can be overridden
     DEFAULT_CHUNK_DELAY_MS = 100
     MIN_CHUNK_DELAY_MS = 10
@@ -177,6 +182,37 @@ class FileTransferManager:
             )
         return self.DEFAULT_CHUNK_DELAY_MS
 
+    @staticmethod
+    def needed_kb(size: int) -> int:
+        """Return the KB a file of size bytes needs, as the phone app counts.
+
+        The device reports free space in KB. The app divides by 1000; if the
+        device's KB are 1024 bytes, that overestimates a little, which is safe.
+        """
+        return -(-size // 1000)
+
+    async def _check_free_space(self, client: SkellyClient, size: int) -> None:
+        """Refuse the upload if the device has no room for it, like the app.
+
+        Runs for overwrites too. If the device doesn't report its free space,
+        the upload goes ahead.
+        """
+        try:
+            capacity = await client.get_capacity(timeout=self.TIMEOUT_CAPACITY)
+        except Exception as err:  # noqa: BLE001 - don't block uploads on it
+            logger.warning("Couldn't read the free space, uploading anyway: %r", err)
+            return
+        needed = self.needed_kb(size)
+        logger.debug(
+            "Free space: %d KB, the file needs %d KB", capacity.capacity_kb, needed
+        )
+        # Same test as the app: the file must need less than what's free
+        if needed >= capacity.capacity_kb:
+            raise InsufficientSpaceError(
+                f"Not enough space on the device: the file needs {needed} KB, "
+                f"{capacity.capacity_kb} KB are free. Delete files to make room."
+            )
+
     @property
     def state(self) -> TransferState:
         """Get current transfer state (read-only copy)."""
@@ -210,6 +246,7 @@ class FileTransferManager:
 
         Raises:
             FileTransferError: On transfer failure
+            InsufficientSpaceError: If the device has no room for the file
             FileTransferCancelled: If cancelled
             FileTransferTimeout: If device doesn't respond
             RuntimeError: If client is not connected or transfer already in progress
@@ -228,6 +265,7 @@ class FileTransferManager:
             self._chunk_delay_ms = self.get_chunk_delay_ms(override_chunk_delay_ms)
 
             try:
+                await self._check_free_space(client, len(file_data))
                 await self._do_transfer(
                     client,
                     file_data,

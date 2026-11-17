@@ -279,7 +279,7 @@ The tail is told apart by where the `5C 55` name marker sits:
 
 | Offset | Field |
 |---|---|
-| 2–5 | Free space in KB |
+| 2–5 | Free space in KB. The app calls it KB and compares it with `ceil(bytes / 1000)`; whether the device counts 1000 or 1024 bytes is *unverified*. |
 | 6 | File count |
 | 7 | "Action mode" in this integration (0 = transfer mode); meaning *unverified* |
 
@@ -391,6 +391,7 @@ The upload as the app does it (`RecordActivity`, its only upload path):
 - It retries a failed transfer from the start with smaller chunks.
 - It writes the play order after an upload ([§11](#11-play-order)).
 - It overwrites existing files, restoring their settings after the upload ([§16](#16-device-quirks)).
+- It checks the free space with D2 like the app, before overwrites too, but doesn't enforce the 30-file limit.
 
 ## 11. Play order
 
