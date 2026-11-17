@@ -12,6 +12,7 @@ so automations and the UI share one path.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import time
 from functools import partial
@@ -59,6 +60,8 @@ LOCAL_MEDIA_DIR = "local"
 _REGISTERED_KEY = f"{DOMAIN}_websocket_registered"
 # Media source ID of the upload folder, or None if there is none
 _UPLOAD_TARGET_KEY = f"{DOMAIN}_upload_target"
+# Image path (relative to IMAGE_DIR) -> short hash of its content
+_IMAGE_VERSIONS_KEY = f"{DOMAIN}_image_versions"
 # entry_id -> {subscription end callbacks}, to end them when the entry unloads
 _SUBSCRIPTIONS_KEY = f"{DOMAIN}_file_subscriptions"
 
@@ -85,6 +88,9 @@ async def async_setup_websocket_api(hass: HomeAssistant) -> None:
     websocket_api.async_register_command(hass, ws_list_devices)
 
     if IMAGE_DIR.is_dir():
+        hass.data[_IMAGE_VERSIONS_KEY] = await hass.async_add_executor_job(
+            _image_versions
+        )
         await hass.http.async_register_static_paths(
             [StaticPathConfig(IMAGE_URL, str(IMAGE_DIR), cache_headers=True)]
         )
@@ -173,16 +179,39 @@ def async_end_file_subscriptions(hass: HomeAssistant, entry_id: str) -> None:
         end()
 
 
-def _profile_payload(entry: ConfigEntry, profile: dict) -> dict[str, Any]:
-    """Return the profile metadata a UI needs to show and edit files."""
-    folder_url = f"{IMAGE_URL}/{profile['image_folder']}"
+def _image_versions() -> dict[str, str]:
+    """Return a short content hash of every image (does file I/O)."""
+    return {
+        path.relative_to(IMAGE_DIR).as_posix(): hashlib.sha256(
+            path.read_bytes()
+        ).hexdigest()[:8]
+        for path in IMAGE_DIR.rglob("*.png")
+    }
+
+
+def _profile_payload(
+    entry: ConfigEntry, profile: dict, versions: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """Return the profile metadata a UI needs to show and edit files.
+
+    Image URLs carry versions[path] (a hash of the file) as ?v=, so a
+    browser fetches an image again when a new release changes it: the
+    images are served with long cache headers.
+    """
+    folder = profile["image_folder"]
+
+    def image_url(name: str) -> str:
+        url = f"{IMAGE_URL}/{folder}/{name}"
+        version = (versions or {}).get(f"{folder}/{name}")
+        return f"{url}?v={version}" if version else url
+
     eye_icons = []
     if profile.get("has_eye_image"):
         eye_icons = [
             {
                 "value": number,
                 "label": label,
-                "url": f"{folder_url}/eye_icon_{number}.png",
+                "url": image_url(f"eye_icon_{number}.png"),
             }
             for number, label in enumerate(profile["eye_icons"], start=1)
         ]
@@ -193,7 +222,7 @@ def _profile_payload(entry: ConfigEntry, profile: dict) -> dict[str, Any]:
             {
                 "part": m["part"],
                 "label": m["part"].capitalize(),
-                "icon_url": f"{folder_url}/movement_{m['part']}.png",
+                "icon_url": image_url(f"movement_{m['part']}.png"),
             }
             for m in profile["movements"]
         ],
@@ -384,7 +413,9 @@ def build_files_payload(hass: HomeAssistant, entry: ConfigEntry) -> dict[str, An
         "device_id": device.id if device else None,
         "name": _device_name(entry, device),
         "unloaded": False,
-        "device_profile": _profile_payload(entry, profile),
+        "device_profile": _profile_payload(
+            entry, profile, hass.data.get(_IMAGE_VERSIONS_KEY)
+        ),
         "available": coordinator.last_update_success,
         # The file list is being read from the device, so it may be outdated
         "refreshing": coordinator.file_list_loading,

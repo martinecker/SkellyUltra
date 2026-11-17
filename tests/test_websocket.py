@@ -1,6 +1,7 @@
 """The skelly_ultra/files/* websocket commands a file manager UI uses."""
 
 import asyncio
+import hashlib
 import shutil
 import subprocess
 import time
@@ -29,6 +30,12 @@ from .conftest import advance, coordinator
 from .device_sim import Light
 
 needs_ffmpeg = pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+
+
+def versioned(folder: str, name: str) -> str:
+    """An image's URL, tagged with a hash of its content."""
+    version = hashlib.sha256((IMAGE_DIR / folder / name).read_bytes()).hexdigest()
+    return f"/skelly_ultra/images/{folder}/{name}?v={version[:8]}"
 
 
 @pytest.fixture(autouse=True)
@@ -126,7 +133,7 @@ async def test_list_files(hass, setup_integration, device, hass_ws_client):
         {
             "part": part,
             "label": label,
-            "icon_url": f"/skelly_ultra/images/skelly/movement_{part}.png",
+            "icon_url": versioned("skelly", f"movement_{part}.png"),
         }
         for part, label in [
             ("all", "All"),
@@ -146,7 +153,7 @@ async def test_list_files(hass, setup_integration, device, hass_ws_client):
     assert profile["eye_icons"][0] == {
         "value": 1,
         "label": "1 Blue Eyeball",
-        "url": "/skelly_ultra/images/skelly/eye_icon_1.png",
+        "url": versioned("skelly", "eye_icon_1.png"),
     }
 
 
@@ -526,10 +533,12 @@ async def test_payload_follows_device_profile(
         assert [m["part"] for m in profile["movements"]] == ["head"]
         assert hello["movements"] == ["head"]
         assert len(profile["eye_icons"]) == 20
-        assert profile["movements"][0]["icon_url"] == (
-            "/skelly_ultra/images/skelly12ft/movement_head.png"
+        assert profile["movements"][0]["icon_url"] == versioned(
+            "skelly12ft", "movement_head.png"
         )
-        assert profile["eye_icons"][0]["url"].endswith("/skelly12ft/eye_icon_1.png")
+        assert profile["eye_icons"][0]["url"] == versioned(
+            "skelly12ft", "eye_icon_1.png"
+        )
     else:
         assert hello["movements"] == ["elbow"]
         assert [m["part"] for m in profile["movements"]] == [
@@ -691,7 +700,9 @@ async def test_eye_icon_images_are_served(hass, config_entry, mock_ble, hass_cli
     assert await hass.config_entries.async_setup(config_entry.entry_id)
     await hass.async_block_till_done()
     client = await hass_client()
-    response = await client.get("/skelly_ultra/images/skelly/eye_icon_1.png")
+    # With the version tag the panel and card add (it changes with the file,
+    # so browsers fetch a changed image again despite the long caching)
+    response = await client.get(versioned("skelly", "eye_icon_1.png"))
     assert response.status == 200
     assert (
         await response.read() == (IMAGE_DIR / "skelly" / "eye_icon_1.png").read_bytes()
@@ -835,7 +846,7 @@ def test_every_image_url_has_a_file():
         assert len(urls) == len(profile["movements"]) + len(profile["eye_icons"])
         for url in urls:
             assert url.startswith(f"{IMAGE_URL}/")
-            path = IMAGE_DIR / url.removeprefix(f"{IMAGE_URL}/")
+            path = IMAGE_DIR / url.removeprefix(f"{IMAGE_URL}/").split("?")[0]
             assert path.is_file(), f"{device_type}: no {path}"
 
 
