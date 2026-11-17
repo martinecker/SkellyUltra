@@ -388,7 +388,9 @@ The upload as the app does it (`RecordActivity`, its only upload path):
 
 **This integration differs** in a few places, some of which may still change:
 - It resumes from BBC0's `written`.
-- It retries a failed transfer from the start with smaller chunks.
+- After a failed BBC2 it resends from the last *lost* chunk (BBC1 with lost = 1), or from chunk 0 if none was reported; the app takes the index of the latest BBC1 of either kind. Like the app it then sends C2 again.
+- Repeats of a loss report within 1 s count once towards the 10 losses (the app counts each one).
+- When the device keeps losing chunks (more than 10 losses, or 3 failed BBC2s), it starts the transfer over with chunks half the size, up to 3 attempts, instead of failing at once. The web controller does the same.
 - It writes the play order after an upload ([§11](#11-play-order)).
 - It overwrites existing files, restoring their settings after the upload ([§16](#16-device-quirks)).
 - It checks the free space with D2 like the app, before overwrites too, but doesn't enforce the 30-file limit.

@@ -34,6 +34,39 @@ def _is_transfer_event(event: Any) -> bool:
     return isinstance(event, _TRANSFER_EVENTS)
 
 
+def _is_failed_end(event: Any) -> bool:
+    return isinstance(event, parser.TransferEndEvent) and event.failed != 0
+
+
+def _is_chunk_report(event: Any) -> bool:
+    return isinstance(event, parser.ChunkDroppedEvent)
+
+
+class _Losses:
+    """The device's loss reports (BBC1 lost = 1) during one attempt."""
+
+    def __init__(self) -> None:
+        self.count = 0  # loss reports, repeats not counted
+        self.pending: int | None = None  # resend from here, not yet done
+        self.last_index: int | None = None  # index of the latest report
+        self._last_time = 0.0
+
+    def note(self, event: parser.ChunkDroppedEvent, now: float, window: float) -> bool:
+        """Take one BBC1; returns whether it is a new loss report.
+
+        lost = 0 means no loss (the app ignores it too). A repeat of the
+        latest report within window seconds counts once, like in the app.
+        """
+        if event.dropped == 0:
+            return False
+        if event.index == self.last_index and now - self._last_time < window:
+            return False
+        self.count += 1
+        self.pending = self.last_index = event.index
+        self._last_time = now
+        return True
+
+
 class FileTransferError(Exception):
     """Base exception for file transfer errors."""
 
@@ -102,6 +135,16 @@ class FileTransferManager:
     DEFAULT_CHUNK_DELAY_MS = 100
     MIN_CHUNK_DELAY_MS = 10
     MAX_CHUNK_DELAY_MS = 1000
+    # Lost chunks, handled like the phone app: after a loss report (BBC1
+    # lost = 1) stop, wait LOSS_WAIT then RESUME_WAIT (a new report starts the
+    # wait over), and resend from the reported chunk. A failed BBC2 is handled
+    # the same way, followed by C2 again. Too many of either: the attempt
+    # fails and the transfer starts over with smaller chunks.
+    LOSS_WAIT = 1.0
+    RESUME_WAIT = 2.0
+    REPEAT_WINDOW = 1.0  # repeats of a report within this count once
+    MAX_LOSSES = 10  # the app gives up after 10 loss reports
+    MAX_FAILED_ENDS = 3  # failed BBC2s before the attempt counts as failed
 
     def __init__(self) -> None:
         """Initialize the file transfer manager."""
@@ -383,6 +426,7 @@ class FileTransferManager:
 
         # Restart transfer with smaller chunk size (max 2 retries)
         if retry_count >= 2:
+            await client.cancel_send()
             raise FileTransferError(
                 "Transfer failed after 3 attempts with progressively smaller chunks",
             )
@@ -394,6 +438,8 @@ class FileTransferManager:
         # Cancel current transfer and restart
         await client.cancel_send()
         await asyncio.sleep(1.0)  # Give device time to reset
+        if self._state.cancelled:
+            raise FileTransferCancelled("Transfer cancelled by user")
 
         # Recursive retry with smaller chunks - pass current chunk_size for progressive halving
         # Don't pass override_chunk_size to retry - we want to use the calculated smaller size
@@ -448,54 +494,11 @@ class FileTransferManager:
             )
             self._state.sent_chunks = start_index
 
-        # Phase 2: Send data chunks (C1)
-        await self._send_chunks(
-            client,
-            events,
-            file_data,
-            start_index,
-            chunk_count,
-            chunk_size,
-            progress_callback,
-        )
-
-        # Phase 3: End transfer (C2)
-        await client.end_send_data()
-
-        # Calculate dynamic timeout based on file size
-        file_size_kb = size / 1024
-        timeout_end = max(
-            self.TIMEOUT_END_MIN,
-            self.TIMEOUT_END_MIN + (file_size_kb * self.TIMEOUT_END_PER_KB),
-        )
-        logger.debug(
-            "Using BBC2 timeout of %.1fs for %d KB file", timeout_end, int(file_size_kb)
-        )
-
-        end_event = await self._wait_for_event(
-            events,
-            parser.TransferEndEvent,
-            timeout_end,
-            "BBC2",
-        )
-
-        # Handle failed transfer - the caller restarts with smaller chunks
-        if end_event.failed != 0:
-            logger.warning(
-                "Device reported transfer failed (failed=%d, last_chunk_index=%d)",
-                end_event.failed,
-                end_event.last_chunk_index,
-            )
-
-            # Log any ChunkDroppedEvents for debugging, but don't act on them
-            await asyncio.sleep(0.2)  # Wait for any pending events
-            while dropped := events.take_nowait(
-                lambda e: isinstance(e, parser.ChunkDroppedEvent)
-            ):
-                logger.info(
-                    "ChunkDroppedEvent reported for chunk %d (informational only)",
-                    dropped.index,
-                )
+        # Phases 2 and 3: send the chunks (C1) and end (C2), resending after
+        # losses until the device has all of them
+        if not await self._send_until_received(
+            client, events, file_data, start_index, chunk_size, progress_callback
+        ):
             return True
 
         # Phase 4: Confirm file (C3)
@@ -515,43 +518,189 @@ class FileTransferManager:
         logger.info("File transfer confirmed by device: %s", filename)
         return False
 
-    async def _send_chunks(
+    async def _send_until_received(
         self,
         client: SkellyClient,
         events: EventStream,
         file_data: bytes,
         start_index: int,
-        chunk_count: int,
         chunk_size: int,
         progress_callback: Callable[[int, int], None] | None,
-    ) -> None:
-        """Send data chunks to device.
+    ) -> bool:
+        """Send the chunks from start_index on, then C2, until BBC2 says ok.
 
-        Args:
-            client: SkellyClient instance
-            events: The device's replies during this transfer
-            file_data: Complete file data
-            start_index: Chunk index to start from (for resume)
-            chunk_count: Total number of chunks
-            chunk_size: Size of each chunk in bytes
-            progress_callback: Optional progress callback
+        Returns False if the device kept losing chunks (more than MAX_LOSSES
+        loss reports, or MAX_FAILED_ENDS failed BBC2s).
+        """
+        losses = _Losses()
+        failed_ends = 0
+        index = start_index
+        while True:
+            if not await self._send_chunks(
+                client, events, losses, file_data, index, chunk_size, progress_callback
+            ):
+                return False
+
+            # The device may have ended the transfer early (failed); else C2
+            end_event = events.take_nowait(_is_failed_end)
+            if end_event is None:
+                await client.end_send_data()
+                end_event = await self._wait_for_end(
+                    events, self._end_timeout(len(file_data))
+                )
+            if end_event.failed == 0:
+                return True
+
+            failed_ends += 1
+            # Like the app: resend from the last lost chunk. Without a loss
+            # report nobody knows what is missing, so all of it.
+            self._take_chunk_reports(events, losses)
+            index = losses.last_index or 0
+            logger.warning(
+                "Device reported transfer failed (failed=%d, %d/%d); "
+                "resending from chunk %d",
+                end_event.failed,
+                failed_ends,
+                self.MAX_FAILED_ENDS,
+                index,
+            )
+            if failed_ends >= self.MAX_FAILED_ENDS:
+                return False
+            losses.pending = index
+            index = await self._wait_out_losses(events, losses)
+            if index is None:
+                return False
+            # A BBC2 still buffered now answers an earlier C2 (e.g. one that
+            # crossed an early failed BBC2); don't take it for this round's
+            while events.take_nowait(lambda e: isinstance(e, parser.TransferEndEvent)):
+                logger.debug("Dropping a BBC2 from the previous round")
+
+    async def _wait_for_end(
+        self, events: EventStream, timeout: float
+    ) -> parser.TransferEndEvent:
+        """Wait for the BBC2 that answers C2.
+
+        Unlike _wait_for_event, BBC1s that come first stay buffered: a loss
+        reported now says where to resend from.
+        """
+        logger.debug("Waiting for BBC2 (timeout=%.1fs)", timeout)
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            end_event = events.take_nowait(
+                lambda e: isinstance(e, parser.TransferEndEvent)
+            )
+            if end_event is not None:
+                logger.debug("Received BBC2: %s", end_event)
+                return end_event
+            if self._state.cancelled:
+                raise FileTransferCancelled(
+                    "Transfer cancelled while waiting for response",
+                )
+            remaining = deadline - loop.time()
+            if remaining <= 0:
+                raise FileTransferTimeout(f"Timeout waiting for BBC2 after {timeout}s")
+            await asyncio.sleep(min(0.05, remaining))
+
+    def _end_timeout(self, size: int) -> float:
+        """Seconds to wait for BBC2: longer for bigger files."""
+        file_size_kb = size / 1024
+        timeout_end = max(
+            self.TIMEOUT_END_MIN,
+            self.TIMEOUT_END_MIN + (file_size_kb * self.TIMEOUT_END_PER_KB),
+        )
+        logger.debug(
+            "Using BBC2 timeout of %.1fs for %d KB file", timeout_end, int(file_size_kb)
+        )
+        return timeout_end
+
+    def _take_chunk_reports(self, events: EventStream, losses: _Losses) -> bool:
+        """Note the buffered BBC1s; returns whether one was a new loss."""
+        now = asyncio.get_running_loop().time()
+        new = False
+        while report := events.take_nowait(_is_chunk_report):
+            if losses.note(report, now, self.REPEAT_WINDOW):
+                new = True
+                logger.warning(
+                    "Device lost chunk %d (loss %d/%d)",
+                    report.index,
+                    losses.count,
+                    self.MAX_LOSSES,
+                )
+            else:
+                logger.debug("Chunk report: %s", report)
+        return new
+
+    async def _wait_out_losses(
+        self, events: EventStream, losses: _Losses
+    ) -> int | None:
+        """Pause after a loss like the app, then return where to resend from.
+
+        The pause is LOSS_WAIT + RESUME_WAIT after the latest new loss report.
+        Returns None after more than MAX_LOSSES reports.
+        """
+        loop = asyncio.get_running_loop()
+        resume_at = loop.time() + self.LOSS_WAIT + self.RESUME_WAIT
+        while True:
+            if losses.count > self.MAX_LOSSES:
+                logger.warning("Device lost %d chunks; giving up", losses.count)
+                return None
+            if self._state.cancelled:
+                raise FileTransferCancelled("Transfer cancelled by user")
+            remaining = resume_at - loop.time()
+            if remaining <= 0:
+                break
+            await asyncio.sleep(min(0.1, remaining))
+            if self._take_chunk_reports(events, losses):
+                resume_at = loop.time() + self.LOSS_WAIT + self.RESUME_WAIT
+        index = losses.pending if losses.pending is not None else 0
+        losses.pending = None
+        logger.info("Resending from chunk %d", index)
+        return index
+
+    async def _send_chunks(
+        self,
+        client: SkellyClient,
+        events: EventStream,
+        losses: _Losses,
+        file_data: bytes,
+        start_index: int,
+        chunk_size: int,
+        progress_callback: Callable[[int, int], None] | None,
+    ) -> bool:
+        """Send data chunks from start_index on, going back after a loss.
+
+        Stops early when the device ends the transfer as failed (the failed
+        BBC2 stays buffered). Returns False after more than MAX_LOSSES loss
+        reports.
 
         Raises:
             FileTransferCancelled: If cancelled during send
-            FileTransferError: If BBC2 (TransferEndEvent) received early with failed=1
         """
-        for idx in range(start_index, chunk_count):
+        chunk_count = self._state.total_chunks
+        idx = start_index
+        while True:
             if self._state.cancelled:
                 raise FileTransferCancelled("Transfer cancelled by user")
 
-            # Check for an early BBC2 (TransferEndEvent): the device may send
-            # it during chunk transmission if it detects problems. It stays
-            # buffered for Phase 3.
-            if events.has(lambda e: isinstance(e, parser.TransferEndEvent)):
+            # The device may end the transfer as failed while chunks are
+            # still being sent; the caller handles that
+            if events.has(_is_failed_end):
                 logger.warning(
                     "Received early BBC2; stopping chunk transmission at %d", idx
                 )
-                return
+                return True
+
+            self._take_chunk_reports(events, losses)
+            if losses.pending is not None:
+                resume = await self._wait_out_losses(events, losses)
+                if resume is None:
+                    return False
+                idx = resume
+                continue
+
+            if idx >= chunk_count:
+                break
 
             # Get chunk from cache (pre-cached before sending started)
             chunk_data = self._chunk_cache.get(idx)
@@ -560,11 +709,11 @@ class FileTransferManager:
                 offset = idx * chunk_size
                 chunk_data = file_data[offset : offset + chunk_size]
 
-            # Send chunk
             await client.send_data_chunk(idx, chunk_data)
+            idx += 1
 
             # Update progress
-            self._state.sent_chunks = idx + 1
+            self._state.sent_chunks = idx
             if progress_callback:
                 try:
                     progress_callback(self._state.sent_chunks, self._state.total_chunks)
@@ -575,6 +724,7 @@ class FileTransferManager:
             await asyncio.sleep(self._chunk_delay_ms / 1000)
 
         logger.debug("All %d chunks sent", chunk_count)
+        return True
 
     async def _wait_for_event(
         self,

@@ -49,6 +49,19 @@ async def client(device):
 @pytest.fixture(autouse=True)
 def fast_transfers(monkeypatch):
     monkeypatch.setattr(FileTransferManager, "DEFAULT_CHUNK_DELAY_MS", 0)
+    # The pauses after a lost chunk (1 s + 2 s on the device), shortened
+    monkeypatch.setattr(FileTransferManager, "LOSS_WAIT", 0.01)
+    monkeypatch.setattr(FileTransferManager, "RESUME_WAIT", 0.02)
+    monkeypatch.setattr(FileTransferManager, "REPEAT_WINDOW", 0.005)
+
+
+def chunk_indexes(writes) -> list[int]:
+    """The index of each C1 (chunk) frame sent, in order."""
+    return [int.from_bytes(w[2:4], "big") for w in writes if w[:2] == b"\xaa\xc1"]
+
+
+def count_commands(writes, tag: bytes) -> int:
+    return sum(w[:2] == tag for w in writes)
 
 
 def test_frame_matches_capture_from_the_app():
@@ -382,10 +395,11 @@ async def test_upload_retries_with_smaller_chunks(client, device):
 
 
 async def test_upload_stops_at_an_early_failure_report(client, device, caplog):
-    """The device can report a lost chunk before the upload has finished.
+    """The device can end an upload as failed before all chunks are sent.
 
-    The rest of that attempt isn't sent, and its failure report isn't taken
-    for the next attempt's.
+    The rest of that attempt isn't sent. The lost chunk is resent twice (like
+    after any failed BBC2); then the upload starts over with smaller chunks,
+    and that attempt's failure report isn't taken for the next one's.
     """
     caplog.set_level(logging.DEBUG)
     device.max_chunk_payload = 100
@@ -394,9 +408,133 @@ async def test_upload_stops_at_an_early_failure_report(client, device, caplog):
     await FileTransferManager().send_file(client, data, "early.mp3")
     assert device.file("early.mp3").data == data
     assert "Received early BBC2" in caplog.text
-    # The first attempt stopped after its first (lost) chunk
     first_attempt = device.writes[: device.writes.index(commands.cancel_send())]
-    assert sum(w[:2] == b"\xaa\xc1" for w in first_attempt) == 1
+    assert chunk_indexes(first_attempt) == [0, 0, 0]
+    assert count_commands(first_attempt, b"\xaa\xc2") == 0  # it had ended
+
+
+async def test_upload_resends_from_a_lost_chunk(client, device, monkeypatch):
+    """Like the app: after BBC1 01 <n>, pause 1 s + 2 s, then resend from n."""
+    monkeypatch.setattr(FileTransferManager, "LOSS_WAIT", 0.05)
+    monkeypatch.setattr(FileTransferManager, "RESUME_WAIT", 0.1)
+    times = {}
+    receive = device._cmd_AAC1
+
+    def timed(p):
+        times.setdefault(int.from_bytes(p[0:2], "big"), []).append(
+            asyncio.get_running_loop().time()
+        )
+        receive(p)
+
+    monkeypatch.setattr(device, "_cmd_AAC1", timed)
+    device.mtu_size = 108  # 100-byte chunks
+    device.lose_chunks = {3: 1}
+    data = bytes(range(256)) * 4  # 11 chunks
+    await FileTransferManager().send_file(client, data, "lost.mp3")
+    assert device.file("lost.mp3").data == data
+    assert chunk_indexes(device.writes) == [0, 1, 2, 3, *range(3, 11)]
+    assert times[3][1] - times[3][0] >= 0.15
+    # One C2, and no restart
+    assert count_commands(device.writes, b"\xaa\xc2") == 1
+    assert commands.cancel_send() not in device.writes
+
+
+async def test_repeated_loss_reports_count_once(client, device):
+    """4 losses reported 3 times each are 4 losses, not 12 (over the 10)."""
+    device.mtu_size = 108
+    device.lose_chunks = {2: 4}
+    device.loss_report_copies = 3
+    data = bytes(800)
+    await FileTransferManager().send_file(client, data, "repeat.mp3")
+    assert device.file("repeat.mp3").data == data
+    assert chunk_indexes(device.writes) == [0, 1, 2, 2, 2, 2, *range(2, 8)]
+    assert commands.cancel_send() not in device.writes
+
+
+async def test_loss_reported_at_the_end_resends_from_there(client, device):
+    """A loss the device reports only at C2 says where to resend from."""
+    device.mtu_size = 108
+    device.lose_chunks_silently = {6: 1}
+    end = device._cmd_AAC2
+
+    def report_then_end(p):
+        if 6 not in device._upload["chunks"]:
+            device._notify(b"\xbb\xc1\x01\x00\x06")
+        end(p)
+
+    device._cmd_AAC2 = report_then_end
+    data = bytes(700)
+    await FileTransferManager().send_file(client, data, "last.mp3")
+    assert device.file("last.mp3").data == data
+    assert chunk_indexes(device.writes) == [*range(7), 6]
+
+
+async def test_status_without_a_loss_is_ignored(client, device):
+    """BBC1 with lost = 0 is no loss: the upload carries on."""
+    device.mtu_size = 108
+    data = bytes(500)
+    receive = device._cmd_AAC1
+
+    def with_status(p):
+        receive(p)
+        device._notify(b"\xbb\xc1\x00" + p[0:2])
+
+    device._cmd_AAC1 = with_status
+    await FileTransferManager().send_file(client, data, "fine.mp3")
+    assert device.file("fine.mp3").data == data
+    assert chunk_indexes(device.writes) == [0, 1, 2, 3, 4]
+
+
+async def test_upload_starts_over_after_ten_losses(client, device):
+    """The app gives up after 10 losses; HA then tries smaller chunks."""
+    device.mtu_size = 108
+    device.lose_chunks = {2: 11}
+    data = bytes(800)
+    await FileTransferManager().send_file(client, data, "lossy.mp3")
+    assert device.file("lossy.mp3").data == data
+    first_attempt = device.writes[: device.writes.index(commands.cancel_send())]
+    # Sent once, resent after each of the first 10 losses; the 11th ends it
+    assert chunk_indexes(first_attempt).count(2) == 11
+    second_attempt = device.writes[device.writes.index(commands.cancel_send()) :]
+    sizes = {len(w) - 5 for w in second_attempt if w[:2] == b"\xaa\xc1"}
+    assert max(sizes) == 50
+
+
+async def test_failed_end_resends_and_ends_again(client, device):
+    """A failed BBC2 without a loss report: resend everything, then C2 again."""
+    device.mtu_size = 108
+    device.lose_chunks_silently = {3: 1}
+    data = bytes(500)
+    await FileTransferManager().send_file(client, data, "again.mp3")
+    assert device.file("again.mp3").data == data
+    assert chunk_indexes(device.writes) == [0, 1, 2, 3, 4, 0, 1, 2, 3, 4]
+    assert count_commands(device.writes, b"\xaa\xc2") == 2
+    assert commands.cancel_send() not in device.writes
+
+
+async def test_failed_end_resends_from_the_last_lost_chunk(client, device):
+    device.mtu_size = 108
+    device.lose_chunks = {2: 1}  # reported: resend from 2
+    device.lose_chunks_silently = {4: 1}  # in that resend, lost unreported
+    data = bytes(700)
+    await FileTransferManager().send_file(client, data, "tail.mp3")
+    assert device.file("tail.mp3").data == data
+    assert chunk_indexes(device.writes) == [0, 1, 2, 2, 3, 4, 5, 6, 2, 3, 4, 5, 6]
+    assert count_commands(device.writes, b"\xaa\xc2") == 2
+
+
+async def test_cancel_during_the_loss_pause(client, device, monkeypatch):
+    monkeypatch.setattr(FileTransferManager, "RESUME_WAIT", 5)
+    device.mtu_size = 108
+    device.lose_chunks = {1: 1}
+    manager = FileTransferManager()
+    upload = asyncio.ensure_future(manager.send_file(client, bytes(500), "stop.mp3"))
+    while chunk_indexes(device.writes) != [0, 1]:
+        await asyncio.sleep(0.01)
+    await manager.cancel(client)
+    with pytest.raises(file_transfer.FileTransferCancelled):
+        await asyncio.wait_for(upload, 1)
+    assert chunk_indexes(device.writes) == [0, 1]
 
 
 async def test_upload_gives_up_eventually(client, device):
@@ -404,6 +542,19 @@ async def test_upload_gives_up_eventually(client, device):
     with pytest.raises(FileTransferError, match="3 attempts"):
         await FileTransferManager().send_file(client, b"x" * 2000, "nope.mp3")
     assert "nope.mp3" not in [f.name for f in device.files]
+    assert device.writes[-1] == commands.cancel_send()  # nothing left open
+
+
+async def test_cancel_between_attempts_starts_no_new_one(client, device, monkeypatch):
+    device.max_chunk_payload = 0
+    manager = FileTransferManager()
+    upload = asyncio.ensure_future(manager.send_file(client, bytes(300), "x.mp3"))
+    while commands.cancel_send() not in device.writes:
+        await asyncio.sleep(0.01)
+    await manager.cancel(client)
+    with pytest.raises(file_transfer.FileTransferCancelled):
+        await asyncio.wait_for(upload, 3)
+    assert count_commands(device.writes, b"\xaa\xc0") == 1
 
 
 async def test_commands_are_valid_frames(client, device):

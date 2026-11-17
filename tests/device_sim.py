@@ -114,6 +114,12 @@ class FakeSkellyDevice:
         self.unresponsive = False  # swallow queries (simulates a hung device)
         # Report a lost upload chunk at once (BBC1 + early BBC2)
         self.report_lost_chunks = False
+        # Lose these upload chunks (index -> how many times), and report
+        # each loss with BBC1 01 <index> (repeated loss_report_copies times)
+        self.lose_chunks: dict[int, int] = {}
+        self.loss_report_copies = 1
+        # Lose these upload chunks (index -> how many times) without a report
+        self.lose_chunks_silently: dict[int, int] = {}
         self.fail_connect = False
         self.connect_count = 0
         self.reachable = True  # False: out of range, HA cannot see it
@@ -415,6 +421,14 @@ class FakeSkellyDevice:
                 self._notify(b"\xbb\xc1\x01" + index.to_bytes(2, "big"))
                 self._notify(b"\xbb\xc2\x01" + index.to_bytes(2, "big"))
             return  # lost on the air
+        if self.lose_chunks.get(index):
+            self.lose_chunks[index] -= 1
+            for _ in range(self.loss_report_copies):
+                self._notify(b"\xbb\xc1\x01" + index.to_bytes(2, "big"))
+            return
+        if self.lose_chunks_silently.get(index):
+            self.lose_chunks_silently[index] -= 1
+            return
         self._upload["chunks"][index] = chunk
 
     def _cmd_AAC2(self, p):
