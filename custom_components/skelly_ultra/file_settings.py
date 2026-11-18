@@ -20,6 +20,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
+from .const import CAPABILITY_SET_ALL_LIGHTS
 from .data import skelly_data
 from .helpers import (
     MAX_UI_EFFECT_SPEED,
@@ -29,6 +30,7 @@ from .helpers import (
     ui_speed_to_device,
 )
 from .skelly_ultra_pkg import parser
+from .skelly_ultra_pkg.client import ConnectionLostError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -51,6 +53,21 @@ class LightSettings:
     effect_speed: int | None = None  # device scale
     rgb: tuple[int, int, int] | None = None
     color_cycle: int | None = None
+
+
+@dataclass
+class LightingState:
+    """The full lighting of a file or the live settings: every channel and the scene.
+
+    With one, light changes are sent for all channels at once (F1) instead
+    of per channel (F2-F6). Give one only when the firmware can set all
+    lights at once (see file_lighting_state, async_current_light_scene). The
+    scene is sent as given, since changing lights must not switch a
+    Halloween/Christmas scene off.
+    """
+
+    lights: dict[int, LightSettings]  # every channel's current settings
+    scene: int
 
 
 @dataclass
@@ -98,6 +115,7 @@ async def async_apply_file_settings(
     filename: str,
     settings: FileSettings,
     keep_going: Callable[[], bool] | None = None,
+    lighting: LightingState | None = None,
 ) -> int:
     """Write a file's settings to the device and return the number of writes.
 
@@ -106,6 +124,10 @@ async def async_apply_file_settings(
     color_cycle must fill in the other (diff_file_settings does). Writes are
     paced by FILE_SETTING_WRITE_DELAY, since the device can drop back-to-back
     writes. If keep_going returns False before a write, the rest are skipped.
+
+    With lighting, light changes go out as one F1 write (all channels:
+    lighting.lights with the changes on top), if that gives every channel of
+    the profile a complete setting; otherwise per channel as without it.
     """
     writes = 0
 
@@ -119,7 +141,9 @@ async def async_apply_file_settings(
         await asyncio.sleep(FILE_SETTING_WRITE_DELAY)
 
     try:
-        await _async_apply(client, profile, cluster, filename, settings, paced)
+        await _async_apply(
+            client, profile, cluster, filename, settings, paced, lighting
+        )
     except _WritesStopped:
         pass
     return writes
@@ -136,6 +160,7 @@ async def _async_apply(
     filename: str,
     settings: FileSettings,
     paced: Callable,
+    lighting: LightingState | None = None,
 ) -> None:
     """Send each setting that isn't None through paced()."""
     if settings.action is not None:
@@ -143,6 +168,12 @@ async def _async_apply(
 
     if settings.eye_icon is not None and profile.get("has_eye_image"):
         await paced(client.set_eye_icon(settings.eye_icon, cluster, filename))
+
+    if settings.lights and lighting is not None:
+        lights = _full_lighting(profile, lighting.lights, settings.lights)
+        if lights is not None:
+            await paced(client.set_all_lights(lights, cluster, lighting.scene))
+            return
 
     for channel, light in sorted(settings.lights.items()):
         if light.brightness is not None:
@@ -168,28 +199,109 @@ async def _async_apply(
             )
 
 
+LIGHT_ATTRS = ("effect_type", "brightness", "rgb", "color_cycle", "effect_speed")
+
+
+def _full_lighting(
+    profile: dict,
+    current: dict[int, LightSettings],
+    changes: dict[int, LightSettings],
+) -> list[parser.LightInfo] | None:
+    """Return the F1 lights: current with changes on top, channel 0 on.
+
+    None if a profile channel's setting would be incomplete (or the
+    channels don't start at 0 and follow on), so F1 can't be used.
+    """
+    channels = sorted(light_def["channel"] for light_def in profile.get("lights", []))
+    if not channels or channels != list(range(len(channels))):
+        return None
+    lights = []
+    for channel in channels:
+        merged = {
+            attr: getattr(current.get(channel, LightSettings()), attr)
+            for attr in LIGHT_ATTRS
+        }
+        change = changes.get(channel, LightSettings())
+        merged.update(
+            {
+                attr: getattr(change, attr)
+                for attr in LIGHT_ATTRS
+                if getattr(change, attr) is not None
+            }
+        )
+        if (
+            any(value is None for value in merged.values())
+            or merged["effect_type"] not in (1, 2, 3)
+            or merged["color_cycle"] not in (0, 1)
+        ):
+            return None
+        lights.append(
+            parser.LightInfo(
+                effect_type=merged["effect_type"],
+                brightness=merged["brightness"],
+                rgb=tuple(merged["rgb"]),
+                color_cycle=merged["color_cycle"],
+                effect_speed=merged["effect_speed"],
+            )
+        )
+    return lights
+
+
+def file_lighting_state(
+    coordinator: Any, profile: dict, file_info: parser.FileInfoEvent
+) -> LightingState | None:
+    """Return a file's LightingState, or None if its lights can't be set at once.
+
+    That needs the set_all_lights capability (F1) and the file's scene (BBD0).
+    """
+    if file_info.scene is None or not coordinator.has_capability(
+        CAPABILITY_SET_ALL_LIGHTS
+    ):
+        return None
+    return LightingState(
+        lights={
+            channel: LightSettings(
+                brightness=light.brightness,
+                effect_type=light.effect_type,
+                effect_speed=light.effect_speed,
+                rgb=tuple(light.rgb),
+                color_cycle=light.color_cycle,
+            )
+            for channel, light in enumerate(file_info.lights)
+        },
+        scene=int(file_info.scene),
+    )
+
+
+async def async_current_light_scene(coordinator: Any, client: Any) -> int | None:
+    """Return the device's current light scene, or None if the live lights
+    can't be set at once.
+
+    That needs the set_all_lights capability (F1), which sets the scene too, so
+    the device is asked for its current one (BBE1) rather than trusting the
+    last poll: the phone app may have changed it, e.g. while HA was away.
+    No answer means no F1, and the lights go out channel by channel.
+    """
+    if not coordinator.has_capability(CAPABILITY_SET_ALL_LIGHTS):
+        return None
+    try:
+        live_mode = await client.get_live_mode()
+    except (TimeoutError, ConnectionLostError):
+        _LOGGER.debug("No live scene from the device - lights go out per channel")
+        return None
+    scene = getattr(live_mode, "scene", None)
+    return None if scene is None else int(scene)
+
+
 LIVE_SETTING_KEYS = ("volume", "eye_icon", "lights")
 
 
-async def async_push_live_settings(
-    client: Any,
-    profile: dict,
-    settings: dict[str, Any],
-    keep_going: Callable[[], bool] | None = None,
-) -> int:
-    """Send live light, eye and volume settings to the device; return the write count.
-
-    settings uses the coordinator's data format: "volume", "eye_icon" and
-    "lights" (a list of per-channel dicts); missing keys and None values are
-    skipped, and only the profile's light channels are sent. If keep_going
-    returns False before a write, the rest are skipped. Every value is written even if
-    the device already reports it: after a power-up the device can show a
-    different look than it reports until it receives a write.
-
-    Movement is never sent, since a movement write starts a move.
-    """
+def live_light_settings(
+    profile: dict, cached_lights: list[dict[str, Any] | None]
+) -> dict[int, LightSettings]:
+    """Return the profile channels' LightSettings from the coordinator's
+    "lights" list (per-channel dicts); channels without data are left out."""
     lights: dict[int, LightSettings] = {}
-    cached_lights = settings.get("lights") or []
     for light_def in profile.get("lights", []):
         channel = light_def["channel"]
         if channel >= len(cached_lights) or not cached_lights[channel]:
@@ -207,6 +319,31 @@ async def async_push_live_settings(
             rgb=tuple(rgb) if rgb is not None else None,
             color_cycle=light.get("color_cycle"),
         )
+    return lights
+
+
+async def async_push_live_settings(
+    client: Any,
+    profile: dict,
+    settings: dict[str, Any],
+    keep_going: Callable[[], bool] | None = None,
+    scene: int | None = None,
+) -> int:
+    """Send live light, eye and volume settings to the device; return the write count.
+
+    settings uses the coordinator's data format: "volume", "eye_icon" and
+    "lights" (a list of per-channel dicts); missing keys and None values are
+    skipped, and only the profile's light channels are sent. If keep_going
+    returns False before a write, the rest are skipped. Every value is written even if
+    the device already reports it: after a power-up the device can show a
+    different look than it reports until it receives a write.
+
+    Movement is never sent, since a movement write starts a move.
+
+    With scene (from async_current_light_scene) the lights go out as one F1 write
+    that keeps that scene, when every channel's setting is complete.
+    """
+    lights = live_light_settings(profile, settings.get("lights") or [])
 
     # Cluster 0 with no name addresses the live settings.
     writes = await async_apply_file_settings(
@@ -216,6 +353,7 @@ async def async_push_live_settings(
         "",
         FileSettings(eye_icon=settings.get("eye_icon"), lights=lights),
         keep_going,
+        LightingState(lights={}, scene=scene) if scene is not None else None,
     )
 
     volume = settings.get("volume")
@@ -233,13 +371,16 @@ async def async_restore_file_settings(
     cluster: int,
     filename: str,
     existing_file: parser.FileInfoEvent,
+    lighting: LightingState | None = None,
 ) -> None:
     """Re-send a file's movement/eye/light settings after an overwrite.
 
     The device resets a file's settings to default on every upload,
     including an overwrite of an existing file, so callers must capture the
     file's previous FileInfoEvent before uploading and pass it here right
-    after the transfer completes, using the pre-upload cluster.
+    after the transfer completes, using the pre-upload cluster. With
+    lighting (file_lighting_state of existing_file) the lights go out as
+    one F1 write, with the file's old scene.
     """
     await async_apply_file_settings(
         client,
@@ -247,6 +388,7 @@ async def async_restore_file_settings(
         cluster,
         filename,
         settings_from_file_info(profile, existing_file),
+        lighting=lighting,
     )
 
 
@@ -525,7 +667,12 @@ async def async_edit_file(
 
         try:
             writes = await async_apply_file_settings(
-                adapter.client, profile, file_info.cluster, file_info.name, changes
+                adapter.client,
+                profile,
+                file_info.cluster,
+                file_info.name,
+                changes,
+                lighting=file_lighting_state(coordinator, profile, file_info),
             )
         except Exception:
             # Some writes may have landed; show what the device has now

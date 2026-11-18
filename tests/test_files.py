@@ -16,6 +16,7 @@ from custom_components.skelly_ultra.const import (
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
 )
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 
 from .conftest import entity_id
 from .device_sim import Light
@@ -233,6 +234,22 @@ async def test_overwriting_a_file_keeps_its_settings(
 
 
 @needs_ffmpeg
+async def test_overwrite_restores_lights_in_one_f1_with_the_scene(
+    hass, halloween_scream, setup_integration, device, tone
+):
+    """New firmware: the restore after an overwrite sends the lights as one
+    F1 with the file's old scene (the upload resets it)."""
+    f = halloween_scream
+    lights = list(f.lights)
+    device.writes.clear()
+    await action(hass, "send_file", file_path=str(tone), target_filename="scream.mp3")
+    assert len(light_writes(device, ALL_LIGHTS)) == 1
+    assert not light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert f.scene == LightScene.HALLOWEEN
+    assert f.lights[:2] == lights[:2]
+
+
+@needs_ffmpeg
 async def test_overwrite_is_refused_without_free_space(
     hass, setup_integration, device, tone
 ):
@@ -375,6 +392,71 @@ async def test_edit_file_changes_only_given_settings(hass, setup_integration, de
     assert (device.action, device.eye_icon, device.lights) == live_before, (
         "live settings untouched"
     )
+
+
+ALL_LIGHTS = b"\xaa\xf1"
+PER_CHANNEL_LIGHTS = (b"\xaa\xf2", b"\xaa\xf3", b"\xaa\xf4", b"\xaa\xf6")
+
+
+def light_writes(device, *tags) -> list[bytes]:
+    return [w for w in device.writes if w[:2] in tags]
+
+
+@pytest.fixture
+def firmware_v66(mock_ble):
+    """An Ultra Skelly on v66: no light scenes, no F1. Ask for it before
+    setup_integration."""
+    mock_ble.firmware_version = 66
+    mock_ble.has_scenes = False
+    return mock_ble
+
+
+@pytest.fixture
+def halloween_scream(device):
+    """scream.mp3 with the Halloween scene. Ask for it before
+    setup_integration, which reads the file list."""
+    f = device.file("scream.mp3")
+    f.scene = LightScene.HALLOWEEN
+    f.lights[1] = Light(effect_type=2, brightness=100, rgb=(255, 0, 0), effect_speed=50)
+    return f
+
+
+async def test_edit_file_lights_go_in_one_f1_that_keeps_the_scene(
+    hass, halloween_scream, setup_integration, device
+):
+    """New firmware (here Ultra v68): one F1 for all channels, with the
+    file's scene, so a Halloween file stays Halloween."""
+    f = halloween_scream
+    device.writes.clear()
+
+    await action(
+        hass,
+        "edit_file",
+        filename="scream.mp3",
+        lights={"channel": 0, "rgb": [0, 255, 0]},
+    )
+    assert len(light_writes(device, ALL_LIGHTS)) == 1
+    assert not light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert f.scene == LightScene.HALLOWEEN
+    assert f.lights[0].rgb == (0, 255, 0)
+    assert f.lights[1] == Light(
+        effect_type=2, brightness=100, rgb=(255, 0, 0), effect_speed=50
+    ), "the channel left out is sent as it was"
+
+
+async def test_edit_file_lights_per_channel_on_v66(
+    hass, firmware_v66, setup_integration, device
+):
+    f = device.file("scream.mp3")
+    await action(
+        hass,
+        "edit_file",
+        filename="scream.mp3",
+        lights={"channel": 0, "rgb": [0, 255, 0]},
+    )
+    assert not light_writes(device, ALL_LIGHTS)
+    assert light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert f.lights[0].rgb == (0, 255, 0)
 
 
 async def test_edit_file_movements_by_part_name(hass, setup_integration, device):

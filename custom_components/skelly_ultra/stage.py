@@ -28,9 +28,12 @@ from .data import get_skelly_data, skelly_data
 from .entity import async_turn_on_live_mode
 from .file_settings import (
     FileSettings,
+    LightingState,
     LightSettings,
     async_apply_file_settings,
+    async_current_light_scene,
     async_push_live_settings,
+    live_light_settings,
 )
 from .helpers import get_device_profile, movement_bits
 from .uploads import async_tts_to_temp_file, remove_temp_files
@@ -462,12 +465,25 @@ class SkellyStage:
 
         async with self.coordinator.action_lock:
             # Cluster 0 with no name addresses the live settings
+            scene = await async_current_light_scene(self.coordinator, self.client)
             await async_apply_file_settings(
                 self.client,
                 self.profile,
                 0,
                 "",
                 FileSettings(eye_icon=eye_icon, lights=lights),
+                # A mood without a speed takes it from the current lights
+                lighting=(
+                    LightingState(
+                        live_light_settings(
+                            self.profile,
+                            (self.coordinator.data or {}).get("lights") or [],
+                        ),
+                        scene,
+                    )
+                    if scene is not None
+                    else None
+                ),
             )
             if eye_icon is not None:
                 self.coordinator.async_update_data_optimistic("eye_icon", eye_icon)
@@ -501,6 +517,9 @@ class SkellyStage:
                     self.client,
                     self.profile,
                     {"eye_icon": eye_icon, "lights": lights},
+                    scene=await async_current_light_scene(
+                        self.coordinator, self.client
+                    ),
                 )
                 if eye_icon is not None:
                     self.coordinator.async_update_data_optimistic("eye_icon", eye_icon)

@@ -89,6 +89,9 @@ class FakeSkellyDevice:
         # older layout (Ultra v66).
         self.has_scenes = True
         self.live_scene = LightScene.CUSTOM
+        # F1 (set all lights): False makes the device ignore it, as the v66
+        # Ultra presumably does
+        self.knows_set_all_lights = True
         self.live_name = "Skelly(Live)"
         self.pin_code = "1234"
         self.channels = [1, 1, 0, 0, 0, 0]
@@ -319,6 +322,21 @@ class FakeSkellyDevice:
     def _cmd_AAFA(self, p):
         self.volume = p[0]
 
+    def _cmd_AAF1(self, p):  # set all lights (and the scene)
+        if not self.knows_set_all_lights:
+            return
+        cluster = int.from_bytes(p[0:4], "big")
+        audio_mode, scene = p[4], p[5]
+        assert audio_mode == (1 if cluster else 0), "audio mode doesn't match cluster"
+        if cluster:
+            f = self._file_by_cluster(cluster)
+            lights, f.scene = f.lights, LightScene(scene)
+        else:
+            lights, self.live_scene = self.lights, LightScene(scene)
+        for ch in range(CHANNELS):
+            b = p[6 + 7 * ch : 13 + 7 * ch]
+            lights[ch] = Light(b[0], b[1], (b[2], b[3], b[4]), b[5], b[6])
+
     def _cmd_AAF2(self, p):
         cluster = int.from_bytes(p[2:6], "big")
         for ch in self._channels(p[0]):
@@ -450,6 +468,7 @@ class FakeSkellyDevice:
             # Overwriting keeps the file's slot but resets its settings.
             existing.data = data
             existing.action, existing.eye_icon, existing.lights = 0, 1, _lights()
+            existing.scene = LightScene.CUSTOM
         else:
             new = self.add_file(name, data=data)
             # Like the real device: a new file goes first in the play order,

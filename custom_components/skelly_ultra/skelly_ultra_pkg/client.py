@@ -1,7 +1,7 @@
 """SkellyClient: high-level async client wrapping Bleak, using commands and parser modules."""
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 import contextlib
 import logging
 from typing import Any
@@ -742,6 +742,18 @@ class SkellyClient:
         await self.send_command(commands.stop_file(file_index))
 
     # RGB / light convenience wrappers
+    async def set_all_lights(
+        self,
+        lights: Sequence[parser.LightInfo],
+        cluster: int = 0,
+        scene: int = 0,
+    ) -> None:
+        """F1: every light channel and the scene in one write.
+
+        Only for firmware with the set_all_lights capability.
+        """
+        await self.send_command(commands.set_all_lights(lights, cluster, scene))
+
     async def set_light_rgb(
         self,
         channel: int,

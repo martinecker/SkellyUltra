@@ -27,6 +27,7 @@ from custom_components.skelly_ultra.const import (
     DEVICE_TYPE_SKELLY_12FT,
     DOMAIN,
 )
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 
 from .conftest import ADDRESS, advance, coordinator, entity_id
 
@@ -38,6 +39,16 @@ SPEED = b"\xaa\xf6"
 EYE = b"\xaa\xf9"
 MOVEMENT = b"\xaa\xca"
 SETTING_TAGS = (VOLUME, BRIGHTNESS, EFFECT, RGB, SPEED, EYE)
+
+
+ALL_LIGHTS = b"\xaa\xf1"
+
+
+@pytest.fixture(autouse=True)
+def per_channel_light_writes(device):
+    """Most tests here watch the per-channel light writes (F2-F6): firmware
+    without F1. The F1 tests turn the version back up."""
+    device.firmware_version = 1
 
 
 def writes(device, *tags) -> list[bytes]:
@@ -570,3 +581,48 @@ async def test_live_push_skips_light_modes_the_device_rejects():
     await async_push_live_settings(client, profile, {"lights": lights})
     assert client.modes == [(channels[0], 2)]
     assert client.rgb == channels
+
+
+async def test_push_sends_lights_as_one_f1_on_new_firmware(
+    hass, setup_integration, device
+):
+    """With F1 (here Ultra v68) the lights go out in one write that keeps the
+    device's scene; eye and volume as before."""
+    entry = setup_integration
+    ha_controls(hass, entry)
+    device.firmware_version = 68
+    device.live_scene = LightScene.HALLOWEEN
+    await drop_and_reconnect(hass, device)  # reads the version again
+    device.writes.clear()
+
+    await drop_and_reconnect(hass, device, change_device_while_away)
+
+    assert len(writes(device, ALL_LIGHTS)) == 1
+    assert not writes(device, BRIGHTNESS, EFFECT, SPEED, RGB)
+    assert len(writes(device, EYE)) == 1
+    assert_initial_settings(device)
+    assert device.live_scene == LightScene.HALLOWEEN
+
+
+async def test_12ft_skelly_gets_its_one_channel_in_f1(hass, mock_ble):
+    device = mock_ble
+    device.firmware_version = 14
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="12ft Skelly",
+        data={"address": ADDRESS, CONF_DEVICE_TYPE: DEVICE_TYPE_SKELLY_12FT},
+        options={CONF_HA_CONTROLS_SETTINGS: True},
+        unique_id=ADDRESS,
+    )
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    device.writes.clear()
+
+    await drop_and_reconnect(hass, device, change_device_while_away)
+
+    assert len(writes(device, ALL_LIGHTS)) == 1
+    assert not writes(device, BRIGHTNESS, EFFECT, SPEED, RGB)
+    # F1 carries 6 channels: the 12ft's one light is repeated in all of them
+    assert all(light == device.lights[0] for light in device.lights)
+    assert device.lights[0].rgb == (255, 0, 0)

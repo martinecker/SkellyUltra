@@ -41,6 +41,7 @@ from .file_order import MAX_ENABLED_FILES, async_write_file_order
 from .file_settings import (
     async_load_file_list_for_change,
     async_restore_file_settings,
+    file_lighting_state,
 )
 from .helpers import get_device_profile
 from .skelly_ultra_pkg.audio_processor import AudioProcessor
@@ -489,6 +490,7 @@ async def async_upload_audio(
                         existing_file.cluster,
                         target_filename,
                         existing_file,
+                        file_lighting_state(coordinator, profile, existing_file),
                     )
                     _LOGGER.info(
                         "Restored previous settings for overwritten file %s",

@@ -18,7 +18,11 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.storage import Store
 
 from .const import CONF_HA_CONTROLS_SETTINGS, DEFAULT_HA_CONTROLS_SETTINGS, DOMAIN
-from .file_settings import LIVE_SETTING_KEYS, async_push_live_settings
+from .file_settings import (
+    LIVE_SETTING_KEYS,
+    async_current_light_scene,
+    async_push_live_settings,
+)
 
 if TYPE_CHECKING:
     from .coordinator import SkellyCoordinator
@@ -185,8 +189,9 @@ class SettingsSync:
             return adapter.stop_count == stops
 
         counters = self._counters()
+        scene = await async_current_light_scene(coordinator, adapter.client)
         writes = await async_push_live_settings(
-            adapter.client, profile, settings, keep_going
+            adapter.client, profile, settings, keep_going, scene
         )
         data = coordinator.data
         changed = {
@@ -197,7 +202,7 @@ class SettingsSync:
         if changed:
             counters.update(self._counters())
             writes += await async_push_live_settings(
-                adapter.client, profile, changed, keep_going
+                adapter.client, profile, changed, keep_going, scene
             )
             settings = {**settings, **changed}
         self._logger.debug("Sent %d live settings to the device", writes)

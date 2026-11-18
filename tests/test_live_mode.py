@@ -15,6 +15,7 @@ from custom_components.skelly_ultra import media_player as media_player_module
 from custom_components.skelly_ultra import stage as stage_module
 from custom_components.skelly_ultra import uploads
 from custom_components.skelly_ultra.const import DOMAIN
+from custom_components.skelly_ultra.skelly_ultra_pkg.constants import LightScene
 
 from .conftest import advance, coordinator, entity_id, wait_for
 from .device_sim import Light
@@ -81,6 +82,73 @@ async def test_perform_speaks_with_mood_and_restores_look(
     assert look.action == 255
     # Afterwards: eyes and lights back as they were
     assert device.eye_icon == 3
+    assert device.lights[0].rgb == (1, 2, 3) and device.lights[0].brightness == 200
+
+
+ALL_LIGHTS = b"\xaa\xf1"
+PER_CHANNEL_LIGHTS = (b"\xaa\xf2", b"\xaa\xf3", b"\xaa\xf4", b"\xaa\xf6")
+
+
+def light_writes(device, *tags) -> list[bytes]:
+    return [w for w in device.writes if w[:2] in tags]
+
+
+async def test_mood_and_restore_use_f1_and_keep_the_scene(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    """New firmware: the mood and the look afterwards go out as one F1 each,
+    with the scene the device is in."""
+    device.live_scene = LightScene.CHRISTMAS
+    device.lights[0] = Light(rgb=(1, 2, 3), brightness=200)
+    await advance(hass, 31)  # next poll picks up the look above
+    device.writes.clear()
+
+    await perform(hass, message="Ho ho", mood="spooky")
+
+    assert len(light_writes(device, ALL_LIGHTS)) == 2, "mood, then the old look"
+    assert not light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert device.live_scene == LightScene.CHRISTMAS
+    assert rest_server.plays[-1].lights[0].rgb == (160, 0, 255)
+    assert device.lights[0].rgb == (1, 2, 3) and device.lights[0].brightness == 200
+
+
+async def test_mood_without_a_speed_still_uses_f1(
+    hass, setup_integration, device, rest_server, tts_entity
+):
+    """The friendly mood sets no speed: F1 takes each channel's current one."""
+    device.lights[1] = Light(effect_type=1, effect_speed=77)
+    await advance(hass, 31)  # next poll picks up the speed above
+    device.writes.clear()
+
+    await perform(hass, message="Hello", mood="friendly")
+
+    assert len(light_writes(device, ALL_LIGHTS)) == 2, "mood, then the old look"
+    assert not light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert rest_server.plays[-1].lights[1].rgb == (0, 255, 0)
+    assert rest_server.plays[-1].lights[1].effect_speed == 77
+
+
+@pytest.fixture
+def firmware_v66(mock_ble):
+    """An Ultra Skelly on v66: no light scenes, no F1. Ask for it before
+    setup_integration."""
+    mock_ble.firmware_version = 66
+    mock_ble.has_scenes = False
+    return mock_ble
+
+
+async def test_mood_without_f1_on_v66(
+    hass, firmware_v66, setup_integration, device, rest_server, tts_entity
+):
+    device.lights[0] = Light(rgb=(1, 2, 3), brightness=200)
+    await advance(hass, 31)  # next poll picks up the look above
+    device.writes.clear()
+
+    await perform(hass, message="Boo", mood="spooky")
+
+    assert not light_writes(device, ALL_LIGHTS)
+    assert light_writes(device, *PER_CHANNEL_LIGHTS)
+    assert rest_server.plays[-1].lights[0].rgb == (160, 0, 255)
     assert device.lights[0].rgb == (1, 2, 3) and device.lights[0].brightness == 200
 
 
