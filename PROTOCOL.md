@@ -358,6 +358,14 @@ The tail is told apart by where the `5C 55` name marker sits:
 
 For a preset the app sends mode 1, brightness 255 and speed 0 on every channel, in the same F1. The device stores the scene number, and BBE1/BBD0 report it back.
 
+**What a scene does**: with scene 1 or 2 the device plays its **built-in palette** and ignores the colors in the F1. Every light alternates between the scene's two colors; it is not "channel 0 one color, the rest the other". The rest of the channel data still applies:
+- **Mode:** 1 static switches the colors instantly, 2 strobes, 3 pulsing fades from one color to the next.
+- **Brightness:** applies.
+- **Speed:** sets the pulse rate (pulsing and strobe). In static mode the switch rate is fixed and speed does nothing.
+- **Color cycle:** does nothing; the scene's palette stays.
+
+Custom colors therefore need scene 0, where each channel shows its own color and nothing alternates.
+
 **F1 details.** The app always pairs the audioMode byte with the cluster: `cluster 0, audioMode 0` from the live lights screen, and `<file's cluster>, audioMode 1` from a file's light settings. F1 always carries 6 channels. For a device with fewer, the app repeats its channels in turn: one light becomes 6 copies, and two lights go A B A B A B.
 
 ## 9. Movement and eyes
