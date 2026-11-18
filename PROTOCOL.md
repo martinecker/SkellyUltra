@@ -12,22 +12,43 @@ The constants named here are in `skelly_ultra_pkg/constants.py` (HA) and `js/con
 
 ## Contents
 
-1. [Transport](#1-transport)
-2. [Frames](#2-frames)
-3. [Data types](#3-data-types)
-4. [Files: serial, cluster and position](#4-files-serial-cluster-and-position)
-5. [Devices, firmware and capabilities](#5-devices-firmware-and-capabilities)
-6. [Command reference](#6-command-reference)
-7. [Reply reference](#7-reply-reference)
-8. [Lights and scenes](#8-lights-and-scenes)
-9. [Movement and eyes](#9-movement-and-eyes)
-10. [Uploading a file](#10-uploading-a-file)
-11. [Play order](#11-play-order)
-12. [Playback, delete and format](#12-playback-delete-and-format)
-13. [Jaw movement data (CD)](#13-jaw-movement-data-cd)
-14. [Live mode (classic Bluetooth)](#14-live-mode-classic-bluetooth)
-15. [Audio format](#15-audio-format)
-16. [Device quirks](#16-device-quirks)
+- [Skelly BLE protocol](#skelly-ble-protocol)
+  - [Contents](#contents)
+  - [1. Transport](#1-transport)
+  - [2. Frames](#2-frames)
+    - [Commands (to the device)](#commands-to-the-device)
+    - [Replies (from the device)](#replies-from-the-device)
+  - [3. Data types](#3-data-types)
+  - [4. Files: serial, cluster and position](#4-files-serial-cluster-and-position)
+  - [5. Devices, firmware and capabilities](#5-devices-firmware-and-capabilities)
+    - [Firmware version](#firmware-version)
+    - [Capabilities](#capabilities)
+    - [Product names in the app](#product-names-in-the-app)
+  - [6. Command reference](#6-command-reference)
+    - [Queries](#queries)
+    - [Device settings and media](#device-settings-and-media)
+    - [Lights (live or per file)](#lights-live-or-per-file)
+    - [Movement and eyes (live or per file)](#movement-and-eyes-live-or-per-file)
+    - [Files](#files)
+    - [Wi-Fi (not used by any known product)](#wi-fi-not-used-by-any-known-product)
+  - [7. Reply reference](#7-reply-reference)
+    - [BBE0 device parameters](#bbe0-device-parameters)
+    - [BBE1 live mode](#bbe1-live-mode)
+    - [BBE5 volume, BBE6 name, BBEE version, BBFD classic BT](#bbe5-volume-bbe6-name-bbee-version-bbfd-classic-bt)
+    - [BBD0 file info](#bbd0-file-info)
+    - [BBD1 play order](#bbd1-play-order)
+    - [BBD2 capacity](#bbd2-capacity)
+    - [Upload replies](#upload-replies)
+    - [Other replies](#other-replies)
+  - [8. Lights and scenes](#8-lights-and-scenes)
+  - [9. Movement and eyes](#9-movement-and-eyes)
+  - [10. Uploading a file](#10-uploading-a-file)
+  - [11. Play order](#11-play-order)
+  - [12. Playback, delete and format](#12-playback-delete-and-format)
+  - [13. Jaw movement data (CD)](#13-jaw-movement-data-cd)
+  - [14. Live mode (classic Bluetooth)](#14-live-mode-classic-bluetooth)
+  - [15. Audio format](#15-audio-format)
+  - [16. Device quirks](#16-device-quirks)
 
 ---
 
@@ -120,11 +141,11 @@ Features are gated by device type and firmware, **never by the BLE name**, becau
 
 | Device | Firmware seen | Light scenes, F1 | CD jaw data | BBD0 tail layout |
 |---|---|---|---|---|
-| Ultra Skelly, advertises "Animated Skelly" | v66 | no (device) | no | position at 56, marker at 57 |
-| Ultra Skelly, advertises "Ultra Skelly v2" | v68 | yes (device) | assumed yes | scene at 56, position at 57, marker at 58 |
-| 12 ft Skelly | v14 | yes (device) | assumed yes | scene layout (device) |
-| Lethal Lily | v24 | yes (device) | assumed yes | scene layout |
-| Ultra Santa | unknown | yes (app) | yes (app) | scene layout (app) |
+| Ultra Skelly, advertises "Animated Skelly" | v66 | no | no | position at 56, marker at 57 |
+| Ultra Skelly, advertises "Ultra Skelly v2" | v68 | yes | assumed yes | scene at 56, position at 57, marker at 58 |
+| 12 ft Skelly | v14 | yes | assumed yes | scene layout |
+| Lethal Lily | v24 | yes | assumed yes | scene layout |
+| Ultra Santa | unknown | yes | yes | scene layout |
 
 Firmware newer than the lowest one seen keeps the capabilities; older firmware, or a version not read yet, gets none.
 
@@ -313,7 +334,7 @@ The tail is told apart by where the `5C 55` name marker sits:
 | Ultra Skelly | 0 torso, 1 head |
 | 12 ft Skelly | 0 torso |
 | Lethal Lily | 0 lantern |
-| Ultra Santa (app) | 0 lantern |
+| Ultra Santa | 0 lantern |
 
 **Mode** (F2, byte 0 of a channel):
 
@@ -321,7 +342,7 @@ The tail is told apart by where the `5C 55` name marker sits:
 |---|---|---|---|
 | Skellys | static | strobe | pulsing |
 | Lethal Lily | flickering | pulsing | chasing |
-| Ultra Santa (app) | static | sparkle | pulsing |
+| Ultra Santa | static | sparkle | pulsing |
 
 **Speed** (F6) runs from 0 (fastest) to 254 (slowest), and the device also reports 255 for fastest. It only matters for the moving modes. The integration's entities show it inverted, so that higher is faster.
 
@@ -348,7 +369,7 @@ For a preset the app sends mode 1, brightness 255 and speed 0 on every channel, 
 | Ultra Skelly | head `0x01`, arm `0x02`, torso `0x04`, all 255 |
 | 12 ft Skelly | head `0x02` (captured from the app), no "all" |
 | Lethal Lily | wrist `0x01`, elbow `0x02`, head `0x10`, eyes `0x20`, all 255 |
-| Ultra Santa (app) | eyes `0x01`, head `0x02`, torso `0x04`, arm `0x08`, all 255 |
+| Ultra Santa | eyes `0x01`, head `0x02`, torso `0x04`, arm `0x08`, all 255 |
 
 **Eye icons** (F9, BBE1 byte 45, BBD0 byte 55) are 1-based:
 
@@ -433,7 +454,9 @@ The app sends CD once after an upload, on scene firmware, for the new file's clu
 4. A window's bit is 1 (jaw open) if its peak is above the average of all window peaks.
 5. Pack the bits **LSB first**, 8 windows per byte: window 0 is bit 0 of byte 0.
 
-`byteCount` is the number of bitmap bytes. The app ends up sending `floor(n / 8)` bytes: when `n` isn't a multiple of 8, it drops the last partial byte. A 30 s file is 500 windows, so 62 bytes.
+`byteCount` is the number of bitmap bytes. The app ends up sending `floor(n / 8)` bytes: when `n` isn't a multiple of 8, it drops the last partial byte. A 30 s file is 500 windows, so 62 bytes. Since `byteCount` is one byte, CD holds at most 255 bytes = 2040 windows, about **2 min 2 s**; the app never gets near that, as its recordings stop at 30 s.
+
+CD addresses the file by cluster only, separately from the upload, so it may also work for a file uploaded earlier. *Unverified*: whether the device takes a second CD for a file that already has jaw data, and whether CD does anything in live mode (cluster 0).
 
 *Unverified on a device*: whether the jaw follows CD, whether it replaces audio-driven jaw movement, and whether CD survives a reboot.
 
@@ -452,8 +475,9 @@ Live mode makes the device a Bluetooth speaker.
 
 **Uploads** are MP3. The app's recordings, and this integration's uploads, are:
 - MPEG-1 Layer III, 44.1 kHz, mono, **CBR 32 kbps** (about 4 KB per second)
-- Up to 30 s long
 - Without ID3 or Xing tags
+
+**Length:** the app's recorder stops at 30 s, so its recordings are never longer. The device has no known length limit of its own: only free space (D2, [§10](#10-uploading-a-file)) limits an upload. The HA integration and the web controller don't trim or refuse long files. Jaw data (CD) covers at most about 2 minutes ([§13](#13-jaw-movement-data-cd)).
 
 The app asks LAME for 16 kbps; LAME raises it to 32, the lowest bitrate MPEG-1 allows.
 
